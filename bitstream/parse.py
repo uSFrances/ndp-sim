@@ -473,3 +473,52 @@ def dump_modules_detailed(modules, output_file=None):
             f.write(captured_output.getvalue())
         
         print(f"Detailed dump written to {output_file}")
+
+
+def dump_mapping_review(output_file: str):
+    """Write mapping review as JSON only."""
+    graph = NodeGraph.get()
+    mapper = graph.mapping
+
+    def _resource_sort_key(item):
+        _, res = item
+        res_type, res_idx = mapper.parse_resource(res)
+        return (res_type, res_idx)
+
+    mapping_items = sorted(mapper.node_to_resource.items(), key=_resource_sort_key)
+
+    mapping_rows = []
+    for node, resource in mapping_items:
+        mapping_rows.append({
+            "node": node,
+            "resource": resource,
+        })
+
+    connection_rows = []
+    for conn in graph.connections:
+        src = conn["src"]
+        dst = conn["dst"]
+        src_res = mapper.node_to_resource.get(src, "UNMAPPED")
+        dst_res = mapper.node_to_resource.get(dst, "UNMAPPED")
+        connection_rows.append({
+            "src_node": src,
+            "src_resource": src_res,
+            "dst_node": dst,
+            "dst_resource": dst_res,
+        })
+
+    payload = {
+        "summary": {
+            "total_nodes": len(graph.nodes),
+            "mapped_nodes": len(mapping_items),
+            "connections": len(graph.connections),
+        },
+        "node_to_resource": mapping_rows,
+        "connection_mapping": connection_rows,
+    }
+
+    with open(output_file, "w") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    print(f"Mapping review JSON written to {output_file}")
