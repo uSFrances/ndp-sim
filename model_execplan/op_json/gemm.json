@@ -1,0 +1,30 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, 32, 32],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        },
+        "B": {
+          "shape": [1, 32, 128],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [1, 32, 32],
+        "remapping": null
+      }
+    }
+  ]
+}
