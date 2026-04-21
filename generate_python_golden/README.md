@@ -23,6 +23,7 @@ pip install numpy tqdm
 ### 第一阶段：Python Golden 数据生成 (`make golden`)
 本阶段目标是**模拟一个 Transformer 模型层的计算过程，并将每一个算子的输入和输出张量以 `.bin` 格式保存下来**。
 - **需要输入**：`config.json` 配置及 `DeepSeek-R1-Distill-Qwen-1.5B-f16/` 原始权重文件夹。
+  > ⚠️ **重要提示**：`DeepSeek-R1-Distill-Qwen-1.5B-f16` 是一个包含了原始模型权重的超大文件夹。由于体积限制，它没有被包含在 Git 仓库中。**您需要手动下载该模型的 `f16` 权重文件，并放置在 `ndp-sim/generate_python_golden/DeepSeek-R1-Distill-Qwen-1.5B-f16` 目录下才能正常运行。**
 - **运行流程**：
   1. `create_dummy_inputs.py`: 创建虚拟输入数据（存入 `inputs/`）。
   2. `weight_gen.py`: 提取并裁剪适用于当前配置的小尺寸模型权重（存入 `model_weights_small/`）。

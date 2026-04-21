@@ -200,9 +200,10 @@ if __name__ == '__main__':
     # 默认寻找上级目录中的 python_golden 文件夹
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_in = os.path.abspath(os.path.join(current_dir, "..", "python_golden"))
+    default_out = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "gemm"))
     
     parser.add_argument('--dir', type=str, default=default_in, help="Directory containing the .bin files")
     parser.add_argument('--order', type=str, choices=['C', 'F'], default='F', help="Matrix layout in .bin")
     
     args = parser.parse_args()
-    process_gemm_directory(args.dir, current_dir, order=args.order)
+    process_gemm_directory(args.dir, default_out, order=args.order)

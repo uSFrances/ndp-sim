@@ -20,7 +20,8 @@ def main():
     if target_op == "all":
         ops_to_run = ["gemm", "rmsnorm", "rope", "softmax"]
     else:
-        ops_to_run = [target_op]
+        # 移除下划线以匹配实际的文件名（比如 rms_norm -> rmsnorm）
+        ops_to_run = [target_op.replace("_", "")]
         
     # 3. 循环执行对应的脚本
     for op in ops_to_run:

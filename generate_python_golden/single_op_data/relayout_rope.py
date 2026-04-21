@@ -183,4 +183,5 @@ def process_rope_tensors(input_dir, output_dir):
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.abspath(os.path.join(current_dir, "..", "python_golden", "sub_ops"))
-    process_rope_tensors(input_dir, current_dir)
+    output_dir = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "rope"))
+    process_rope_tensors(input_dir, output_dir)

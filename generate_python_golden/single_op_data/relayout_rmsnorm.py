@@ -85,8 +85,9 @@ def process_rmsnorm_tensors(input_dir, output_dir):
     for filepath in bin_files:
         filename = os.path.basename(filepath)
         
-        # 避免处理已经切片过的文件或是其他垃圾文件
-        if "slice" in filename or "shared" in filename: continue
+        # 避免处理已经切片过的文件或是其他垃圾文件，仅处理 rms_norm 相关的算子
+        if "slice" in filename or "shared" in filename or "rms_norm" not in filename: 
+            continue
         
         match = re.search(r"_shape([\dx]+)_dtype", filename)
         if not match: continue
@@ -105,11 +106,14 @@ def process_rmsnorm_tensors(input_dir, output_dir):
         
         # 将无用的维度挤掉
         data_2d = data.squeeze()
-        if data_2d.ndim == 1:
+        # 兼容退化为 0 维标量或者 1 维向量的极端情况 (如 1x1x1x1 -> 0D)
+        if data_2d.ndim == 0:
+            data_2d = data_2d.reshape(1, 1)
+        elif data_2d.ndim == 1:
             data_2d = data_2d.reshape(-1, 1)
 
-        # 1. 拦截大张量 896x32 (sum_mac_in, mul_MN_M_out)
-        if data_2d.shape[0] == 896 and data_2d.shape[1] == 32:
+        # 1. 拦截大张量 896x32 或 896xN (sum_mac_in, mul_MN_M_out)
+        if data_2d.shape[0] == 896:
             for i in range(num_slices):
                 m_start = i * 32
                 slice_32x32 = data_2d[m_start:m_start+32, :]
@@ -122,8 +126,8 @@ def process_rmsnorm_tensors(input_dir, output_dir):
                 relayout_data.tofile(out_path)
                 convert_to_128bit_txt(out_path)
                 
-        # 2. 拦截分片结果 32x28 (sum_mac_out)
-        elif data_2d.shape[0] == 32 and data_2d.shape[1] == 28:
+        # 2. 拦截分片结果 (sum_mac_out)
+        elif data_2d.ndim >= 2 and data_2d.shape[1] == 28:
             for i in range(num_slices):
                 # 提取属于该 slice 的局部求和序列，变成 (32, 1)
                 slice_32x1 = data_2d[:, i:i+1]
@@ -137,8 +141,8 @@ def process_rmsnorm_tensors(input_dir, output_dir):
                 relayout_data.tofile(out_path)
                 convert_to_128bit_txt(out_path)
                 
-        # 3. 处理 remote_sum, mac_SFU 等基于 N=32 输出的一维汇总结果
-        elif data_2d.shape[0] == 32 and data_2d.shape[1] == 1:
+        # 3. 处理 remote_sum, mac_SFU 等基于 N=32 或 N=1 输出的一维汇总结果
+        elif data_2d.ndim >= 2 and data_2d.shape[1] == 1:
             relayout_data = relayout_slice_M8_N(data_2d)
             for i in range(num_slices):
                 slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
@@ -156,4 +160,5 @@ def process_rmsnorm_tensors(input_dir, output_dir):
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.abspath(os.path.join(current_dir, "..", "python_golden", "sub_ops"))
-    process_rmsnorm_tensors(input_dir, current_dir)
+    output_dir = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "rmsnorm"))
+    process_rmsnorm_tensors(input_dir, output_dir)
