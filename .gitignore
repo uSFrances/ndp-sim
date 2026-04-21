@@ -14,3 +14,8 @@ __pycache__/
 *.md
 
 golden_models/
+
+!operator_base_info.json
+!generate_python_golden/README.md
+!generate_python_golden/config.json
+!model_execplan/config/SFU_Coeff/

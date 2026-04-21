@@ -1,0 +1,341 @@
+{
+  "operators": {
+    "prefill_gemm_local": {
+      "config_length": 59,
+      "ddr_config_addr": 64,
+      "config_bitstream_addr": "0x00010000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_gemm_local_bitstream_128b.txt",
+      "initial_size": {
+        "A": [64, 64,32],
+        "B": [64, 64, 32],
+        "D": [1, 64, 64]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_gemm_local/parsed_bitstream.txt"
+      }    
+    },
+    "prefill_max_fp32MN_fp32MN": {
+      "config_length": 47,
+      "ddr_config_addr": 128,
+      "config_bitstream_addr": "0x0003C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_max_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_max_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_summac_fp16MN_fp32MN": {
+      "config_length": 68,
+      "ddr_config_addr": 192,
+      "config_bitstream_addr": "0x00020000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_summac_fp16MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_summac_fp16MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_summac_fp32MN_fp32MN": {
+      "config_length": 33,
+      "ddr_config_addr": 192,
+      "config_bitstream_addr": "0x00020000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_summac_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_summac_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_sum_rec_fp32MN_fp32MN": {
+      "config_length": 35,
+      "config_bitstream_addr": "0x00030000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_sum_rec_fp32MN_fp32MN_bitstream_128b.txt",
+      "ddr_config_addr": 192,
+      "initial_size": {
+        "A": [1, 32, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": "REC",
+      "initial_config_stream": {
+        "bitstream_file": "prefill_sum_rec_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_mac_SFU_fp32MN_fp32MN": {
+      "config_length": 32,
+      "ddr_config_addr": 192,
+      "config_bitstream_addr": "0x0002C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mac_SFU_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 1, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": "REC_SQRT",
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mac_SFU_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_remote_sum_fp32MN_fp32MN": {
+      "config_length": 24,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00030000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_remote_sum_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 28, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_remote_sum_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_mul_fp32MN_fp32M_fp16MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x0003C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32M_fp16MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 64, 128],
+        "B": [1, 64, 1],
+        "D": [1, 64, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mul_fp32MN_fp32M_fp16MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_mul_fp32MN_fp32M_fp32MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x0003C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32M_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 64, 128],
+        "B": [1, 64, 1],
+        "D": [1, 64, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mul_fp32MN_fp32M_fp32MN/parsed_bitstream.txt"
+      }
+    },    
+    "prefill_add_fp32MN_fp16MN_fp32MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00038000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_add_fp32MN_fp16MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 16],
+        "B": [1, 32, 16],
+        "D": [1, 32, 16]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_add_fp32MN_fp16MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_add_fp32MN_fp32MN_fp16MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00040000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_add_fp32MN_fp32MN_fp16MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 16],
+        "B": [1, 32, 16],
+        "D": [1, 32, 16]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_add_fp32MN_fp32MN_fp16MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_mul_fp32MN_fp16MN_fp16MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00048000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp16MN_fp16MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 16],
+        "B": [1, 32, 16],
+        "D": [1, 32, 16]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mul_fp32MN_fp16MN_fp16MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_silu_fp32MN_fp16MN": {
+      "config_length": 25,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x0004C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_silu_fp32MN_fp16MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 8],
+        "D": [1, 32, 8]
+      },
+      "config_sfu": "SiLU",
+      "initial_config_stream": {
+        "bitstream_file": "prefill_silu_fp32MN_fp16MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_sub_SFU_fp32MN_fp32MN_fp32MN": {
+      "config_length": 40,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00050000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_sub_SFU_fp32MN_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 64, 32],
+        "B": [1, 64, 1],
+        "D": [1, 64, 32]
+      },
+      "config_sfu": "Ex",
+      "initial_config_stream": {
+        "bitstream_file": "prefill_sub_SFU_fp32MN_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "quant_from_buffer_int32MN_uint8MN": {
+      "config_length": 34,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00058000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_quant_from_buffer_int32MN_uint8MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 32],
+        "D": [1, 32, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "quant_from_buffer_int32MN_uint8MN/parsed_bitstream.txt"
+      }
+    },
+    "add_dequant_uint8CWH_uint8CWH_fp32CWH": {
+      "config_length": 35,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x0005C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_add_dequant_uint8CWH_uint8CWH_fp32CWH_bitstream_128b.txt",
+      "initial_size": {
+        "A": [16, 4, 4],
+        "B": [16, 4, 4],
+        "D": [16, 4, 4]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "add_dequant_uint8CWH_uint8CWH_fp32CWH/parsed_bitstream.txt"
+      }
+    },
+    "prefill_mul_fp32MN_fp32N_fp16MN": {
+      "config_length": 33,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00060000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32N_fp16MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 256, 128],
+        "B": [1, 256, 128],
+        "D": [1, 256, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mul_fp32MN_fp32N_fp16MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_add_fp16MN_fp32N_fp32MN": {
+      "config_length": 33,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00060000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_add_fp16MN_fp32N_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 256, 128],
+        "B": [1, 256, 128],
+        "D": [1, 256, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_add_fp16MN_fp32N_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "decode_mul_fp32N_fp32N_fp16N": {
+      "config_length": 28,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00060000",
+      "config_bitstream_path": "install/cfg_pkg/decode_mul_fp32N_fp32N_fp16N_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 1, 128],
+        "B": [1, 1, 128],
+        "D": [1, 1, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "decode_mul_fp32N_fp32N_fp16N/parsed_bitstream.txt"
+      }
+    },
+    "decode_add_fp16N_fp32N_fp32N": {
+      "config_length": 28,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00060000",
+      "config_bitstream_path": "install/cfg_pkg/decode_add_fp16N_fp32N_fp32N_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 1, 128],
+        "B": [1, 1, 128],
+        "D": [1, 1, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "decode_add_fp16N_fp32N_fp32N/parsed_bitstream.txt"
+      }
+    },
+    "prefill_gemm_ring_4slice": {
+      "config_length": 30,
+      "ddr_config_addr": 64,
+      "config_bitstream_addr": "0x00010000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_gemm_ring_4slice_bitstream_128b.txt",
+      "initial_size": {
+        "A": [64, 64,32],
+        "B": [64, 64, 32],
+        "D": [1, 64, 64]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_gemm_ring_4slice/parsed_bitstream.txt"
+      }    
+    },
+    "prefill_mul_fp32MN_fp32MN_fp32MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x0003C000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 64, 128],
+        "B": [1, 64, 128],
+        "D": [1, 64, 128]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_mul_fp32MN_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_add_fp32MN_fp32MN_fp32MN": {
+      "config_length": 30,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00038000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_add_fp32MN_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 32, 32],
+        "B": [1, 32, 32],
+        "D": [1, 32, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_add_fp32MN_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    }
+  } 
+}
