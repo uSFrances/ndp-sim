@@ -1,4 +1,4 @@
-PYTHON = python3
+PYTHON = python
 
 .PHONY: all inputs weights golden single_op clean help
 
@@ -36,9 +36,9 @@ clean:
 # 打印帮助信息
 help:
 	@echo "可用命令:"
-	@echo "  make         - 执行完整的生成流程 (inputs -> weights -> golden -> single_op)"
+	@echo "  make         - 执行完整的生成流程 (inputs -> weights -> golden -> single_op -> execplan)"
 	@echo "  make inputs  - 仅产生 inputs 文件"
 	@echo "  make weights - 仅产生 weight 文件"
 	@echo "  make golden  - 产生 python_golden 数据 (自动依赖 inputs 和 weights)"
-	@echo "  make single_op - 仅运行 target_op 的算子分割代码 (依赖 golden)"
+	@echo "  make single_op - 运行 target_op 的算子分割及指令生成代码 (依赖 golden)"
 	@echo "  make clean   - 清理所有生成的文件和文件夹"

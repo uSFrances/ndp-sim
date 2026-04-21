@@ -6,10 +6,11 @@
 - Python 3
 - numpy
 - tqdm
+- matplotlib
 
 可以通过以下命令安装依赖：
 ```bash
-pip install numpy tqdm
+pip install numpy tqdm matplotlib
 ```
 
 ## 配置
