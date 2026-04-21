@@ -18,6 +18,6 @@ golden_models/
 !operator_base_info.json
 !generate_python_golden/README.md
 !generate_python_golden/config.json
-!model_execplan/config/SFU_Coeff/
+!model_execplan/config/SFU_Coeff/*.txt
 !model_execplan/README.md
 !model_execplan/pyrightconfig.json

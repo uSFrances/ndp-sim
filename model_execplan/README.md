@@ -24,6 +24,10 @@
     * tensor形状(K * M * N)
 * 额外输入与扩展字段
         * 支持 `B'` 输入（适用于 `gemm_local` 等算子）；地址规划中 `B'` 与 `B` 共享同一地址空间。
+    * 支持 tensor 级 `dtype` 字段（A/B/B'/C/D）：
+        * 可选值：`fp16`、`fp32`、`int8`、`uint8`、`int16`、`uint16`、`int32`、`uint32`。
+        * 兼容别名：`float16 -> fp16`、`float32/pf32 -> fp32`。
+        * 未填写 `dtype` 时默认按 `fp32` 处理。
         * 支持 tensor 级 `remapping` 字段（A/B/B'/C/D）：
                 * 可为 `null`，或长度为 26 的数组。
                 * 数组元素范围为 `0..25`。
@@ -85,6 +89,12 @@
 * 地址分配策略：采用不释放内存策略，即新输入/输出数据数据自动往后排，占用新的地址。同一算子的统一数据的不同slices上的数据地址应只有slave不同。
 * 当前实现补充规则：
     * 同一算子内 `B'` 复用 `B` 的地址分配结果（共址）。
+    * tensor 大小按 `K * M * N * element_bytes(dtype)` 计算：
+        * `fp16/int16/uint16` 按 2 字节。
+        * `fp32/int32/uint32` 按 4 字节。
+        * `int8/uint8` 按 1 字节。
+    * 输入来源为外部（`source.type=external`）时，按该输入自己的 `dtype` 分配新地址。
+    * 输入来源为上游算子时，复用上游输出地址，不重复分配；此时以下游输入处声明的 `dtype` 为准不会触发重新分配。
     * config 数据也参与统一地址规划，并放在所有 tensor 数据之后。
     * config 分配前会对齐到新的 row 起始位置（`col=0`），并按整行预留。
     * 当算子存在 `config_sfu` 时，SFU 系数文件（`config/SFU_Coeff/<type>.txt`）也会参与地址规划，且独立于算子 config 分配地址。
@@ -120,7 +130,8 @@
         * `GROUPx.COL_LC -> iga_col_lcx`
         * `LC_PE.PEx -> iga_pex`
         * `STREAM.streamx -> rd_streamx/wr_streamx`（依据 `READ_STREAMn`/`WRITE_STREAMn`）
-    * 若某算子目录下不存在 `mapping_review.json`，则保持旧行为（不做实例名替换）。
+    * 通过 `model_execplan/main.py` 自动生成的算子配置目录会包含 `mapping_review.json`。
+    * 若历史算子目录缺少 `mapping_review.json`，则保持旧行为（不做实例名替换）。
     * 当前用于调试的示例文件：`config/prefill_summac_fp32MN_fp32MN/mapping_review.json`。
 
 `operator_base_info.json` 中的 `initial_size` 已切换为新格式（并已移除旧格式）：
@@ -645,6 +656,7 @@ padding		chunk_size	chunk
 * 已完成 JSON 输入解析与校验，支持按算子顺序读取输入输出关系并生成内部字表。
 * 已完成扩展输入与字段解析：支持 `B'` 与 tensor `remapping` 字段。
 * 已完成自动地址规划，采用“不释放内存、顺序向后分配”的策略；同一 tensor 在不同 slice 上仅 slave 字段不同。
+* 已完成 dtype 驱动的 tensor 空间计算：地址规划按 tensor 的 `dtype` 计算字节数（默认 `fp32`），并据此推进地址游标。
 * 已完成 `B/B'` 共址分配规则与 config 统一地址规划（按 `config_length` 的 64bit 行数分配，config 起始地址与 BANK Row 对齐，并排在数据之后）。
 * 已完成三段指令生成：Load_Config、Write_Reg、Start_Comp。
 * 已完成全局单次 `Clock_Enable` 下发：一次运行仅在最前面发送一次。
@@ -673,10 +685,20 @@ padding		chunk_size	chunk
     * 每行为 32bit 大端 hex（`0xXXXXXXXX`），地址基于 bank 内 `base_addr=0`。
     * 依据地址规划规则按 128bit 粒度放置数据，空洞自动补 0。
     * 整个 bank 无数据时不输出该 bank 文件。
+* 已完成算子配置目录自动补齐：
+    * 运行 `model_execplan/main.py` 时，会按输入 JSON 中出现的算子类型检查 `model_execplan/config/<op_type>/`。
+    * 若缺少 `parsed_bitstream.txt` 或 `*bitstream_64b.bin/*bitstream_128b.bin`，会自动调用 `bitstream/main.py` 生成。
+    * 若目录已完整，默认跳过，不重复生成。
+* 已完成强制重生成开关：
+    * `-reop` / `--regenerate-operator-configs` 默认关闭（`False`）。
+    * 显式传入该参数时，强制重建所有算子配置目录。
+* 已完成子进程日志与编码兼容性处理：
+    * 自动生成算子配置时，子进程输出默认不直接打印到控制台。
+    * 子进程失败时会附带 `stderr` 片段到异常信息，便于定位问题。
+    * 输出解码按 UTF-8 处理并带替换策略，避免 Windows 下 `gbk` 解码异常导致线程报错。
 * 已完成 `max` 示例输入更新：当前示例按“仅输入 A，输出 D”组织。
 
 ### 待完成工作
-* 控制寄存器自动计算函数仍为占位实现。当前框架已支持“根据算子形状计算控制寄存器值后再下发”，但实际每类算子的控制寄存器计算脚本尚未补齐。 已完成√
 * 更多算子模板信息仍需补充到统一基础信息文件中，目前主要围绕示例算子完成联调。
 * 尚未补充系统化测试：目前主要依赖样例 JSON 和真实 bitstream 做功能验证，缺少单元测试与回归测试。
 * 尚未提供对“未启用寄存器但允许新写入”的可配置策略。当前行为是严格报错，适合先做错误计划拦截，但后续如果硬件侧允许某些寄存器冷启动写入，需要再扩展策略开关。
@@ -691,6 +713,20 @@ padding		chunk_size	chunk
 
 ```bash
 python main.py examples/sample_gemm_local_execution_input.json
+```
+
+说明：默认仅在缺少算子配置文件时自动调用 `bitstream/main.py` 进行补齐，不会强制重生成已存在的算子目录。
+
+强制重生成所有算子配置目录：
+
+```bash
+python main.py examples/sample_gemm_local_execution_input.json -reop
+```
+
+等价长参数：
+
+```bash
+python main.py examples/sample_gemm_local_execution_input.json --regenerate-operator-configs
 ```
 
 启用 bank 数据导出：
@@ -730,6 +766,7 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
       "inputs": {
         "A": {
           "shape": [128, 128, 32],
+          "dtype": "fp32",
           "remapping": null,
           "source": {
             "type": "external"
@@ -737,6 +774,7 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
         },
         "B": {
           "shape": [128, 128, 32],
+          "dtype": "fp32",
           "remapping": null,
           "source": {
             "type": "external"
@@ -744,6 +782,7 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
         },
         "B'": {
           "shape": [128, 128, 32],
+          "dtype": "fp32",
           "remapping": null,
           "source": {
             "type": "external"
@@ -752,22 +791,25 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
       },
       "output": {
         "shape": [1, 128, 128],
+        "dtype": "fp32",
         "remapping": null
       }
     },    
     {
       "id": "op1",
-      "type": "prefill_max_fp32MN_fp32MN",
+      "type": "prefill_max_fp16MN_fp32MN",
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
           "shape": [1, 128, 128],
+          "dtype": "fp32",
           "remapping": null,
           "source": "op0"
         }
       },
       "output": {
         "shape": [1, 1, 128],
+        "dtype": "fp32",
         "remapping": null
       }
     }

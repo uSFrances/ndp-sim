@@ -14,7 +14,7 @@ from bitstream.parse import (
     load_config, init_modules, build_entries, generate_bitstream,
     write_bitstream, dump_modules_detailed, dump_mapping_review
 )
-# python bitstream/main.py --visualize-placement -c ./jsons/maxpool_config_16_112_112_stride2_padding1.json -o ./maxpool_config_16_112_112_stride2_padding1_out
+# python bitstream/main.py --visualize-placement -c ./jsons/prefill_remote_sum_fp32MN_fp32MN.json -o ./model_execplan/config/prefill_remote_sum_fp32MN_fp32MN
 
 def main():
     """Main entry point for bitstream CLI."""
@@ -245,6 +245,12 @@ Examples:
                              heuristic_iterations=args.heuristic_iterations,
                              heuristic_restarts=args.heuristic_restarts,
                              seed=args.seed)
+
+        # Always emit mapping review JSON after mapping is complete.
+        mapping_review_path = output_dir / 'mapping_review.json'
+        if args.verbose:
+            print(f"[2.5/6] Generating mapping review output to {mapping_review_path.name}...")
+        dump_mapping_review(output_file=str(mapping_review_path))
         
         # Step 3: Generate placement visualization (if requested)
         if args.visualize_placement:
@@ -312,6 +318,7 @@ Examples:
                 print(f"✓ Binary dump (128b): {binary_outputs.get('binary_128')}")
             if not args.no_dump_detailed:
                 print(f"✓ Detailed dump: {output_dir / args.detailed_dump_output}")
+            print(f"✓ Mapping review: {mapping_review_path}")
             if not args.no_dump_parsed:
                 print(f"✓ Parsed bitstream: {output_dir / args.parsed_name}")
         
