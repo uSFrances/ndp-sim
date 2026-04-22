@@ -22,10 +22,10 @@
     {
       "id": "op1",
       "type": "prefill_remote_sum_fp32MN_fp32MN",
-      "used_slices": "0b0000000000000000000000000001",
+      "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, 28, 32],
           "source": "op0"
         }
       },
@@ -36,11 +36,11 @@
     {
       "id": "op2",
       "type": "prefill_mac_SFU_fp32MN_fp32MN",
-      "used_slices": "0b0000000000000000000000000001",
+      "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
           "shape": [1, 1, 32],
-          "source": "op1"
+          "source":"op1"
         }
       },
       "output": {
@@ -50,7 +50,7 @@
     {
       "id": "op3",
       "type": "prefill_mul_fp32MN_fp32M_fp32MN",
-      "used_slices": "0b0000000000000000000000000001",
+      "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
           "shape": [1, 32, 32],
