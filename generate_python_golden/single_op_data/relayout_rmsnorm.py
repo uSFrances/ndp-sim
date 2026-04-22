@@ -78,15 +78,24 @@ def process_rmsnorm_tensors(input_dir, output_dir):
     num_slices = 28
 
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
-    if not bin_files:
-        print("❌ No .bin files found in the directory.")
+    
+    # --- 新增：提取并锁死唯一的算子实例前缀，防止多次调用互相覆盖串台 ---
+    valid_files = [f for f in bin_files if "rms_norm" in f and "_subop" in f]
+    if not valid_files:
+        print("❌ No valid rms_norm .bin files found in the directory.")
         return
+    prefixes = sorted(list(set([os.path.basename(f).split("_subop-")[0] for f in valid_files])))
+    target_prefix = prefixes[0]
+    print(f"🎯 Locking to specific instance: '{target_prefix}' to prevent overwrite mismatch")
+    # ------------------------------------------------------------------
 
     for filepath in bin_files:
         filename = os.path.basename(filepath)
         
-        # 避免处理已经切片过的文件或是其他垃圾文件，仅处理 rms_norm 相关的算子
+        # 避免处理已经切片过的文件或是其他垃圾文件，检查实例锁
         if "slice" in filename or "shared" in filename or "rms_norm" not in filename: 
+            continue
+        if target_prefix and not filename.startswith(target_prefix):
             continue
         
         match = re.search(r"_shape([\dx]+)_dtype", filename)

@@ -71,13 +71,23 @@ def process_softmax_tensors(input_dir, output_dir):
     slices_per_group = num_slices // num_heads # 28 / 7 = 4
 
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
-    if not bin_files:
-        print("❌ No .bin files found in the directory.")
+    
+    # --- 新增：锁死实例前缀 ---
+    valid_files = [f for f in bin_files if "soft_max" in f and "_subop" in f]
+    if not valid_files:
+        print("❌ No valid softmax .bin files found in the directory.")
         return
+    prefixes = sorted(list(set([os.path.basename(f).split("_subop-")[0] for f in valid_files])))
+    target_prefix = prefixes[0]
+    print(f"🎯 Locking to specific instance: '{target_prefix}'")
+    # -------------------------
 
     for filepath in bin_files:
         filename = os.path.basename(filepath)
         
+        if target_prefix and not filename.startswith(target_prefix):
+            continue
+            
         match = re.search(r"_shape([\dx]+)_dtype", filename)
         if not match: continue
         
