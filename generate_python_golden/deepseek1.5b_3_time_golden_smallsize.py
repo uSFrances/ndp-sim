@@ -113,6 +113,14 @@ def rms_norm(x):
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sum_mac_in0", x, is_sub_op=True)
         # 保存输出与后续流转
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sum_mac_out", sum_mac_out, is_sub_op=True)
+        
+        # --- 补充：各子操作中间步骤的输入提取 ---
+        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-remote_sum_in0", sum_mac_out, is_sub_op=True)
+        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mac_SFU_in0", remote_sum_out, is_sub_op=True)
+        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_in0", x, is_sub_op=True)
+        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_in1", mac_SFU_out, is_sub_op=True)
+        # --------------------------------------
+
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-remote_sum_out", remote_sum_out, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mac_SFU_out", mac_SFU_out, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_out", dst, is_sub_op=True)
