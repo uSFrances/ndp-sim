@@ -138,16 +138,26 @@ def process_gemm_directory(input_dir, output_dir, order='F'):
     print(f"🚀 Scanning for GEMM tensors in: {input_dir}")
     bin_files = glob.glob(os.path.join(input_dir, "*mul_mat*.bin"))
     
-    if not bin_files:
-        print("❌ No mul_mat .bin files found in the directory.")
+    valid_files = [f for f in bin_files if "systolic" not in f and "linearized" not in f]
+    if not valid_files:
+        print("❌ No valid mul_mat .bin files found in the directory.")
         return
-
+        
+    # --- 提取并锁死完整的算子实例前缀 ---
+    prefixes = sorted(list(set([re.split(r"_(in0|in1|out)", os.path.basename(f))[0] for f in valid_files if "_op-mul_mat" in f])))
+    target_prefix = prefixes[0] if prefixes else ""
+    if target_prefix: print(f"🎯 Locking to specific GEMM instance: '{target_prefix}'")
+    # --------------------------------
+    
     install_dir = os.path.join(output_dir, "install")
 
     for filepath in bin_files:
         filename = os.path.basename(filepath)
         if "systolic" in filename or "linearized" in filename:
             continue # 跳过已经重排过的文件
+            
+        if target_prefix and not filename.startswith(target_prefix):
+            continue
             
         # 匹配形状提取
         match = re.search(r"_shape([\dx]+)_dtype", filename)
