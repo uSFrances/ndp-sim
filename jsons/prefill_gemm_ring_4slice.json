@@ -1,0 +1,806 @@
+{
+    "CONFIG": "11101110",
+    "dram_loop_configs": {
+        "LC0": {
+            "src_id": null,
+            "outmost_loop": 1,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
+            "last_index": 0
+        },
+        "LC1": {
+            "src_id": "DRAM_LC.LC0",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 1,
+            "stride": 1,
+            "last_index": 1
+        },
+        "LC2": {
+            "src_id": "DRAM_LC.LC1",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
+            "last_index": 2
+        },
+        "LC3": {
+            "src_id": "DRAM_LC.LC2",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 3
+        },
+        "LC4": {
+            "src_id": "DRAM_LC.LC1",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 2
+        },
+        "LC5": {
+            "src_id": "DRAM_LC.LC4",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 3
+        },
+        "LC6": {
+            "src_id": "DRAM_LC.LC1",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 2
+        },
+        "LC7": {
+            "src_id": "DRAM_LC.LC6",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 3
+        }
+    },
+    "lc_pe_configs": {
+        "PE0": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC3",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 8
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC0",
+                "mode": "keep",
+                "keep_last_index": 1,
+                "constant": 0
+            }
+        },
+        "PE1": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "LC_PE.PE4",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 32
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC1",
+                "mode": "keep",
+                "keep_last_index": 2,
+                "constant": 0
+            }
+        },
+        "PE2": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC6",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 4
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC1",
+                "mode": "keep",
+                "keep_last_index": 2,
+                "constant": 0
+            }
+        },
+        "PE3": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC7",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 16
+            },
+            "inport0": {
+                "src_id": "LC_PE.PE5",
+                "mode": "keep",
+                "keep_last_index": 1,
+                "constant": 0
+            }
+        },
+        "PE4": {
+            "alu_opcode": "mul",
+            "inport2": {
+                "src_id": null,
+                "mode": null,
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 1
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC5",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            }
+        },
+        "PE5": {
+            "alu_opcode": "mul",
+            "inport2": {
+                "src_id": null,
+                "mode": null,
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 1
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC0",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            }
+        }
+    },
+    "buffer_loop_configs": {
+        "GROUP0": {
+            "target": "A",
+            "ROW_LC": {
+                "src_id": "DRAM_LC.LC2",
+                "start": 0,
+                "end": 4,
+                "stride": 1,
+                "last_index": 3
+            },
+            "COL_LC": {
+                "src_id": "GROUP0.ROW_LC",
+                "start": 0,
+                "end": 32,
+                "stride": 16,
+                "last_index": 4
+            }
+        },
+        "GROUP1": {
+            "target": "B",
+            "ROW_LC": {
+                "src_id": "DRAM_LC.LC4",
+                "start": 0,
+                "end": 4,
+                "stride": 1,
+                "last_index": 3
+            },
+            "COL_LC": {
+                "src_id": "GROUP1.ROW_LC",
+                "start": 0,
+                "end": 32,
+                "stride": 16,
+                "last_index": 4
+            }
+        },
+        "GROUP2": {
+            "target": "D",
+            "ROW_LC": {
+                "src_id": "DRAM_LC.LC7",
+                "start": 0,
+                "end": 4,
+                "stride": 1,
+                "last_index": 4
+            },
+            "COL_LC": {
+                "src_id": "GROUP2.ROW_LC",
+                "start": 0,
+                "end": 4,
+                "stride": 2,
+                "last_index": 5
+            }
+        },
+        "GROUP3": {
+            "target": "B'",
+            "ROW_LC": {
+                "src_id": "DRAM_LC.LC4",
+                "start": 0,
+                "end": 4,
+                "stride": 1,
+                "last_index": 3
+            },
+            "COL_LC": {
+                "src_id": "GROUP3.ROW_LC",
+                "start": 0,
+                "end": 32,
+                "stride": 16,
+                "last_index": 4
+            }
+        }
+    },
+    "buffer_config": {
+        "buffer0": {
+            "dst_port": 0,
+            "nbr_enable": 1,
+            "buf_full_last_index": 3,
+            "buffer_life_time": 4,
+            "mode": 1,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        },
+        "buffer1": {
+            "dst_port": 0,
+            "nbr_enable": 1,
+            "buf_full_last_index": 3,
+            "buffer_life_time": 4,
+            "mode": 1,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        },
+        "buffer2": {
+            "dst_port": 0,
+            "nbr_enable": 0,
+            "buf_full_last_index": 3,
+            "buffer_life_time": 4,
+            "mode": 0,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        },
+        "buffer3": {
+            "dst_port": 0,
+            "nbr_enable": 0,
+            "buf_full_last_index": 3,
+            "buffer_life_time": 4,
+            "mode": 0,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        },
+        "buffer4": {
+            "dst_port": 0,
+            "nbr_enable": 0,
+            "buf_full_last_index": 3,
+            "buffer_life_time": 1,
+            "mode": 0,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        },
+        "buffer5": {
+            "dst_port": 0,
+            "nbr_enable": 0,
+            "buf_full_last_index": 4,
+            "buffer_life_time": 1,
+            "mode": 0,
+            "mask": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+            ],
+            "buf_end_row_addr": 3
+        }
+    },
+    "stream_engine": {
+        "stream0": {
+            "target": "A",
+            "mode": "read",
+            "base_addr": "0b00011_00_0000000000000_000000_0000",
+            "mem_idx_mode": [
+                "buffer",
+                "keep",
+                null
+            ],
+            "mem_idx_keep_last_index": [
+                7,
+                3,
+                null
+            ],
+            "mem_idx_constant": [
+                null,
+                null,
+                null
+            ],
+            "idx": [
+                "LC_PE.PE0",
+                "DRAM_LC.LC2",
+                null
+            ],
+            "idx_size": [
+                7,
+                3,
+                null
+            ],
+            "dim_stride": [
+                32,
+                128,
+                null
+            ],
+            "padding_enable": [
+                0,
+                0,
+                0
+            ],
+            "padding_reg_value": null,
+            "idx_padding_range": {
+                "low_bound": [
+                    null,
+                    null,
+                    null
+                ],
+                "up_bound": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "tailing_enable": [
+                0,
+                0,
+                0
+            ],
+            "idx_tailing_range": {
+                "low": [
+                    null,
+                    null,
+                    null
+                ],
+                "up": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "address_remapping": null,
+            "buf_idx_mode": [
+                "keep",
+                "buffer"
+            ],
+            "buf_idx_keep_last_index": [
+                4,
+                7
+            ],
+            "buf_spatial_stride": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15
+            ],
+            "buf_spatial_size": 16,
+            "buf_full_last_index": 3,
+            "ping_pong": 0,
+            "pingpong_last_index": null
+        },
+        "stream1": {
+            "target": "B",
+            "mode": "read",
+            "base_addr": "0b00000_00_0000000001000_000000_0000",
+            "mem_idx_mode": [
+                "buffer",
+                "keep",
+                null
+            ],
+            "mem_idx_keep_last_index": [
+                7,
+                3,
+                null
+            ],
+            "mem_idx_constant": [
+                null,
+                null,
+                null
+            ],
+            "idx": [
+                "LC_PE.PE1",
+                "DRAM_LC.LC4",
+                null
+            ],
+            "idx_size": [
+                7,
+                3,
+                null
+            ],
+            "dim_stride": [
+                32,
+                256,
+                null
+            ],
+            "padding_enable": [
+                0,
+                0,
+                0
+            ],
+            "padding_reg_value": null,
+            "idx_padding_range": {
+                "low_bound": [
+                    null,
+                    null,
+                    null
+                ],
+                "up_bound": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "tailing_enable": [
+                0,
+                0,
+                0
+            ],
+            "idx_tailing_range": {
+                "low": [
+                    null,
+                    null,
+                    null
+                ],
+                "up": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "address_remapping": null,
+            "buf_idx_mode": [
+                "keep",
+                "buffer"
+            ],
+            "buf_idx_keep_last_index": [
+                4,
+                7
+            ],
+            "buf_spatial_stride": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15
+            ],
+            "buf_spatial_size": 16,
+            "buf_full_last_index": 3,
+            "ping_pong": 0,
+            "pingpong_last_index": 3
+        },
+        "stream2": {
+            "target": "D",
+            "mode": "write",
+            "base_addr": "0b00000_00_0000000010000_000000_0000",
+            "mem_idx_mode": [
+                "buffer",
+                "keep",
+                0
+            ],
+            "mem_idx_keep_last_index": [
+                7,
+                3,
+                0
+            ],
+            "mem_idx_constant": [
+                null,
+                null,
+                null
+            ],
+            "idx": [
+                "LC_PE.PE3",
+                "LC_PE.PE2",
+                null
+            ],
+            "idx_size": [
+                15,
+                7,
+                null
+            ],
+            "dim_stride": [
+                128,
+                512,
+                null
+            ],
+            "tailing_enable": [
+                0,
+                0,
+                0
+            ],
+            "idx_tailing_range": {
+                "low": [
+                    null,
+                    null,
+                    null
+                ],
+                "up": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "address_remapping": null,
+            "buf_idx_mode": [
+                "keep",
+                "buffer"
+            ],
+            "buf_idx_keep_last_index": [
+                5,
+                7
+            ],
+            "buf_spatial_stride": [
+                0,
+                1,
+                4,
+                5,
+                8,
+                9,
+                12,
+                13,
+                16,
+                17,
+                20,
+                21,
+                24,
+                25,
+                28,
+                29
+            ],
+            "buf_spatial_size": 16,
+            "ping_pong": 0,
+            "pingpong_last_index": null
+        },
+        "stream3": {
+            "target": "B'",
+            "mode": "read",
+            "base_addr": "0b00011_00_0000000001000_001000_0000",
+            "mem_idx_mode": [
+                "buffer",
+                "keep",
+                null
+            ],
+            "mem_idx_keep_last_index": [
+                7,
+                3,
+                null
+            ],
+            "mem_idx_constant": [
+                null,
+                null,
+                null
+            ],
+            "idx": [
+                "LC_PE.PE1",
+                "DRAM_LC.LC4",
+                null
+            ],
+            "idx_size": [
+                7,
+                3,
+                null
+            ],
+            "dim_stride": [
+                32,
+                256,
+                null
+            ],
+            "padding_enable": [
+                0,
+                0,
+                0
+            ],
+            "padding_reg_value": null,
+            "idx_padding_range": {
+                "low_bound": [
+                    null,
+                    null,
+                    null
+                ],
+                "up_bound": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "tailing_enable": [
+                0,
+                0,
+                0
+            ],
+            "idx_tailing_range": {
+                "low": [
+                    null,
+                    null,
+                    null
+                ],
+                "up": [
+                    null,
+                    null,
+                    null
+                ]
+            },
+            "address_remapping": null,
+            "buf_idx_mode": [
+                "keep",
+                "buffer"
+            ],
+            "buf_idx_keep_last_index": [
+                4,
+                7
+            ],
+            "buf_spatial_stride": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15
+            ],
+            "buf_spatial_size": 16,
+            "buf_full_last_index": 3,
+            "ping_pong": 0,
+            "pingpong_last_index": 3
+        }
+    },
+    "n2n": {
+        "neighbor_stream0": {
+            "mem_loop": 4,
+            "src_slice_sel": 1,
+            "dst_slice_sel": 1,
+            "ping_pong": 1
+        }
+    },
+    "special_array": {
+        "mode": "gemm",
+        "bias_enable": 0,
+        "data_type": "fp16",
+        "transout_last_index": 2,
+        "inport0": {
+            "enable": 1,
+            "pingpong_en": 1,
+            "pingpong_last_index": 3,
+            "nbr_enable": 1
+        },
+        "inport1": {
+            "enable": 1,
+            "pingpong_en": 1,
+            "pingpong_last_index": 3,
+            "nbr_enable": 0
+        },
+        "inport2": {
+            "enable": 0,
+            "pingpong_en": 0,
+            "pingpong_last_index": null,
+            "nbr_enable": 0
+        },
+        "outport": {
+            "mode": "col",
+            "fp32tofp16": "true",
+            "fp32tobf16": "false"
+        }
+    },
+    "gemm_shape": {
+        "M": 64,
+        "N": 32,
+        "K": 16
+    }
+}

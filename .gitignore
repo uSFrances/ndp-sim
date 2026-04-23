@@ -14,6 +14,7 @@ __pycache__/
 *.md
 
 golden_models/
+model_execplan/output/*zip
 
 !operator_base_info.json
 !generate_python_golden/README.md
@@ -21,3 +22,4 @@ golden_models/
 !model_execplan/config/SFU_Coeff/*.txt
 !model_execplan/README.md
 !model_execplan/pyrightconfig.json
+!jsons/*json

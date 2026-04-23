@@ -14,7 +14,7 @@ from bitstream.parse import (
     load_config, init_modules, build_entries, generate_bitstream,
     write_bitstream, dump_modules_detailed, dump_mapping_review
 )
-# python bitstream/main.py --visualize-placement -c ./jsons/prefill_remote_sum_fp32MN_fp32MN.json -o ./model_execplan/config/prefill_remote_sum_fp32MN_fp32MN
+# python bitstream/main.py --visualize-placement -c ./jsons/prefill_sum_rec_fp32MN_fp32MN.json -o ./model_execplan/config/prefill_sum_rec_fp32MN_fp32MN
 
 def main():
     """Main entry point for bitstream CLI."""

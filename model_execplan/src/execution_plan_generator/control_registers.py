@@ -371,8 +371,8 @@ def _compute_prefill_sum_rec_fp32MN_fp32MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
             port1 = (a_n or 0) * 32,
