@@ -108,10 +108,10 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
 
         base_addr = _parse_hex_addr(base_addr_raw)
         slave, bank, _, _, _ = _decode_addr_fields(base_addr)
-        if slave != slice_id:
-            raise ValueError(
-                f"Slice mismatch for {key}: key slice={slice_id}, addr slave={slave}, addr=0x{base_addr:08X}"
-            )
+        # if slave != slice_id:
+        #     raise ValueError(
+        #         f"Slice mismatch for {key}: key slice={slice_id}, addr slave={slave}, addr=0x{base_addr:08X}"
+        #     )
 
         payloads.append(
             MatrixPayload(

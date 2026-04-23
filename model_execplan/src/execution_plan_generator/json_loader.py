@@ -59,6 +59,7 @@ def execution_plan_to_dict(plan: ExecutionPlanInput) -> dict[str, Any]:
                     "shape": list(op.output.shape),
                     "dtype": op.output.dtype,
                     "remapping": list(op.output.remapping) if op.output.remapping is not None else None,
+                    "type": op.output.special_type,
                 },
             }
             for op in plan.operators
@@ -167,7 +168,20 @@ def _parse_output(raw_op: dict[str, Any], op_id: str) -> TensorSpec:
     shape = _parse_shape(raw_output, f"Operator {op_id}: output")
     dtype = _parse_dtype(raw_output, f"Operator {op_id}: output")
     remapping = _parse_remapping(raw_output, f"Operator {op_id}: output")
-    return TensorSpec(shape=shape, dtype=dtype, remapping=remapping)
+    special_type = _parse_special_type(raw_output, f"Operator {op_id}: output")
+    return TensorSpec(shape=shape, dtype=dtype, remapping=remapping, special_type=special_type)
+
+
+def _parse_special_type(raw_tensor: dict[str, Any], location: str) -> str | None:
+    raw_type = _pick(raw_tensor, "type", "special_type", "output_type", "输出类型")
+    if raw_type is None:
+        return None
+    if not isinstance(raw_type, str):
+        raise JsonFormatError(f"{location} type must be a string.")
+    normalized = raw_type.strip()
+    if not normalized:
+        raise JsonFormatError(f"{location} type cannot be empty.")
+    return normalized
 
 
 def _parse_dtype(raw_tensor: dict[str, Any], location: str) -> str:

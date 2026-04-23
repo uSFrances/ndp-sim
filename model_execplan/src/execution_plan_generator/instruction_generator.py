@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from typing import Iterable
 
 from .errors import InvalidRegisterWritePlanError
@@ -125,6 +126,15 @@ class InstructionGenerator:
             reorder_const_fields=False,
             map_const_fields_to_const_addresses=False,
         )
+
+        # Extension points for output base_addr special handling:
+        # 1) per-op+type router, 2) global type router.
+        self._output_base_addr_router_by_op_and_type: dict[tuple[str, str], Callable[[int], int]] = {
+            # ROPE special case for prefill_mul_fp32MN_fp32MN_fp32MN:
+            # write_slice0 uses source_slice2, slice1->3, slice2->0, slice3->1, ...
+            ("prefill_mul_fp32MN_fp32MN_fp32MN", "rope_slice_xor2"): lambda slice_id: slice_id ^ 0b10,
+        }
+        self._output_base_addr_router_by_type: dict[str, Callable[[int], int]] = {}
 
     def generate(
         self,
@@ -299,11 +309,23 @@ class InstructionGenerator:
                 )
                 if output_field_original_value is None:
                     output_field_original_value = 0
+                enabled_slice_set = set(enabled_slice_ids)
                 for slice_id in enabled_slice_ids:
+                    effective_addr_slice_id = self._resolve_output_base_addr_source_slice(
+                        op_type=op.op_type,
+                        output_type=op.output.special_type,
+                        write_slice_id=slice_id,
+                    )
+                    if effective_addr_slice_id not in enabled_slice_set:
+                        raise ValueError(
+                            "Output base_addr source slice is not enabled by used_slices: "
+                            f"operator={op.op_id}, write_slice={slice_id}, source_slice={effective_addr_slice_id}, "
+                            f"used_slices_bin={slice_mask:028b}"
+                        )
                     slice_base_addr = self._compose_slice_specific_base_addr(
                         field_key=output_field_key,
                         base_seed_value=output_base_seed_value,
-                        slice_id=slice_id,
+                        slice_id=effective_addr_slice_id,
                     )
                     output_reg_writes = self._expand_field_to_register_writes(
                         field_key=output_field_key,
@@ -331,6 +353,7 @@ class InstructionGenerator:
                         command_explanations.append(
                             f"Write_Reg base address for operator {op.op_id} output D, "
                             f"register_field={output_field_key}, slice_bin={slice_id:05b}, "
+                            f"source_slice_bin={effective_addr_slice_id:05b}, "
                             f"reg_addr_bin={reg_addr:014b}, "
                             f"original_value_bin={original_value:032b}, "
                             f"write_value_bin={write_value:032b}, "
@@ -461,6 +484,29 @@ class InstructionGenerator:
 
     def _is_base_addr_field_key(self, field_key: str) -> bool:
         return field_key.endswith(".stream_engine.stream.base_addr")
+
+    def _resolve_output_base_addr_source_slice(
+        self,
+        op_type: str,
+        output_type: str | None,
+        write_slice_id: int,
+    ) -> int:
+        if output_type is None:
+            return write_slice_id
+
+        router = self._output_base_addr_router_by_op_and_type.get((op_type, output_type))
+        if router is None:
+            router = self._output_base_addr_router_by_type.get(output_type)
+        if router is None:
+            return write_slice_id
+
+        mapped = router(write_slice_id)
+        if not isinstance(mapped, int) or mapped < 0:
+            raise ValueError(
+                f"Invalid output base_addr source slice mapping: op_type={op_type}, "
+                f"output_type={output_type}, write_slice={write_slice_id}, mapped={mapped}"
+            )
+        return mapped
 
     def _pack_load_config_ddr_addr(self, full_addr: int) -> int:
         # Load_Config uses DDR config address in row-aligned compressed form.

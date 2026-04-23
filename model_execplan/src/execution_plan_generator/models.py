@@ -21,6 +21,7 @@ class TensorSpec:
     dtype: str = "fp32"
     source: InputSource | None = None
     remapping: tuple[int, ...] | None = None
+    special_type: str | None = None
 
 
 @dataclass(frozen=True)

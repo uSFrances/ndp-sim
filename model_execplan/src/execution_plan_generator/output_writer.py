@@ -5,8 +5,16 @@ import re
 import shutil
 from math import ceil
 from pathlib import Path
+from typing import Callable
 
 from .models import AddressPlan, ExecutionPlanArtifact, ExecutionPlanInput, InputSourceType, OperatorTemplate
+
+
+_OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE: dict[tuple[str, str], Callable[[int], int]] = {
+    ("prefill_mul_fp32MN_fp32MN_fp32MN", "rope_slice_xor2"): lambda slice_id: slice_id ^ 0b10,
+}
+
+_OUTPUT_BASE_ADDR_ROUTER_BY_TYPE: dict[str, Callable[[int], int]] = {}
 
 
 def write_instruction_outputs(
@@ -107,7 +115,18 @@ def write_install_manifest(
         output_assignment = address_plan.assignments.get(output_tensor_name)
         if output_assignment is None:
             continue
-        for slice_id, slice_base_addr in sorted(output_assignment.per_slice_addresses.items()):
+        for slice_id, _slice_base_addr in sorted(output_assignment.per_slice_addresses.items()):
+            source_slice_id = _resolve_output_base_addr_source_slice(
+                op_type=op.op_type,
+                output_type=op.output.special_type,
+                write_slice_id=slice_id,
+            )
+            if source_slice_id not in output_assignment.per_slice_addresses:
+                raise ValueError(
+                    "Output manifest base_addr source slice is not available in assignment: "
+                    f"operator={op.op_id}, write_slice={slice_id}, source_slice={source_slice_id}"
+                )
+            slice_base_addr = output_assignment.per_slice_addresses[source_slice_id]
             slice_dir = _format_slice_dir(slice_id)
             payload[f"{op.op_id}_matrixD_slice{slice_id}"] = {
                 "base_addr": _format_hex32(slice_base_addr),
@@ -378,6 +397,29 @@ def _copy_overwrite_writable(src: Path, dst: Path) -> None:
     shutil.copyfile(src, dst)
 
     # Ensure future runs can overwrite this file on Windows.
+
+
+def _resolve_output_base_addr_source_slice(
+    op_type: str,
+    output_type: str | None,
+    write_slice_id: int,
+) -> int:
+    if output_type is None:
+        return write_slice_id
+
+    router = _OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE.get((op_type, output_type))
+    if router is None:
+        router = _OUTPUT_BASE_ADDR_ROUTER_BY_TYPE.get(output_type)
+    if router is None:
+        return write_slice_id
+
+    mapped = router(write_slice_id)
+    if not isinstance(mapped, int) or mapped < 0:
+        raise ValueError(
+            f"Invalid output base_addr source slice mapping: op_type={op_type}, "
+            f"output_type={output_type}, write_slice={write_slice_id}, mapped={mapped}"
+        )
+    return mapped
     try:
         dst.chmod(0o666)
     except OSError:
