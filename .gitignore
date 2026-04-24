@@ -29,3 +29,5 @@ model_execplan/output/*zip
 !address_remapping/pyproject.toml
 !address_remapping/*.md
 !address_remapping/examples/**/*.json
+!address_remapping/outputs/
+!address_remapping/outputs/**

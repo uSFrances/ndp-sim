@@ -1,0 +1,39 @@
+{
+  "graph_name": "ring_gemm_bias",
+  "mode": "baseline",
+  "hardware": {
+    "peak_memory_bandwidth_bytes_per_cycle": 32.0,
+    "general_peak_ops_per_cycle": 16.0,
+    "gemm_peak_ops_per_cycle": 256.0,
+    "general_ridge_point_ops_per_byte": 0.5,
+    "gemm_ridge_point_ops_per_byte": 8.0
+  },
+  "operators": [
+    {
+      "op_name": "ring_gemm_fp16_fp16_fp16_0",
+      "op_type": "ring_gemm_fp16_fp16_fp16",
+      "arithmetic_intensity_ops_per_byte": 11.636363636363637,
+      "roofline_limit_ops_per_cycle": 256.0,
+      "achieved_ops_per_cycle": 90.26997245179064,
+      "hardware_measured_cycles": 1024.0,
+      "measured_ops_per_cycle": 64.0,
+      "peak_compute_ops_per_cycle": 256.0,
+      "latency_cycles": 726.0,
+      "work_ops": 65536.0,
+      "total_bytes": 5632,
+      "analytical_bandwidth_bytes_per_cycle": 7.757575757575758,
+      "measured_bandwidth_bytes_per_cycle": 5.5,
+      "analytical_bandwidth_utilization": 0.24242424242424243,
+      "measured_bandwidth_utilization": 0.171875,
+      "analytical_efficiency": 0.3526170798898072,
+      "measured_efficiency": 0.25,
+      "measured_vs_analytical_ratio": 0.708984375,
+      "utilization": {
+        "analytical_compute": "35.26%",
+        "measured_compute": "25.00%",
+        "analytical_bandwidth": "24.24%",
+        "measured_bandwidth": "17.19%"
+      }
+    }
+  ]
+}

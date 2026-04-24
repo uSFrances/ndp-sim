@@ -1,0 +1,452 @@
+[
+  {
+    "status": "ok",
+    "permutation": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+    "reason": null,
+    "reason_code": null,
+    "producer": "op0",
+    "consumer": "op1",
+    "tensor_name": "op0__out",
+    "write_reg_required": false,
+    "write_reg_hint": null,
+    "shape_bindings": {
+      "M": 32,
+      "N": 32
+    },
+    "producer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "consumer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "producer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "consumer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "producer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ],
+    "consumer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ]
+  },
+  {
+    "status": "ok",
+    "permutation": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+    "reason": null,
+    "reason_code": null,
+    "producer": "op1",
+    "consumer": "op2",
+    "tensor_name": "op1__out",
+    "write_reg_required": false,
+    "write_reg_hint": null,
+    "shape_bindings": {
+      "M": 32
+    },
+    "producer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "consumer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M",
+          "parent_axis": "M",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        }
+      ]
+    },
+    "producer_axis_aliases": {
+      "M": "M"
+    },
+    "consumer_axis_aliases": {
+      "M": "M"
+    },
+    "producer_visible_outer_bits": [
+      "M:bit3",
+      "M:bit4",
+      "M:bit5"
+    ],
+    "consumer_visible_outer_bits": [
+      "M:bit3",
+      "M:bit4",
+      "M:bit5"
+    ]
+  },
+  {
+    "status": "ok",
+    "permutation": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+    "reason": null,
+    "reason_code": null,
+    "producer": "op2",
+    "consumer": "op3",
+    "tensor_name": "op2__out",
+    "write_reg_required": false,
+    "write_reg_hint": null,
+    "shape_bindings": {
+      "M": 32,
+      "N": 32
+    },
+    "producer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "consumer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "producer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "consumer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "producer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ],
+    "consumer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ]
+  },
+  {
+    "status": "ok",
+    "permutation": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+    "reason": null,
+    "reason_code": null,
+    "producer": "op2",
+    "consumer": "op4",
+    "tensor_name": "op2__out",
+    "write_reg_required": false,
+    "write_reg_hint": null,
+    "shape_bindings": {
+      "M": 32,
+      "N": 32
+    },
+    "producer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "consumer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32,
+        "N": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "N",
+          "parent_axis": "N",
+          "extent": 32,
+          "kind": "outer",
+          "bits": 5
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "producer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "consumer_axis_aliases": {
+      "M": "M",
+      "N": "N"
+    },
+    "producer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ],
+    "consumer_visible_outer_bits": [
+      "M:bit3",
+      "N:bit1",
+      "N:bit2",
+      "N:bit3",
+      "N:bit4",
+      "N:bit5",
+      "M:bit4",
+      "M:bit5"
+    ]
+  },
+  {
+    "status": "ok",
+    "permutation": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+    "reason": null,
+    "reason_code": null,
+    "producer": "op3",
+    "consumer": "op4",
+    "tensor_name": "op3__out",
+    "write_reg_required": false,
+    "write_reg_hint": null,
+    "shape_bindings": {
+      "M": 32
+    },
+    "producer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "consumer_bound_layout": {
+      "dtype": "fp32",
+      "logical_shape": {
+        "M": 32
+      },
+      "ordered_factors": [
+        {
+          "name": "M_outer8",
+          "parent_axis": "M",
+          "extent": 4,
+          "kind": "outer",
+          "bits": 2
+        },
+        {
+          "name": "m8",
+          "parent_axis": "M",
+          "extent": 8,
+          "kind": "tile",
+          "bits": 3
+        }
+      ]
+    },
+    "producer_axis_aliases": {
+      "M": "M"
+    },
+    "consumer_axis_aliases": {
+      "M": "M"
+    },
+    "producer_visible_outer_bits": [
+      "M:bit3",
+      "M:bit4",
+      "M:bit5"
+    ],
+    "consumer_visible_outer_bits": [
+      "M:bit3",
+      "M:bit4",
+      "M:bit5"
+    ]
+  }
+]

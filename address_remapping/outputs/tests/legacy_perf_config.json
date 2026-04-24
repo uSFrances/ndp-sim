@@ -1,0 +1,1 @@
+{"hardware": {"slave_bits": 5, "bank_bits": 2, "row_bits": 13, "column_bits": 6}, "performance": {"gemm_read_overlap": 0.65}}

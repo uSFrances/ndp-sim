@@ -1,0 +1,2 @@
+memory_system_cycles: 4321
+cycles_recorded_core_0: 9999

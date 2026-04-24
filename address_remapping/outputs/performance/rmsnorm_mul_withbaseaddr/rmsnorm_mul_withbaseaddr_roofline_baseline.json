@@ -1,0 +1,39 @@
+{
+  "graph_name": "rmsnorm_mul_withbaseaddr",
+  "mode": "baseline",
+  "hardware": {
+    "peak_memory_bandwidth_bytes_per_cycle": 32.0,
+    "general_peak_ops_per_cycle": 16.0,
+    "gemm_peak_ops_per_cycle": 256.0,
+    "general_ridge_point_ops_per_byte": 0.5,
+    "gemm_ridge_point_ops_per_byte": 8.0
+  },
+  "operators": [
+    {
+      "op_name": "op0",
+      "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "arithmetic_intensity_ops_per_byte": 0.12307692307692308,
+      "roofline_limit_ops_per_cycle": 3.9384615384615387,
+      "achieved_ops_per_cycle": 0.8205128205128205,
+      "hardware_measured_cycles": 1240.0,
+      "measured_ops_per_cycle": 0.8258064516129032,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 1248.0,
+      "work_ops": 1024.0,
+      "total_bytes": 8320,
+      "analytical_bandwidth_bytes_per_cycle": 6.666666666666667,
+      "measured_bandwidth_bytes_per_cycle": 6.709677419354839,
+      "analytical_bandwidth_utilization": 0.20833333333333334,
+      "measured_bandwidth_utilization": 0.20967741935483872,
+      "analytical_efficiency": 0.20833333333333331,
+      "measured_efficiency": 0.2096774193548387,
+      "measured_vs_analytical_ratio": 1.006451612903226,
+      "utilization": {
+        "analytical_compute": "20.83%",
+        "measured_compute": "20.97%",
+        "analytical_bandwidth": "20.83%",
+        "measured_bandwidth": "20.97%"
+      }
+    }
+  ]
+}

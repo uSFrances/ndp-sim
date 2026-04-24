@@ -1,0 +1,117 @@
+{
+  "graph_name": "rmsnorm_withbaseaddr",
+  "mode": "remap",
+  "hardware": {
+    "peak_memory_bandwidth_bytes_per_cycle": 32.0,
+    "general_peak_ops_per_cycle": 16.0,
+    "gemm_peak_ops_per_cycle": 256.0,
+    "general_ridge_point_ops_per_byte": 0.5,
+    "gemm_ridge_point_ops_per_byte": 8.0
+  },
+  "operators": [
+    {
+      "op_name": "op0",
+      "op_type": "prefill_summac",
+      "arithmetic_intensity_ops_per_byte": 0.23484848484848486,
+      "roofline_limit_ops_per_cycle": 7.515151515151516,
+      "achieved_ops_per_cycle": 1.521472392638037,
+      "hardware_measured_cycles": 841.0,
+      "measured_ops_per_cycle": 1.1795481569560047,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 652.0,
+      "work_ops": 992.0,
+      "total_bytes": 4224,
+      "analytical_bandwidth_bytes_per_cycle": 6.478527607361963,
+      "measured_bandwidth_bytes_per_cycle": 5.0225921521997625,
+      "analytical_bandwidth_utilization": 0.20245398773006135,
+      "measured_bandwidth_utilization": 0.15695600475624258,
+      "analytical_efficiency": 0.20245398773006135,
+      "measured_efficiency": 0.15695600475624255,
+      "measured_vs_analytical_ratio": 0.7752675386444707,
+      "utilization": {
+        "analytical_compute": "20.25%",
+        "measured_compute": "15.70%",
+        "analytical_bandwidth": "20.25%",
+        "measured_bandwidth": "15.70%"
+      }
+    },
+    {
+      "op_name": "op3",
+      "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "arithmetic_intensity_ops_per_byte": 0.12307692307692308,
+      "roofline_limit_ops_per_cycle": 3.9384615384615387,
+      "achieved_ops_per_cycle": 0.7852760736196319,
+      "hardware_measured_cycles": 1370.0,
+      "measured_ops_per_cycle": 0.7474452554744525,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 1304.0,
+      "work_ops": 1024.0,
+      "total_bytes": 8320,
+      "analytical_bandwidth_bytes_per_cycle": 6.380368098159509,
+      "measured_bandwidth_bytes_per_cycle": 6.072992700729927,
+      "analytical_bandwidth_utilization": 0.19938650306748465,
+      "measured_bandwidth_utilization": 0.1897810218978102,
+      "analytical_efficiency": 0.19938650306748465,
+      "measured_efficiency": 0.1897810218978102,
+      "measured_vs_analytical_ratio": 0.9518248175182481,
+      "utilization": {
+        "analytical_compute": "19.94%",
+        "measured_compute": "18.98%",
+        "analytical_bandwidth": "19.94%",
+        "measured_bandwidth": "18.98%"
+      }
+    },
+    {
+      "op_name": "op1",
+      "op_type": "prefill_remote_sum_Mfp32_Mfp32",
+      "arithmetic_intensity_ops_per_byte": 0.125,
+      "roofline_limit_ops_per_cycle": 4.0,
+      "achieved_ops_per_cycle": 0.4444444444444444,
+      "hardware_measured_cycles": 587.0,
+      "measured_ops_per_cycle": 0.054514480408858604,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 72.0,
+      "work_ops": 32.0,
+      "total_bytes": 256,
+      "analytical_bandwidth_bytes_per_cycle": 3.5555555555555554,
+      "measured_bandwidth_bytes_per_cycle": 0.43611584327086883,
+      "analytical_bandwidth_utilization": 0.1111111111111111,
+      "measured_bandwidth_utilization": 0.013628620102214651,
+      "analytical_efficiency": 0.1111111111111111,
+      "measured_efficiency": 0.013628620102214651,
+      "measured_vs_analytical_ratio": 0.12265758091993187,
+      "utilization": {
+        "analytical_compute": "11.11%",
+        "measured_compute": "1.36%",
+        "analytical_bandwidth": "11.11%",
+        "measured_bandwidth": "1.36%"
+      }
+    },
+    {
+      "op_name": "op2",
+      "op_type": "prefill_mac_SFU",
+      "arithmetic_intensity_ops_per_byte": 0.125,
+      "roofline_limit_ops_per_cycle": 4.0,
+      "achieved_ops_per_cycle": 0.4444444444444444,
+      "hardware_measured_cycles": 160.0,
+      "measured_ops_per_cycle": 0.2,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 72.0,
+      "work_ops": 32.0,
+      "total_bytes": 256,
+      "analytical_bandwidth_bytes_per_cycle": 3.5555555555555554,
+      "measured_bandwidth_bytes_per_cycle": 1.6,
+      "analytical_bandwidth_utilization": 0.1111111111111111,
+      "measured_bandwidth_utilization": 0.05,
+      "analytical_efficiency": 0.1111111111111111,
+      "measured_efficiency": 0.05,
+      "measured_vs_analytical_ratio": 0.45000000000000007,
+      "utilization": {
+        "analytical_compute": "11.11%",
+        "measured_compute": "5.00%",
+        "analytical_bandwidth": "11.11%",
+        "measured_bandwidth": "5.00%"
+      }
+    }
+  ]
+}
