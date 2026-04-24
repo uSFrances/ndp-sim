@@ -1,0 +1,120 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 749,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,          
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00000000"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          32
+        ],
+        "remapping": null,
+        "base_addr": "0x00000800"
+      }
+    },
+    {
+      "id": "op1",
+      "type": "prefill_remote_sum_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 587,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "source": "op0",
+          "base_addr": "0x00000800"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          32
+        ],
+        "base_addr": "0x00000840"
+      }
+    },
+    {
+      "id": "op2",
+      "type": "prefill_mac_SFU_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 160,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            1,
+            32
+          ],
+          "source": "op1",
+          "base_addr": "0x00000840"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          32
+        ],
+        "base_addr": "0x00000880"
+      }
+    },
+    {
+      "id": "op3",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 1370,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x000008C0"
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            32
+          ],
+          "source": "op2",
+          "base_addr": "0x00000880"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          32,
+          32
+        ],
+        "base_addr": "0x000010C0"
+      }
+    }
+  ]
+}

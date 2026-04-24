@@ -1,0 +1,45 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 1240,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00000000"
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            32
+          ],
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00000800"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          32,
+          32
+        ],
+        "remapping": null,
+        "base_addr": "0x00001000"
+      }
+    }
+  ]
+}

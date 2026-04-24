@@ -1,0 +1,392 @@
+{
+  "shape_bindings": {
+    "sequence_length": 64,
+    "hidden_size": 896,
+    "head_dim": 128,
+    "intermediate_size": 3584,
+    "num_attention_heads": 7,
+    "num_key_value_heads": 7
+  },
+  "params": {
+    "slices_per_cluster": 4,
+    "slices_num": 28
+  },
+  "tensors": {
+    "hidden_in_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "M": "sequence_length",
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster",
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1048576
+    },
+    "attn_norm_weight_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster",
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1052672
+    },
+    "q_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "head_dim"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster"
+          }
+        }
+      },
+      "base_addr": 1056768
+    },
+    "q_bias_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1060864
+    },
+    "k_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "head_dim"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster"
+          }
+        }
+      },
+      "base_addr": 1064960
+    },
+    "k_bias_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1069056
+    },
+    "v_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "head_dim"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster"
+          }
+        }
+      },
+      "base_addr": 1073152
+    },
+    "v_bias_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1077248
+    },
+    "rope_cos_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "M": "sequence_length",
+        "N": "head_dim"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster"
+          }
+        }
+      },
+      "base_addr": 1081344
+    },
+    "rope_sin_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "M": "sequence_length",
+        "N": "head_dim"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster"
+          }
+        }
+      },
+      "base_addr": 1085440
+    },
+    "o_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1093632
+    },
+    "ffn_norm_weight_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1097728
+    },
+    "gate_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "intermediate_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1101824
+    },
+    "up_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "hidden_size",
+        "N": "intermediate_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1105920
+    },
+    "down_weight_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "intermediate_size",
+        "N": "hidden_size"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 1110016
+    },
+    "attn_rms_local_sum_fp32": {
+      "base_addr": 1114112
+    },
+    "attn_rms_global_sum_fp32": {
+      "base_addr": 1118208
+    },
+    "attn_rms_factor_fp32": {
+      "base_addr": 1122304
+    },
+    "attn_norm_fp32": {
+      "base_addr": 1126400
+    },
+    "attn_norm_fp16": {
+      "base_addr": 1130496
+    },
+    "q_proj_fp16": {
+      "base_addr": 1134592
+    },
+    "q_fp32": {
+      "base_addr": 1138688
+    },
+    "k_proj_fp16": {
+      "base_addr": 1142784
+    },
+    "k_fp32": {
+      "base_addr": 1146880
+    },
+    "v_proj_fp16": {
+      "base_addr": 1150976
+    },
+    "v_fp16": {
+      "base_addr": 1155072
+    },
+    "q_cos_fp32": {
+      "base_addr": 1159168
+    },
+    "q_sin_fp32": {
+      "base_addr": 1163264
+    },
+    "q_rope_fp16": {
+      "base_addr": 1167360
+    },
+    "k_cos_fp32": {
+      "base_addr": 1171456
+    },
+    "k_sin_fp32": {
+      "base_addr": 1175552
+    },
+    "k_rope_fp16": {
+      "base_addr": 1179648
+    },
+    "k_rope_t_fp16": {
+      "base_addr": 1183744
+    },
+    "qkt_scores_fp16": {
+      "base_addr": 1187840
+    },
+    "qkt_scores_sum_fp32": {
+      "base_addr": 1191936
+    },
+    "attn_max_fp32": {
+      "base_addr": 1200128
+    },
+    "attn_shifted_fp32": {
+      "base_addr": 1204224
+    },
+    "attn_denom_fp32": {
+      "base_addr": 1208320
+    },
+    "attn_probs_fp16": {
+      "base_addr": 1212416
+    },
+    "sv_out_fp16": {
+      "base_addr": 1216512
+    },
+    "attn_out_proj_fp16": {
+      "base_addr": 1220608
+    },
+    "residual1_fp32": {
+      "base_addr": 1224704
+    },
+    "ffn_rms_local_sum_fp32": {
+      "base_addr": 1228800
+    },
+    "ffn_rms_global_sum_fp32": {
+      "base_addr": 1232896
+    },
+    "ffn_rms_factor_fp32": {
+      "base_addr": 1236992
+    },
+    "ffn_norm_fp32": {
+      "base_addr": 1241088
+    },
+    "ffn_norm_fp16": {
+      "base_addr": 1245184
+    },
+    "gate_proj_fp16": {
+      "base_addr": 1249280
+    },
+    "up_proj_fp16": {
+      "base_addr": 1253376
+    },
+    "gate_act_fp32": {
+      "base_addr": 1257472
+    },
+    "ffn_mul_fp16": {
+      "base_addr": 1261568
+    },
+    "ffn_down_proj_fp16": {
+      "base_addr": 1265664
+    },
+    "layer_out_fp32": {
+      "base_addr": 1269760
+    }
+  },
+  "model": [
+    "attn_rms_local_sum_fp32 = prefill_summac(hidden_in_fp32, scope=global)",
+    "attn_rms_global_sum_fp32 = prefill_remote_sum_Mfp32_Mfp32(attn_rms_local_sum_fp32, reduce_scope=global)",
+    "attn_rms_factor_fp32 = prefill_mac_SFU(attn_rms_global_sum_fp32)",
+    "attn_norm_fp32 = prefill_mul_fp32MN_fp32M_fp32MN(hidden_in_fp32, attn_rms_factor_fp32, scope=global)",
+    "attn_norm_fp16 = prefill_mul_MN_N_fp32_fp32_fp16(attn_norm_fp32, attn_norm_weight_fp32, scope=global)",
+    "q_proj_fp16 = ring_gemm_fp16_fp16_fp16(attn_norm_fp16, q_weight_fp16, ring_scope=cluster)",
+    "q_fp32 = prefill_add_MN_N_fp16_fp32_fp32(q_proj_fp16, q_bias_fp32, scope=global)",
+    "k_proj_fp16 = ring_gemm_fp16_fp16_fp16(attn_norm_fp16, k_weight_fp16, ring_scope=cluster)",
+    "k_fp32 = prefill_add_MN_N_fp16_fp32_fp32(k_proj_fp16, k_bias_fp32, scope=global)",
+    "v_proj_fp16 = ring_gemm_fp16_fp16_fp16(attn_norm_fp16, v_weight_fp16, ring_scope=cluster)",
+    "v_fp16 = prefill_add_V_MN_N_fp16_fp32_fp16(v_proj_fp16, v_bias_fp32, scope=global)",
+    "q_cos_fp32 = prefill_mul_fp32MN_fp32MN_fp32MN(q_fp32, rope_cos_fp32, scope=cluster)",
+    "q_sin_fp32 = prefill_mul_fp32MN_fp32MN_fp32MN(q_fp32, rope_sin_fp32, scope=cluster)",
+    "q_rope_fp16 = prefill_add_fp32MN_fp32MN_fp16MN(q_cos_fp32, q_sin_fp32)",
+    "k_cos_fp32 = prefill_mul_fp32MN_fp32MN_fp32MN(k_fp32, rope_cos_fp32, scope=cluster)",
+    "k_sin_fp32 = prefill_mul_fp32MN_fp32MN_fp32MN(k_fp32, rope_sin_fp32, scope=cluster)",
+    "k_rope_fp16 = prefill_add_fp32MN_fp32MN_fp16MN(k_cos_fp32, k_sin_fp32)",
+    "k_rope_t_fp16 = prefill_qkt_kt_view_fp16_fp16(k_rope_fp16)",
+    "qkt_scores_fp16 = ring_gemm_fp16_fp16_fp16(q_rope_fp16, k_rope_t_fp16, ring_scope=cluster)",
+    "qkt_scores_sum_fp32 = prefill_remote_sum_fp16MN_fp32MN(qkt_scores_fp16, reduce_scope=cluster)",
+    "attn_max_fp32 = prefill_max(qkt_scores_sum_fp32)",
+    "attn_shifted_fp32 = prefill_sub_SFU_fp32MN_fp32MN_fp32MN(qkt_scores_sum_fp32, attn_max_fp32)",
+    "attn_denom_fp32 = prefill_sum_SFU_fp32_fp32(attn_shifted_fp32)",
+    "attn_probs_fp16 = prefill_mul_fp32MN_fp32M_fp16MN(attn_shifted_fp32, attn_denom_fp32)",
+    "sv_out_fp16 = ring_gemm_fp16_fp16_fp16(attn_probs_fp16, v_fp16, ring_scope=cluster)",
+    "attn_out_proj_fp16 = ring_gemm_fp16_fp16_fp16(sv_out_fp16, o_weight_fp16, ring_scope=global)",
+    "residual1_fp32 = prefill_add_fp32MN_fp16MN_fp32MN(hidden_in_fp32, attn_out_proj_fp16, scope=global)",
+    "ffn_rms_local_sum_fp32 = prefill_summac(residual1_fp32)",
+    "ffn_rms_global_sum_fp32 = prefill_remote_sum_Mfp32_Mfp32(ffn_rms_local_sum_fp32, reduce_scope=global)",
+    "ffn_rms_factor_fp32 = prefill_mac_SFU(ffn_rms_global_sum_fp32)",
+    "ffn_norm_fp32 = prefill_mul_fp32MN_fp32M_fp32MN(residual1_fp32, ffn_rms_factor_fp32)",
+    "ffn_norm_fp16 = prefill_mul_MN_N_fp32_fp32_fp16(ffn_norm_fp32, ffn_norm_weight_fp32, scope=global)",
+    "gate_proj_fp16 = ring_gemm_fp16_fp16_fp16(ffn_norm_fp16, gate_weight_fp16, ring_scope=global)",
+    "up_proj_fp16 = ring_gemm_fp16_fp16_fp16(ffn_norm_fp16, up_weight_fp16, ring_scope=global)",
+    "gate_act_fp32 = prefill_silu_fp16MN_fp32MN(gate_proj_fp16)",
+    "ffn_mul_fp16 = prefill_mul_MN_MN_fp16_fp32_fp16(up_proj_fp16, gate_act_fp32)",
+    "ffn_down_proj_fp16 = ring_gemm_fp16_fp16_fp16(ffn_mul_fp16, down_weight_fp16, ring_scope=global)",
+    "layer_out_fp32 = prefill_add_fp32MN_fp16MN_fp32MN(residual1_fp32, ffn_down_proj_fp16)"
+  ]
+}

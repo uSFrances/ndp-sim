@@ -1,0 +1,118 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00000000"
+        },
+        "B": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00001000"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          32,
+          32
+        ],
+        "remapping": null,
+        "base_addr": "0x00002000"
+      }
+    },
+    {
+      "id": "op1",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00003000"
+        },
+        "B": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00004000"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          32,
+          32
+        ],
+        "remapping": null,
+        "base_addr": "0x00005000"
+      }
+    },
+    {
+      "id": "op2",
+      "type": "prefill_add_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "source": "op0",
+          "base_addr": "0x00002000"
+        },
+        "B": {
+          "shape": [
+            1,
+            32,
+            32
+          ],
+          "source": "op1",
+          "base_addr": "0x00005000"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          32,
+          32
+        ],
+        "base_addr": "0x00006000"
+      }
+    }
+  ]
+}

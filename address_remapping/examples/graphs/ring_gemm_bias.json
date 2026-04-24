@@ -1,0 +1,67 @@
+{
+  "shape_bindings": {
+    "M": 64,
+    "N": 128,
+    "K": 16
+  },
+  "params": {
+    "slices_per_cluster": 4,
+    "slices_num": 28
+  },
+  "tensors": {
+    "a_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "M": "M",
+        "K": "K"
+      },
+      "partition": {
+        "K": {
+          "by_scope": {
+            "cluster": "slices_per_cluster",
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 0
+    },
+    "b_fp16": {
+      "dtype": "fp16",
+      "shape": {
+        "K": "K",
+        "N": "N"
+      },
+      "partition": {
+        "N": {
+          "by_scope": {
+            "cluster": "slices_per_cluster",
+            "global": "slices_num"
+          }
+        }
+      },
+      "base_addr": 8192
+    },
+    "bias_vec_fp32": {
+      "dtype": "fp32",
+      "shape": {
+        "N": "N"
+      },
+      "partition": {
+        "N": {
+          "follow": "inA:N"
+        }
+      },
+      "base_addr": 1056768
+    },
+    "gemm_out_fp16": {
+      "base_addr": 16384
+    },
+    "bias_out_fp32": {
+      "base_addr": 1064960
+    }
+  },
+  "model": [
+    "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)"
+  ],
+  "hardware_measured": 1024
+}

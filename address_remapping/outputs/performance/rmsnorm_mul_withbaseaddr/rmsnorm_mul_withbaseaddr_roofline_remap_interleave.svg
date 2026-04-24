@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
+<rect width="100%" height="100%" fill="#fffdf7"/>
+<text x="110" y="34" font-size="26" font-family="monospace" fill="#1f2937">Roofline: rmsnorm_mul_withbaseaddr [remap_interleave]</text>
+<text x="110" y="58" font-size="14" font-family="monospace" fill="#4b5563">BW=32.00 B/cycle, general_peak=16.00 ops/cycle, special_peak=256.00 ops/cycle</text>
+<line x1="110" y1="730" x2="1160" y2="730" stroke="#111827" stroke-width="1.5"/>
+<line x1="110" y1="70" x2="110" y2="730" stroke="#111827" stroke-width="1.5"/>
+<line x1="110.00" y1="70" x2="110.00" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="110.00" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">0.1</text>
+<line x1="268.04" y1="70" x2="268.04" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="268.04" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">0.2</text>
+<line x1="476.96" y1="70" x2="476.96" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="476.96" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">0.5</text>
+<line x1="635.00" y1="70" x2="635.00" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="635.00" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">1</text>
+<line x1="793.04" y1="70" x2="793.04" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="793.04" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">2</text>
+<line x1="1001.96" y1="70" x2="1001.96" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1001.96" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">5</text>
+<line x1="1160.00" y1="70" x2="1160.00" y2="730" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1160.00" y="754" text-anchor="middle" font-size="12" font-family="monospace" fill="#374151">10</text>
+<line x1="110" y1="730.00" x2="1160" y2="730.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="734.00" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">0.5</text>
+<line x1="110" y1="663.77" x2="1160" y2="663.77" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="667.77" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">1</text>
+<line x1="110" y1="597.55" x2="1160" y2="597.55" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="601.55" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">2</text>
+<line x1="110" y1="510.00" x2="1160" y2="510.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="514.00" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">5</text>
+<line x1="110" y1="443.77" x2="1160" y2="443.77" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="447.77" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">10</text>
+<line x1="110" y1="377.55" x2="1160" y2="377.55" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="381.55" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">20</text>
+<line x1="110" y1="290.00" x2="1160" y2="290.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="294.00" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">50</text>
+<line x1="110" y1="223.77" x2="1160" y2="223.77" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="227.77" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">100</text>
+<line x1="110" y1="157.55" x2="1160" y2="157.55" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="161.55" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">200</text>
+<line x1="110" y1="70.00" x2="1160" y2="70.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="98" y="74.00" text-anchor="end" font-size="12" font-family="monospace" fill="#374151">500</text>
+<text x="635.00" y="796" text-anchor="middle" font-size="15" font-family="monospace" fill="#111827">Arithmetic intensity (ops/byte)</text>
+<text x="26" y="400.00" text-anchor="middle" font-size="15" font-family="monospace" fill="#111827" transform="rotate(-90 26 400.00)">Performance (ops/cycle)</text>
+<line x1="110.00" y1="552.64" x2="476.96" y2="398.87" stroke="#2563eb" stroke-width="3"/>
+<line x1="476.96" y1="398.87" x2="1160.00" y2="398.87" stroke="#2563eb" stroke-width="3"/>
+<text x="1154.00" y="390.87" text-anchor="end" font-size="12" font-family="monospace" fill="#2563eb">general roofline</text>
+<line x1="110.00" y1="552.64" x2="1109.12" y2="133.96" stroke="#dc2626" stroke-width="3"/>
+<line x1="1109.12" y1="133.96" x2="1160.00" y2="133.96" stroke="#dc2626" stroke-width="3"/>
+<text x="1154.00" y="125.96" text-anchor="end" font-size="12" font-family="monospace" fill="#dc2626">special roofline</text>
+<line x1="157.34" y1="532.80" x2="157.34" y2="682.67" stroke="#2563eb" stroke-opacity="0.35" stroke-width="1.5"/>
+<circle cx="157.34" cy="532.80" r="5.5" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+<circle cx="157.34" cy="682.67" r="4.5" fill="#2563eb" fill-opacity="0.85"/>
+<line x1="157.34" y1="682.67" x2="157.34" y2="682.06" stroke="#047857" stroke-opacity="0.45" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="152.84" y="677.56" width="9" height="9" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+<line x1="157.34" y1="682.06" x2="162.34" y2="670.06" stroke="#6b7280" stroke-opacity="0.65" stroke-width="1"/>
+<text x="165.34" y="674.06" text-anchor="start" font-size="11" font-family="monospace" fill="#111827">mul [U=21.0%(M)]</text>
+<rect x="870" y="564" width="268" height="146" rx="8" fill="#ffffff" stroke="#d1d5db"/>
+<line x1="886" y1="588" x2="914" y2="588" stroke="#2563eb" stroke-width="3"/>
+<text x="924" y="592" font-size="12" font-family="monospace" fill="#111827">general roofline</text>
+<line x1="886" y1="610" x2="914" y2="610" stroke="#dc2626" stroke-width="3"/>
+<text x="924" y="614" font-size="12" font-family="monospace" fill="#111827">special roofline</text>
+<circle cx="900" cy="633" r="5.5" fill="#ffffff" stroke="#111827" stroke-width="2"/>
+<text x="924" y="637" font-size="12" font-family="monospace" fill="#111827">theoretical limit at this AI</text>
+<circle cx="900" cy="655" r="4.5" fill="#111827"/>
+<text x="924" y="659" font-size="12" font-family="monospace" fill="#111827">analytical achieved performance</text>
+<rect x="895.5" y="671.5" width="9" height="9" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+<text x="924" y="681" font-size="12" font-family="monospace" fill="#111827">hardware measured performance</text>
+<text x="886" y="702" font-size="11" font-family="monospace" fill="#4b5563">U=utilization, M=measured, A=analytical</text>
+</svg>

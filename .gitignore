@@ -23,3 +23,9 @@ model_execplan/output/*zip
 !model_execplan/README.md
 !model_execplan/pyrightconfig.json
 !jsons/*json
+
+!address_remapping/.gitignore
+!address_remapping/Makefile
+!address_remapping/pyproject.toml
+!address_remapping/*.md
+!address_remapping/examples/**/*.json

@@ -1,0 +1,52 @@
+{
+  "hardware": {
+    "address_space": {
+      "slave_bits": 5,
+      "bank_bits": 2,
+      "row_bits": 13,
+      "column_bits": 6,
+      "subword_bits": 4,
+      "address_unit_bits": 8,
+      "block_bits": 128
+    },
+    "clocks": {
+      "slice_frequency_hz": 1000000000.0,
+      "memory_frequency_hz": 500000000.0
+    },
+    "dram": {
+      "banks_per_slice": 4,
+      "request_fifo_depth": 8,
+      "bank_bandwidth_bits_per_cycle": 128,
+      "tRCD": 14.0,
+      "tRP": 14.0,
+      "tCL": 14.0,
+      "tBL": 4.0
+    },
+    "compute": {
+      "gemm_core": {
+        "rows": 8,
+        "cols": 8,
+        "k_per_cycle": 2,
+        "mac_ops": 2
+      },
+      "general_core": {
+        "rows": 4,
+        "cols": 4
+      }
+    },
+    "ag_issue_rate": 1,
+    "write_buffer_bits": 1024
+  },
+  "performance": {
+    "overlap": {
+      "gemm_read": 0.65,
+      "general_read": 0.2,
+      "writeback": 0.5
+    },
+    "controller": {
+      "write_queue_depth": 16,
+      "slice_write_buffer_depth": 32,
+      "scheduler_epoch_cycles": 64
+    }
+  }
+}

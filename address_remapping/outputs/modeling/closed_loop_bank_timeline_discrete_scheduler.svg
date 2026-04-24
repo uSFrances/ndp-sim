@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120">
+  <defs>
+    <style>
+      .title { font: 700 34px 'DejaVu Sans', sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 18px 'DejaVu Sans', sans-serif; fill: #334155; }
+      .boxTitle { font: 700 20px 'DejaVu Sans', sans-serif; fill: #0f172a; }
+      .body { font: 500 16px 'DejaVu Sans', sans-serif; fill: #1e293b; }
+      .mono { font: 600 15px 'DejaVu Sans Mono', monospace; fill: #0b3a5b; }
+      .metric { font: 600 15px 'DejaVu Sans Mono', monospace; fill: #065f46; }
+      .legend { font: 500 14px 'DejaVu Sans', sans-serif; fill: #334155; }
+      .thin { stroke: #94a3b8; stroke-width: 1.4; fill: none; }
+      .arrow { stroke: #334155; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .arrow2 { stroke: #0f766e; stroke-width: 2.2; fill: none; marker-end: url(#arrowGreen); }
+      .arrow3 { stroke: #7c2d12; stroke-width: 2.2; fill: none; marker-end: url(#arrowOrange); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c2d12"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1800" height="1120" fill="#f8fafc"/>
+  <text x="52" y="58" class="title">Closed-loop Bank Timeline: Discrete-time/Event Scheduling Model</text>
+  <text x="52" y="88" class="subtitle">Ordinary operator path in performance model (non-ring-gemm), slice-cycle domain</text>
+
+  <rect x="50" y="120" width="520" height="210" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
+  <text x="74" y="155" class="boxTitle">1) Arrival Timeline Build</text>
+  <text x="74" y="186" class="body">For each AG stream, requests are sorted by request_id.</text>
+  <text x="74" y="212" class="mono">release_cycle = issue_slot / ag_issue_rate</text>
+  <text x="74" y="238" class="body">Maintain two arrival lists:</text>
+  <text x="96" y="264" class="body">- read_arrivals</text>
+  <text x="96" y="288" class="body">- write_arrivals</text>
+
+  <rect x="620" y="120" width="560" height="210" rx="16" fill="#ecfeff" stroke="#0f766e" stroke-width="2"/>
+  <text x="646" y="155" class="boxTitle">2) Release Step at Current Time now</text>
+  <text x="646" y="186" class="body">Move due writes into slice_pending_writes (release_cycle &lt;= now).</text>
+  <text x="646" y="212" class="body">Then inject to controller while queue has capacity:</text>
+  <text x="670" y="238" class="mono">write_queue_occupancy &lt; write_queue_depth</text>
+  <text x="646" y="264" class="body">Read releases are allowed only when slice is not blocked.</text>
+  <text x="646" y="290" class="mono">slice_blocked = (len(slice_pending_writes) &gt;= slice_write_buffer_depth)</text>
+
+  <rect x="1228" y="120" width="520" height="210" rx="16" fill="#fff7ed" stroke="#c2410c" stroke-width="2"/>
+  <text x="1252" y="155" class="boxTitle">3) Backpressure / Forced Drain</text>
+  <text x="1252" y="186" class="body">If slice_blocked turns true:</text>
+  <text x="1276" y="212" class="body">- forced_drain_count += 1 (on rising edge)</text>
+  <text x="1276" y="238" class="body">- stop releasing new reads</text>
+  <text x="1276" y="264" class="body">- scheduler enters force_write_drain mode</text>
+  <text x="1252" y="290" class="metric">Metrics: slice_blocked_cycles, q_w_full_cycles</text>
+
+  <rect x="50" y="380" width="760" height="280" rx="16" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  <text x="76" y="416" class="boxTitle">4) Per-bank Candidate Selection (Two-level Arbiter)</text>
+  <text x="76" y="446" class="body">For each bank queue at current now:</text>
+  <text x="100" y="474" class="body">Arbiter-1 candidates: same phase AND same open_row as bank state</text>
+  <text x="100" y="500" class="body">Arbiter-2 candidates: all remaining requests</text>
+  <text x="100" y="526" class="body">If force_write_drain=true, non-write candidates are filtered out.</text>
+  <text x="100" y="554" class="mono">pick = min(request_id) within arbiter1 else arbiter2</text>
+  <text x="76" y="588" class="metric">Metrics: arbiter1_wins, arbiter2_wins, arbiter1_win_rate</text>
+  <text x="76" y="616" class="mono">start_cycle = max(bank_state.cycles, now)</text>
+  <text x="76" y="642" class="mono">finish_cycle = start_cycle + bank_request_delta(request)</text>
+
+  <rect x="860" y="380" width="888" height="280" rx="16" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
+  <text x="886" y="416" class="boxTitle">5) Global Event Commit (Earliest Finish)</text>
+  <text x="886" y="446" class="body">Gather one candidate event per bank, then commit globally earliest:</text>
+  <text x="912" y="474" class="mono">argmin( finish_cycle, bank_id, request_id )</text>
+  <text x="886" y="504" class="body">Advance global controller time: now = finish_cycle</text>
+  <text x="886" y="530" class="body">Update counters while advancing time window:</text>
+  <text x="912" y="556" class="body">- if write_queue_occupancy >= write_queue_depth: q_w_full_cycles += delta</text>
+  <text x="912" y="582" class="body">- if slice_blocked: slice_blocked_cycles += delta</text>
+  <text x="886" y="612" class="body">Apply request to bank state, update phase/row switch counts.</text>
+  <text x="886" y="638" class="body">If committed request is write: write_queue_occupancy -= 1.</text>
+
+  <rect x="50" y="710" width="1698" height="360" rx="16" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+  <text x="74" y="748" class="boxTitle">6) Discrete-time loop, stop condition, and output mapping</text>
+
+  <text x="74" y="782" class="mono">while True:</text>
+  <text x="104" y="808" class="mono">release_due_requests()</text>
+  <text x="104" y="834" class="mono">if no ready and no future: break</text>
+  <text x="104" y="860" class="mono">build candidates per bank with two-level arbiter</text>
+  <text x="104" y="886" class="mono">if no candidate: advance now to next release time; continue</text>
+  <text x="104" y="912" class="mono">commit earliest event and update bank/controller states</text>
+
+  <text x="760" y="782" class="body">Final memory bound:</text>
+  <text x="760" y="808" class="mono">memory_timeline_cycles = max(per_bank_completion_cycles)</text>
+  <text x="760" y="842" class="body">Ordinary operator latency:</text>
+  <text x="760" y="868" class="mono">latency = max(compute_bound, memory_timeline_cycles, ag_issue_bound)</text>
+
+  <text x="760" y="918" class="body">Timeline side outputs (for diagnosis):</text>
+  <text x="786" y="944" class="legend">- phase_switch_penalty_cycles, row_switch_penalty_cycles</text>
+  <text x="786" y="968" class="legend">- rw_switch_count, row_switch_count</text>
+  <text x="786" y="992" class="legend">- q_w_full_cycles, slice_blocked_cycles, forced_drain_count</text>
+  <text x="786" y="1016" class="legend">- arbiter1_wins, arbiter2_wins, per_bank_breakdown</text>
+
+  <path d="M 570 226 L 620 226" class="arrow"/>
+  <path d="M 1180 226 L 1228 226" class="arrow"/>
+  <path d="M 430 330 L 430 380" class="arrow2"/>
+  <path d="M 1170 330 L 1300 380" class="arrow3"/>
+  <path d="M 810 520 L 860 520" class="arrow"/>
+  <path d="M 1300 660 L 1300 710" class="arrow"/>
+
+  <rect x="1440" y="30" width="300" height="70" rx="10" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="1458" y="58" class="legend">Green arrows: backpressure path</text>
+  <text x="1458" y="82" class="legend">Orange arrows: forced write-drain trigger</text>
+</svg>

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "address-remapping"
+version = "0.1.0"
+description = "Infer 26-bit address remapping permutations between operator layouts."
+readme = "README.md"
+requires-python = ">=3.9"
+
+[project.scripts]
+address-remap = "address_remapping.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
