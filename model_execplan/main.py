@@ -23,6 +23,7 @@ from execution_plan_generator.json_loader import execution_plan_to_dict
 from execution_plan_generator.bank_data_exporter import export_bank_data
 from execution_plan_generator.output_writer import (
     write_input_with_baseaddr,
+    write_emulator_bundle,
     write_install_manifest,
     write_instruction_outputs,
 )
@@ -203,6 +204,12 @@ def parse_args() -> argparse.Namespace:
         help="Export per-slice per-bank data files to <output_prefix>/Bank_data",
     )
     parser.add_argument(
+        "-e",
+        "--export-emulator",
+        action="store_true",
+        help="Export emulator inputs to <output_prefix>/emulator",
+    )
+    parser.add_argument(
         "-reop","--regenerate-operator-configs",
         action="store_true",
         default=False,
@@ -286,6 +293,14 @@ def main() -> int:
     print(f"Instruction explanation written to: {explanation_path}")
     print(f"Install manifest written to: {manifest_path}")
     print(f"Input with baseaddr written to: {with_baseaddr_path}")
+
+    if args.export_emulator:
+        emulator_paths = write_emulator_bundle(
+            execution_input=result.execution_input,
+            output_prefix=output_prefix,
+            emulator_suffix=args.json_file.stem,
+        )
+        print(f"Emulator bundle written to: {output_prefix / f'emulator_{args.json_file.stem}'} ({len(emulator_paths)} files)")
 
     if args.export_bank_data:
         bank_data_dir = output_prefix / "Bank_data"

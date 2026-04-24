@@ -13,7 +13,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         },
@@ -21,7 +21,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         },
@@ -29,7 +29,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         }
@@ -163,7 +163,7 @@
             "mem_idx_constant": [null, null, null],
             "idx": ["DRAM_LC.LC1", "LC_PE.PE2", null],
             "idx_size": [0, 31, null],
-            "dim_stride": [32, 512, null],
+            "dim_stride": [32, 1024, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -193,7 +193,7 @@
             "mem_idx_constant": [null, null, null],
             "idx": ["DRAM_LC.LC2", "DRAM_LC.LC0", null],
             "idx_size": [0, 31, null],
-            "dim_stride": [32, 512, null],
+            "dim_stride": [32, 1024, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -223,7 +223,7 @@
             "mem_idx_constant": [null, null, null],
             "idx": ["DRAM_LC.LC3", "LC_PE.PE1", null],
             "idx_size": [0, 31, null],
-            "dim_stride": [32, 512, null],
+            "dim_stride": [32, 1024, null],
             "tailing_enable": [0, 0, 0],
             "idx_tailing_range": {
                 "low": [null, null, null],

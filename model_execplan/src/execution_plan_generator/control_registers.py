@@ -933,6 +933,7 @@ def _append_remapping_register_updates(
 def compute_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
+    apply_instance_mapping: bool = True,
 ) -> dict[str, int]:
     """Placeholder for shape-driven control register computation.
 
@@ -953,5 +954,8 @@ def compute_control_register_updates(
         updates.update(handler(operator, template))
 
     _append_remapping_register_updates(operator, updates)
+    if not apply_instance_mapping:
+        return updates
+
     instance_mapping = _load_operator_instance_mapping(operator.op_type)
     return _apply_instance_mapping_to_updates(updates, instance_mapping)

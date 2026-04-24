@@ -298,7 +298,7 @@
       "config_bitstream_addr": "0x00010000",
       "config_bitstream_path": "install/cfg_pkg/prefill_gemm_ring_4slice_bitstream_128b.txt",
       "initial_size": {
-        "A": [64, 64,32],
+        "A": [64, 64, 32],
         "B": [64, 64, 32],
         "D": [1, 64, 64]
       },
@@ -313,9 +313,9 @@
       "config_bitstream_addr": "0x0003C000",
       "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32MN_fp32MN_bitstream_128b.txt",
       "initial_size": {
-        "A": [1, 64, 128],
-        "B": [1, 64, 128],
-        "D": [1, 64, 128]
+        "A": [1, 32, 16],
+        "B": [1, 32, 16],
+        "D": [1, 32, 16]
       },
       "config_sfu": null,
       "initial_config_stream": {
@@ -328,9 +328,9 @@
       "config_bitstream_addr": "0x00038000",
       "config_bitstream_path": "install/cfg_pkg/prefill_add_fp32MN_fp32MN_fp32MN_bitstream_128b.txt",
       "initial_size": {
-        "A": [1, 32, 32],
-        "B": [1, 32, 32],
-        "D": [1, 32, 32]
+        "A": [1, 32, 16],
+        "B": [1, 32, 16],
+        "D": [1, 32, 16]
       },
       "config_sfu": null,
       "initial_config_stream": {

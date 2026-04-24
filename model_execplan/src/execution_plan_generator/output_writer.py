@@ -7,7 +7,15 @@ from math import ceil
 from pathlib import Path
 from typing import Callable
 
-from .models import AddressPlan, ExecutionPlanArtifact, ExecutionPlanInput, InputSourceType, OperatorTemplate
+from .models import (
+    AddressPlan,
+    ExecutionPlanArtifact,
+    ExecutionPlanInput,
+    InputSourceType,
+    OperatorSpec,
+    OperatorTemplate,
+)
+from .control_registers import compute_control_register_updates
 
 
 _OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE: dict[tuple[str, str], Callable[[int], int]] = {
@@ -15,6 +23,322 @@ _OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE: dict[tuple[str, str], Callable[[int], i
 }
 
 _OUTPUT_BASE_ADDR_ROUTER_BY_TYPE: dict[str, Callable[[int], int]] = {}
+
+
+def write_emulator_bundle(
+    execution_input: ExecutionPlanInput,
+    output_prefix: str | Path,
+    emulator_suffix: str | None = None,
+) -> list[Path]:
+    prefix = Path(output_prefix)
+    output_dir = prefix if prefix.suffix == "" else prefix.parent / prefix.stem
+    emulator_name = "emulator"
+    if emulator_suffix:
+        emulator_name = f"{emulator_name}_{emulator_suffix}"
+    emulator_dir = output_dir / emulator_name
+    emulator_dir.mkdir(parents=True, exist_ok=True)
+
+    project_root = Path(__file__).resolve().parents[2]
+    repo_root = project_root.parent
+    op_json_root = repo_root / "jsons"
+    manifest = _load_json_object(output_dir / "sca_cfg.json")
+
+    written_paths: list[Path] = []
+
+    for op in execution_input.operators:
+        op_dir = emulator_dir / op.op_id
+        if op_dir.exists():
+            shutil.rmtree(op_dir)
+        op_dir.mkdir(parents=True, exist_ok=True)
+
+        source_json = op_json_root / f"{op.op_type}.json"
+        if not source_json.is_file():
+            raise FileNotFoundError(
+                f"Missing operator JSON template for emulator export: {source_json}"
+            )
+        op_payload = _load_json_object(source_json)
+        _patch_emulator_operator_json_payload(
+            payload=op_payload,
+            operator=op,
+            manifest=manifest,
+        )
+
+        for slice_id in op.enabled_slice_ids():
+            slice_dir_name = f"slice{slice_id:02d}"
+            emulator_slice_dir = op_dir / slice_dir_name
+            emulator_slice_dir.mkdir(parents=True, exist_ok=True)
+
+            target_json = emulator_slice_dir / source_json.name
+            target_json.write_text(
+                json.dumps(op_payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            written_paths.append(target_json)
+
+            install_slice_dir = output_dir / "install" / op.op_id / slice_dir_name
+            data_parts: list[bytes] = []
+            for input_name in op.inputs.keys():
+                if input_name == "B'":
+                    continue
+                data_file = install_slice_dir / f"matrix_{input_name}_linearized_128bit.bin"
+                if not data_file.is_file():
+                    raise FileNotFoundError(
+                        f"Missing slice input data for emulator export: {data_file}"
+                    )
+                data_parts.append(data_file.read_bytes())
+
+            data_path = emulator_slice_dir / "dram_data.bin"
+            data_path.write_bytes(b"".join(data_parts))
+            written_paths.append(data_path)
+
+    return written_paths
+
+
+def _load_json_object(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"JSON file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"JSON root must be an object: {path}")
+    return data
+
+
+def _patch_emulator_operator_json_payload(
+    payload: dict[str, object],
+    operator: OperatorSpec,
+    manifest: dict[str, object],
+) -> None:
+    _patch_stream_base_addrs(payload=payload, operator=operator, manifest=manifest)
+
+    # Apply shape-driven control rules for this operator type.
+    updates = compute_control_register_updates(
+        operator=operator,
+        template=OperatorTemplate(op_type=operator.op_type),
+        apply_instance_mapping=False,
+    )
+    for field_key, value in updates.items():
+        _apply_control_update_to_operator_json(
+            payload=payload,
+            field_key=field_key,
+            value=value,
+        )
+
+
+def _patch_stream_base_addrs(
+    payload: dict[str, object],
+    operator: OperatorSpec,
+    manifest: dict[str, object],
+) -> None:
+    stream_engine = payload.get("stream_engine")
+    if not isinstance(stream_engine, dict):
+        return
+
+    for input_name in operator.inputs.keys():
+        if input_name == "B'":
+            continue
+        base_addr = _resolve_slice0_input_base_addr(operator, input_name, manifest)
+        stream_key = _find_stream_key_by_target(
+            stream_engine=stream_engine,
+            target=input_name,
+            mode="read",
+        )
+        if stream_key is None:
+            continue
+        stream_node = stream_engine.get(stream_key)
+        if isinstance(stream_node, dict):
+            stream_node["base_addr"] = _format_base_addr_hex(base_addr)
+
+    output_addr = _resolve_slice0_output_base_addr(operator.op_id, manifest)
+    out_stream_key = _find_stream_key_by_target(
+        stream_engine=stream_engine,
+        target="D",
+        mode="write",
+    )
+    if out_stream_key is not None:
+        out_stream = stream_engine.get(out_stream_key)
+        if isinstance(out_stream, dict):
+            out_stream["base_addr"] = _format_base_addr_hex(output_addr)
+
+
+def _apply_control_update_to_operator_json(
+    payload: dict[str, object],
+    field_key: str,
+    value: int,
+) -> None:
+    if "." not in field_key:
+        return
+    instance, config_path = field_key.split(".", maxsplit=1)
+
+    if instance.startswith("iga_lc") and config_path == "dram_loop_configs.end":
+        lc_idx = _parse_instance_index(instance, prefix="iga_lc")
+        if lc_idx is None:
+            return
+        dram_loop_configs = payload.get("dram_loop_configs")
+        if not isinstance(dram_loop_configs, dict):
+            return
+        lc_key = f"LC{lc_idx}"
+        lc_node = dram_loop_configs.get(lc_key)
+        if isinstance(lc_node, dict):
+            lc_node["end"] = value
+        return
+
+    if instance.startswith("iga_pe") and config_path == "lc_pe_configs.inport1.constant":
+        pe_idx = _parse_instance_index(instance, prefix="iga_pe")
+        if pe_idx is None:
+            return
+        pe_configs = payload.get("lc_pe_configs")
+        if not isinstance(pe_configs, dict):
+            return
+        pe_key = f"PE{pe_idx}"
+        pe_node = pe_configs.get(pe_key)
+        if not isinstance(pe_node, dict):
+            return
+        inport1 = pe_node.get("inport1")
+        if isinstance(inport1, dict):
+            inport1["constant"] = value
+        return
+
+    if instance.startswith("rd_stream") or instance.startswith("wr_stream"):
+        if config_path != "stream_engine.stream.dim_stride":
+            return
+        stream_engine = payload.get("stream_engine")
+        if not isinstance(stream_engine, dict):
+            return
+        stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
+        if stream_key is None:
+            return
+        stream_node = stream_engine.get(stream_key)
+        if not isinstance(stream_node, dict):
+            return
+        stream_node["dim_stride"] = _decode_packed_dim_stride(value)
+
+
+def _parse_instance_index(instance: str, prefix: str) -> int | None:
+    if not instance.startswith(prefix):
+        return None
+    suffix = instance[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _find_stream_key_by_target(
+    stream_engine: dict[str, object],
+    target: str,
+    mode: str,
+) -> str | None:
+    for stream_key, stream_node in stream_engine.items():
+        if not isinstance(stream_node, dict):
+            continue
+        if stream_node.get("target") == target and stream_node.get("mode") == mode:
+            return stream_key
+    return None
+
+
+def _resolve_stream_key_for_instance(
+    stream_engine: dict[str, object],
+    instance: str,
+) -> str | None:
+    mode = "read" if instance.startswith("rd_stream") else "write"
+    ordinal = 0
+    if instance != "wr_stream":
+        tail = instance.split("stream", maxsplit=1)[-1]
+        if tail.isdigit():
+            ordinal = int(tail)
+
+    candidates: list[tuple[int, str]] = []
+    for stream_key, stream_node in stream_engine.items():
+        if not isinstance(stream_node, dict):
+            continue
+        if stream_node.get("mode") != mode:
+            continue
+        if not stream_key.startswith("stream"):
+            continue
+        idx_text = stream_key[len("stream"):]
+        if not idx_text.isdigit():
+            continue
+        candidates.append((int(idx_text), stream_key))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    if ordinal < len(candidates):
+        return candidates[ordinal][1]
+    return candidates[0][1]
+
+
+def _decode_packed_dim_stride(packed: int) -> list[int | None]:
+    mask = (1 << 20) - 1
+    port0 = packed & mask
+    port1 = (packed >> 20) & mask
+    port2 = (packed >> 40) & mask
+    return [
+        port2 if port2 != 0 else None,
+        port1 if port1 != 0 else None,
+        port0 if port0 != 0 else None,
+    ]
+
+
+def _resolve_slice0_input_base_addr(
+    operator: OperatorSpec,
+    input_name: str,
+    manifest: dict[str, object],
+) -> int:
+    direct_key = f"{operator.op_id}_matrix{input_name}_slice0"
+    addr = _extract_manifest_base_addr(manifest, direct_key)
+    if addr is not None:
+        return _force_slice0_base_addr(addr)
+
+    input_spec = operator.inputs.get(input_name)
+    if input_spec is None or input_spec.source is None or input_spec.source.operator_id is None:
+        raise ValueError(
+            f"Cannot resolve slice00 base_addr for operator {operator.op_id} input {input_name}"
+        )
+
+    source_key = f"{input_spec.source.operator_id}_matrixD_slice0"
+    source_addr = _extract_manifest_base_addr(manifest, source_key)
+    if source_addr is None:
+        raise ValueError(
+            f"Cannot resolve source output base_addr from manifest key: {source_key}"
+        )
+    return _force_slice0_base_addr(source_addr)
+
+
+def _resolve_slice0_output_base_addr(op_id: str, manifest: dict[str, object]) -> int:
+    key = f"{op_id}_matrixD_slice0"
+    addr = _extract_manifest_base_addr(manifest, key)
+    if addr is None:
+        raise ValueError(f"Cannot resolve slice00 output base_addr from manifest key: {key}")
+    return _force_slice0_base_addr(addr)
+
+
+def _extract_manifest_base_addr(manifest: dict[str, object], key: str) -> int | None:
+    value = manifest.get(key)
+    if not isinstance(value, dict):
+        return None
+    base_addr = value.get("base_addr")
+    if not isinstance(base_addr, str):
+        return None
+    return int(base_addr.replace("_", ""), 16)
+
+
+def _format_base_addr_binary(addr: int) -> str:
+    if not (0 <= addr < (1 << 30)):
+        raise ValueError(f"base_addr out of 30-bit range: {addr}")
+    bits = f"{addr:030b}"
+    return f"0b{bits[0:5]}_{bits[5:7]}_{bits[7:20]}_{bits[20:26]}_{bits[26:30]}"
+
+
+def _format_base_addr_hex(addr: int) -> str:
+    if not (0 <= addr < (1 << 30)):
+        raise ValueError(f"base_addr out of 30-bit range: {addr}")
+    return f"0x{addr:x}"
+
+
+def _force_slice0_base_addr(addr: int) -> int:
+    # Address format: slave(5), bank(2), row(13), col(6), subword(4).
+    # Emulator json always uses slice00 view regardless of current slice.
+    return addr & ((1 << 25) - 1)
 
 
 def write_instruction_outputs(
@@ -420,9 +744,5 @@ def _resolve_output_base_addr_source_slice(
             f"output_type={output_type}, write_slice={write_slice_id}, mapped={mapped}"
         )
     return mapped
-    try:
-        dst.chmod(0o666)
-    except OSError:
-        pass
 
 
