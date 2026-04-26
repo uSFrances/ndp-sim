@@ -297,6 +297,7 @@ def main() -> int:
     if args.export_emulator:
         emulator_paths = write_emulator_bundle(
             execution_input=result.execution_input,
+            address_plan=result.address_plan,
             output_prefix=output_prefix,
             emulator_suffix=args.json_file.stem,
         )

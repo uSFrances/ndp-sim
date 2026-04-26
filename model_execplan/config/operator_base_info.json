@@ -99,6 +99,34 @@
         "bitstream_file": "prefill_remote_sum_fp32MN_fp32MN/parsed_bitstream.txt"
       }
     },
+    "prefill_remote_max_fp32MN_fp32MN": {
+      "config_length": 24,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00030000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_remote_max_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 28, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_remote_max_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
+    "prefill_remote_sum_4slice_fp32MN_fp32MN": {
+      "config_length": 24,
+      "ddr_config_addr": 256,
+      "config_bitstream_addr": "0x00030000",
+      "config_bitstream_path": "install/cfg_pkg/prefill_remote_sum_4slice_fp32MN_fp32MN_bitstream_128b.txt",
+      "initial_size": {
+        "A": [1, 4, 32],
+        "D": [1, 1, 32]
+      },
+      "config_sfu": null,
+      "initial_config_stream": {
+        "bitstream_file": "prefill_remote_sum_4slice_fp32MN_fp32MN/parsed_bitstream.txt"
+      }
+    },
     "prefill_mul_fp32MN_fp32M_fp16MN": {
       "config_length": 30,
       "ddr_config_addr": 256,
@@ -121,7 +149,7 @@
       "config_bitstream_path": "install/cfg_pkg/prefill_mul_fp32MN_fp32M_fp32MN_bitstream_128b.txt",
       "initial_size": {
         "A": [1, 64, 128],
-        "B": [1, 64, 1],
+        "B": [1, 1, 64],
         "D": [1, 64, 128]
       },
       "config_sfu": null,

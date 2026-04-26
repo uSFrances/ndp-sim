@@ -48,6 +48,7 @@ def execution_plan_to_dict(plan: ExecutionPlanInput) -> dict[str, Any]:
                         "shape": list(spec.shape),
                         "dtype": spec.dtype,
                         "remapping": list(spec.remapping) if spec.remapping is not None else None,
+                        "type": spec.special_type,
                         "source": {
                             "type": spec.source.source_type.value if spec.source else None,
                             "operator_id": spec.source.operator_id if spec.source else None,
@@ -153,9 +154,16 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str) -> TensorSpec:
     shape = _parse_shape(raw_tensor, f"Operator {op_id}: input {name}")
     dtype = _parse_dtype(raw_tensor, f"Operator {op_id}: input {name}")
     remapping = _parse_remapping(raw_tensor, f"Operator {op_id}: input {name}")
+    special_type = _parse_special_type(raw_tensor, f"Operator {op_id}: input {name}")
     source = _parse_source(_pick(raw_tensor, "source", "输入来源", "来源"), op_id, name)
 
-    return TensorSpec(shape=shape, dtype=dtype, source=source, remapping=remapping)
+    return TensorSpec(
+        shape=shape,
+        dtype=dtype,
+        source=source,
+        remapping=remapping,
+        special_type=special_type,
+    )
 
 
 def _parse_output(raw_op: dict[str, Any], op_id: str) -> TensorSpec:

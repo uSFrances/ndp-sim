@@ -13,6 +13,7 @@ from .register_mapping import (
     build_masked_register_writes,
     load_register_mapping,
 )
+from .slice_routing import resolve_io_base_addr_source_slice
 
 
 @dataclass(frozen=True)
@@ -127,14 +128,10 @@ class InstructionGenerator:
             map_const_fields_to_const_addresses=False,
         )
 
-        # Extension points for output base_addr special handling:
+        # Extension points for IO base_addr special handling:
         # 1) per-op+type router, 2) global type router.
-        self._output_base_addr_router_by_op_and_type: dict[tuple[str, str], Callable[[int], int]] = {
-            # ROPE special case for prefill_mul_fp32MN_fp32MN_fp32MN:
-            # write_slice0 uses source_slice2, slice1->3, slice2->0, slice3->1, ...
-            ("prefill_mul_fp32MN_fp32MN_fp32MN", "rope_slice_xor2"): lambda slice_id: slice_id ^ 0b10,
-        }
-        self._output_base_addr_router_by_type: dict[str, Callable[[int], int]] = {}
+        self._io_base_addr_router_by_op_and_type: dict[tuple[str, str], Callable[[int], int]] = {}
+        self._io_base_addr_router_by_type: dict[str, Callable[[int], int]] = {}
 
     def generate(
         self,
@@ -243,12 +240,16 @@ class InstructionGenerator:
                 if field_original_value is None:
                     field_original_value = 0
                 for slice_id in enabled_slice_ids:
-                    effective_addr_slice_id = slice_id
-                    if self._should_use_slice0_base_addr_for_input(
+                    input_spec = op.inputs[input_name]
+                    effective_addr_slice_id = resolve_io_base_addr_source_slice(
                         op_type=op.op_type,
-                        reg_field_key=reg_field_key,
-                    ):
-                        effective_addr_slice_id = 0
+                        io_type=input_spec.special_type,
+                        write_slice_id=slice_id,
+                        io_role="input",
+                        io_name=input_name,
+                        router_by_op_and_type=self._io_base_addr_router_by_op_and_type,
+                        router_by_type=self._io_base_addr_router_by_type,
+                    )
                     slice_base_addr = self._compose_slice_specific_base_addr(
                         field_key=reg_field_key,
                         base_seed_value=base_seed_value,
@@ -311,10 +312,14 @@ class InstructionGenerator:
                     output_field_original_value = 0
                 enabled_slice_set = set(enabled_slice_ids)
                 for slice_id in enabled_slice_ids:
-                    effective_addr_slice_id = self._resolve_output_base_addr_source_slice(
+                    effective_addr_slice_id = resolve_io_base_addr_source_slice(
                         op_type=op.op_type,
-                        output_type=op.output.special_type,
+                        io_type=op.output.special_type,
                         write_slice_id=slice_id,
+                        io_role="output",
+                        io_name="D",
+                        router_by_op_and_type=self._io_base_addr_router_by_op_and_type,
+                        router_by_type=self._io_base_addr_router_by_type,
                     )
                     if effective_addr_slice_id not in enabled_slice_set:
                         raise ValueError(
@@ -474,39 +479,8 @@ class InstructionGenerator:
     def _base_addr_field_key_for_output_d(self) -> str:
         return f"{self._reg_map.output_d_instance}.stream_engine.stream.base_addr"
 
-    def _should_use_slice0_base_addr_for_input(self, op_type: str, reg_field_key: str) -> bool:
-        # Exception rule: remote_sum expects rd_stream0 base_addr to be identical
-        # across slices (same value as slice00).
-        return (
-            op_type == "prefill_remote_sum_fp32MN_fp32MN"
-            and reg_field_key == f"{self._reg_map.input_a_instance}.stream_engine.stream.base_addr"
-        )
-
     def _is_base_addr_field_key(self, field_key: str) -> bool:
         return field_key.endswith(".stream_engine.stream.base_addr")
-
-    def _resolve_output_base_addr_source_slice(
-        self,
-        op_type: str,
-        output_type: str | None,
-        write_slice_id: int,
-    ) -> int:
-        if output_type is None:
-            return write_slice_id
-
-        router = self._output_base_addr_router_by_op_and_type.get((op_type, output_type))
-        if router is None:
-            router = self._output_base_addr_router_by_type.get(output_type)
-        if router is None:
-            return write_slice_id
-
-        mapped = router(write_slice_id)
-        if not isinstance(mapped, int) or mapped < 0:
-            raise ValueError(
-                f"Invalid output base_addr source slice mapping: op_type={op_type}, "
-                f"output_type={output_type}, write_slice={write_slice_id}, mapped={mapped}"
-            )
-        return mapped
 
     def _pack_load_config_ddr_addr(self, full_addr: int) -> int:
         # Load_Config uses DDR config address in row-aligned compressed form.

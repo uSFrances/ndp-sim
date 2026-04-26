@@ -705,6 +705,46 @@ def _compute_prefill_remote_sum_fp32MN_fp32MN_control_register_updates(
         ),
     }
 
+def _compute_prefill_remote_max_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for remote_max control register logic."""
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": a_n // 8 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_m if a_m is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32 * 32,
+            port2 = 32,
+        ),
+    }
+def _compute_prefill_remote_sum_4slice_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for remote_sum_4slice control register logic."""
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": a_n // 8 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_m if a_m is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32 * 32,
+            port2 = 32,
+        ),
+    }
+
+
 def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
@@ -894,6 +934,8 @@ OP_CONTROL_REGISTER_FN = {
     "quant_from_buffer_int32MN_uint8MN": _compute_quant_from_buffer_int32MN_uint8MN_control_register_updates,
     "add_dequant_uint8CWH_uint8CWH_fp32CWH": _compute_add_dequant_uint8CWH_uint8CWH_fp32CWH_control_register_updates,
     "prefill_remote_sum_fp32MN_fp32MN": _compute_prefill_remote_sum_fp32MN_fp32MN_control_register_updates,
+    "prefill_remote_max_fp32MN_fp32MN": _compute_prefill_remote_max_fp32MN_fp32MN_control_register_updates,
+    "prefill_remote_sum_4slice_fp32MN_fp32MN": _compute_prefill_remote_sum_4slice_fp32MN_fp32MN_control_register_updates,
     "prefill_mul_fp32MN_fp32N_fp16MN": _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates,
     "prefill_mul_fp32MN_fp32M_fp32MN": _compute_prefill_mul_fp32MN_fp32M_fp32MN_control_register_updates,
     "prefill_add_fp16MN_fp32N_fp32MN": _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates,

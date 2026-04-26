@@ -5,7 +5,6 @@ import re
 import shutil
 from math import ceil
 from pathlib import Path
-from typing import Callable
 
 from .models import (
     AddressPlan,
@@ -16,17 +15,12 @@ from .models import (
     OperatorTemplate,
 )
 from .control_registers import compute_control_register_updates
-
-
-_OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE: dict[tuple[str, str], Callable[[int], int]] = {
-    ("prefill_mul_fp32MN_fp32MN_fp32MN", "rope_slice_xor2"): lambda slice_id: slice_id ^ 0b10,
-}
-
-_OUTPUT_BASE_ADDR_ROUTER_BY_TYPE: dict[str, Callable[[int], int]] = {}
+from .slice_routing import resolve_io_base_addr_source_slice
 
 
 def write_emulator_bundle(
     execution_input: ExecutionPlanInput,
+    address_plan: AddressPlan,
     output_prefix: str | Path,
     emulator_suffix: str | None = None,
 ) -> list[Path]:
@@ -41,8 +35,6 @@ def write_emulator_bundle(
     project_root = Path(__file__).resolve().parents[2]
     repo_root = project_root.parent
     op_json_root = repo_root / "jsons"
-    manifest = _load_json_object(output_dir / "sca_cfg.json")
-
     written_paths: list[Path] = []
 
     for op in execution_input.operators:
@@ -60,7 +52,7 @@ def write_emulator_bundle(
         _patch_emulator_operator_json_payload(
             payload=op_payload,
             operator=op,
-            manifest=manifest,
+            address_plan=address_plan,
         )
 
         for slice_id in op.enabled_slice_ids():
@@ -107,9 +99,9 @@ def _load_json_object(path: Path) -> dict[str, object]:
 def _patch_emulator_operator_json_payload(
     payload: dict[str, object],
     operator: OperatorSpec,
-    manifest: dict[str, object],
+    address_plan: AddressPlan,
 ) -> None:
-    _patch_stream_base_addrs(payload=payload, operator=operator, manifest=manifest)
+    _patch_stream_base_addrs(payload=payload, operator=operator, address_plan=address_plan)
 
     # Apply shape-driven control rules for this operator type.
     updates = compute_control_register_updates(
@@ -128,20 +120,19 @@ def _patch_emulator_operator_json_payload(
 def _patch_stream_base_addrs(
     payload: dict[str, object],
     operator: OperatorSpec,
-    manifest: dict[str, object],
+    address_plan: AddressPlan,
 ) -> None:
     stream_engine = payload.get("stream_engine")
     if not isinstance(stream_engine, dict):
         return
 
-    for input_name in operator.inputs.keys():
-        if input_name == "B'":
-            continue
-        base_addr = _resolve_slice0_input_base_addr(operator, input_name, manifest)
+    local_base_addrs = _compute_operator_local_base_addrs(operator=operator, address_plan=address_plan)
+    for target_name, base_addr in local_base_addrs.items():
+        mode = "write" if target_name == "D" else "read"
         stream_key = _find_stream_key_by_target(
             stream_engine=stream_engine,
-            target=input_name,
-            mode="read",
+            target=target_name,
+            mode=mode,
         )
         if stream_key is None:
             continue
@@ -149,16 +140,44 @@ def _patch_stream_base_addrs(
         if isinstance(stream_node, dict):
             stream_node["base_addr"] = _format_base_addr_hex(base_addr)
 
-    output_addr = _resolve_slice0_output_base_addr(operator.op_id, manifest)
-    out_stream_key = _find_stream_key_by_target(
-        stream_engine=stream_engine,
-        target="D",
-        mode="write",
-    )
-    if out_stream_key is not None:
-        out_stream = stream_engine.get(out_stream_key)
-        if isinstance(out_stream, dict):
-            out_stream["base_addr"] = _format_base_addr_hex(output_addr)
+
+def _compute_operator_local_base_addrs(
+    operator: OperatorSpec,
+    address_plan: AddressPlan,
+) -> dict[str, int]:
+    local_base_addrs: dict[str, int] = {}
+    cursor = 0
+
+    def _aligned_size_bytes(tensor_name: str | None) -> int | None:
+        if tensor_name is None:
+            return None
+        assignment = address_plan.assignments.get(tensor_name)
+        if assignment is None:
+            return None
+        return _align_up(assignment.size_bytes, 16)
+
+    for input_name in operator.inputs.keys():
+        if input_name == "B'":
+            if "B" in local_base_addrs:
+                local_base_addrs[input_name] = local_base_addrs["B"]
+            continue
+
+        io_key = f"{operator.op_id}.input.{input_name}"
+        tensor_name = address_plan.operator_io_to_tensor.get(io_key)
+        aligned_size = _aligned_size_bytes(tensor_name)
+        if aligned_size is None:
+            continue
+
+        local_base_addrs[input_name] = cursor
+        cursor += aligned_size
+
+    output_key = f"{operator.op_id}.output.D"
+    output_tensor_name = address_plan.operator_io_to_tensor.get(output_key)
+    output_aligned_size = _aligned_size_bytes(output_tensor_name)
+    if output_aligned_size is not None:
+        local_base_addrs["D"] = cursor
+
+    return local_base_addrs
 
 
 def _apply_control_update_to_operator_json(
@@ -413,10 +432,10 @@ def write_install_manifest(
             if input_name == "B'":
                 continue
             input_spec = op.inputs.get(input_name)
-            if input_spec is not None and input_spec.source is not None:
-                if input_spec.source.source_type == InputSourceType.OPERATOR:
-                    # Input reuses a previous operator output; avoid duplicate manifest entry.
-                    continue
+            # if input_spec is not None and input_spec.source is not None:
+            #     if input_spec.source.source_type == InputSourceType.OPERATOR:
+            #         # Input reuses a previous operator output; avoid duplicate manifest entry.
+            #         continue
             io_key = f"{op.op_id}.input.{input_name}"
             tensor_name = address_plan.operator_io_to_tensor.get(io_key)
             if tensor_name is None:
@@ -425,11 +444,25 @@ def write_install_manifest(
             if assignment is None:
                 continue
 
-            for slice_id, slice_base_addr in sorted(assignment.per_slice_addresses.items()):
+            for slice_id, _slice_base_addr in sorted(assignment.per_slice_addresses.items()):
+                source_slice_id = resolve_io_base_addr_source_slice(
+                    op_type=op.op_type,
+                    io_type=input_spec.special_type if input_spec is not None else None,
+                    write_slice_id=slice_id,
+                    io_role="input",
+                    io_name=input_name,
+                )
+                if source_slice_id not in assignment.per_slice_addresses:
+                    raise ValueError(
+                        "Input manifest base_addr source slice is not available in assignment: "
+                        f"operator={op.op_id}, input={input_name}, write_slice={slice_id}, "
+                        f"source_slice={source_slice_id}"
+                    )
+                slice_base_addr = assignment.per_slice_addresses[source_slice_id]
                 slice_dir = _format_slice_dir(slice_id)
                 payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}"] = {
                     "base_addr": _format_hex32(slice_base_addr),
-                    "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit.bin",
+                    "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit.txt",
                 }
 
         output_key = f"{op.op_id}.output.D"
@@ -440,10 +473,12 @@ def write_install_manifest(
         if output_assignment is None:
             continue
         for slice_id, _slice_base_addr in sorted(output_assignment.per_slice_addresses.items()):
-            source_slice_id = _resolve_output_base_addr_source_slice(
+            source_slice_id = resolve_io_base_addr_source_slice(
                 op_type=op.op_type,
-                output_type=op.output.special_type,
+                io_type=op.output.special_type,
                 write_slice_id=slice_id,
+                io_role="output",
+                io_name="D",
             )
             if source_slice_id not in output_assignment.per_slice_addresses:
                 raise ValueError(
@@ -454,7 +489,7 @@ def write_install_manifest(
             slice_dir = _format_slice_dir(slice_id)
             payload[f"{op.op_id}_matrixD_slice{slice_id}"] = {
                 "base_addr": _format_hex32(slice_base_addr),
-                "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.bin",
+                "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.txt",
             }
 
     for op in execution_input.operators:
@@ -474,7 +509,7 @@ def write_install_manifest(
         if src_cfg_path is None:
             raise ValueError(
                 "Missing source bitstream file for operator type "
-                f"{op.op_type}; expected a *bitstream_128b.bin under config/{op.op_type}/"
+                f"{op.op_type}; expected a *bitstream_128b.txt under config/{op.op_type}/"
             )
         dst_cfg_path = cfg_pkg_dir / src_cfg_path.name
         _copy_overwrite_writable(src_cfg_path, dst_cfg_path)
@@ -617,7 +652,7 @@ def _resolve_config_bitstream_source(op_type: str, template: OperatorTemplate) -
 
     # 2) Fall back to any 128b bitstream binary in operator folder.
     if op_cfg_dir.is_dir():
-        matched = sorted(op_cfg_dir.glob("*bitstream_128b.bin"))
+        matched = sorted(op_cfg_dir.glob("*bitstream_128b.txt"))
         if len(matched) == 1:
             return matched[0]
         if len(matched) > 1:
@@ -722,27 +757,5 @@ def _copy_overwrite_writable(src: Path, dst: Path) -> None:
 
     # Ensure future runs can overwrite this file on Windows.
 
-
-def _resolve_output_base_addr_source_slice(
-    op_type: str,
-    output_type: str | None,
-    write_slice_id: int,
-) -> int:
-    if output_type is None:
-        return write_slice_id
-
-    router = _OUTPUT_BASE_ADDR_ROUTER_BY_OP_AND_TYPE.get((op_type, output_type))
-    if router is None:
-        router = _OUTPUT_BASE_ADDR_ROUTER_BY_TYPE.get(output_type)
-    if router is None:
-        return write_slice_id
-
-    mapped = router(write_slice_id)
-    if not isinstance(mapped, int) or mapped < 0:
-        raise ValueError(
-            f"Invalid output base_addr source slice mapping: op_type={op_type}, "
-            f"output_type={output_type}, write_slice={write_slice_id}, mapped={mapped}"
-        )
-    return mapped
 
 
