@@ -174,7 +174,7 @@ def process_rope_tensors(input_dir, output_dir):
                 if head_data.ndim == 1:
                     head_data = head_data.reshape(-1, 1)
 
-                # 和 op0 一样：每个 head 切成 4 个 32x32 slice
+                # 先按 L 维裁成 4 个 slice，每个 slice 都应是 32x32
                 slice_datas = split_rope_32x32_slices(head_data, slices_per_group)
 
                 for slice_in_group_idx, slice_data_32x32 in enumerate(slice_datas):
@@ -189,7 +189,7 @@ def process_rope_tensors(input_dir, output_dir):
                     relayout_data.tofile(out_path)
                     convert_to_128bit_txt(out_path, rows=slice_data_32x32.shape[0], cols=slice_data_32x32.shape[1])
         else:
-            # 和 op0 一样：没有 head 维度时，直接兜底广播
+            # 对于没有 head 维度的数据，走特殊处理或兜底
             data_2d = data.squeeze()
             if data_2d.ndim == 1:
                 data_2d = data_2d.reshape(-1, 1)
@@ -224,6 +224,16 @@ def process_rope_tensors(input_dir, output_dir):
                         relayout_data.tofile(out_path)
                         convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
                 continue
+
+            # 兜底：广播
+            relayout_data = relayout_slice_M8_N(data_2d)
+            for i in range(num_slices):
+                save_before_relayout(before_install_dir, op_id, i, out_name, data_2d)
+                slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
+                os.makedirs(slice_dir, exist_ok=True)
+                out_path = os.path.join(slice_dir, out_name)
+                relayout_data.tofile(out_path)
+                convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1])
 
     print(f"\n✅ All RoPE tensors sliced and saved under: {install_dir}")
 

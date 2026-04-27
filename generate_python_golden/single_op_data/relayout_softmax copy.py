@@ -83,25 +83,6 @@ def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_
     matrix_2d.reshape(-1, order='C').tofile(out_path)
     convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
 
-def split_op1_max_slices(head_data, matrix_id):
-    """
-    op1(max) 专用切片规则（恢复原尺寸）：
-    - 每个 head 的 4 个 slice 使用相同的完整输入/输出矩阵
-    - 不做转置，不做切分
-    """
-    head_data = np.asarray(head_data, dtype=np.float32)
-    if head_data.ndim == 1:
-        head_data = head_data.reshape(-1, 1)
-        
-    # if matrix_id == "A":
-    #     # 按你的要求：先转置 matrixA，再按这个维度切
-    #     head_data = head_data.T
-    #     return list(np.array_split(head_data, 1, axis=1))
-    # if matrix_id == "D":
-    #     return [head_data.copy() for _ in range(4)]    
-
-    return [head_data.copy() for _ in range(4)]
-
 def process_softmax_tensors(input_dir, output_dir):
     """
     处理 softmax 生成的所有 sub_op .bin 文件。
@@ -148,28 +129,14 @@ def process_softmax_tensors(input_dir, output_dir):
         
         print(f"📦 Processing: {filename} -> {op_id}/{out_name} | Shape: {shape}")
         
+        # 根据 head 维度进行数据分发
+        # 假设 head 维度是第3个维度 (shape[2])
         if data.ndim >= 3 and data.shape[2] == num_heads:
             for head_idx in range(num_heads):
+                # 提取当前 head 的数据，并降维到 2D
                 head_data = data[:, :, head_idx, :].squeeze()
                 if head_data.ndim == 1:
                     head_data = head_data.reshape(-1, 1)
-
-                # op1(max) 恢复为每个head的4个slice放相同完整矩阵
-                if op_id == "op1":
-                    op1_slice_datas = split_op1_max_slices(head_data, matrix_id)
-                    for slice_in_group_idx, slice_data in enumerate(op1_slice_datas):
-                        relayout_data = relayout_slice_M8_N(slice_data)
-                        global_slice_idx = head_idx * slices_per_group + slice_in_group_idx
-
-                        save_before_relayout(before_install_dir, op_id, global_slice_idx, out_name, slice_data)
-
-                        slice_dir = os.path.join(install_dir, op_id, f"slice{global_slice_idx:02d}")
-                        os.makedirs(slice_dir, exist_ok=True)
-
-                        out_path = os.path.join(slice_dir, out_name)
-                        relayout_data.tofile(out_path)
-                        convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
-                    continue
 
                 # 对这个 head 的 2D 数据进行重排
                 relayout_data = relayout_slice_M8_N(head_data)
