@@ -6,6 +6,6 @@
     "head_dim": 128,
     "num_hidden_layers": 1,
     "sequence_length": 32,
-    "target_op": "rms_norm"
+    "target_op": "softmax"
 }
 

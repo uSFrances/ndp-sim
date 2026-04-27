@@ -5,6 +5,7 @@ import time
 import functools
 from tqdm import tqdm
 import json
+import math
 
 # --- Model Configuration Loader ---
 def load_config(config_path):
@@ -64,6 +65,17 @@ def save_io_tensor(name, tensor, is_sub_op=False):
 def log_op(func):
     """已废弃：留空装饰器防止因删除导致大面积报错"""
     return func
+
+def fp32_fma_accumulate(acc, a, b):
+    """
+    硬件 SUMMAC 对齐：acc = fma(a, b, acc)
+    优先用 math.fma；若环境不支持则回退到乘加。
+    """
+    try:
+        return np.float32(math.fma(float(a), float(b), float(acc)))
+    except AttributeError:
+        return np.float32(np.float32(a) * np.float32(b) + np.float32(acc))
+
 # =================================================
 
 # 为你关心的算子加上 @log_op 装饰器，它们将自动将 IO 存入 python_golden 文件夹
@@ -84,12 +96,20 @@ def rms_norm(x):
     # 完全保留您原本的算法逻辑
     for sample in range(nsamples):
         for channel in range(nchannels):
-            tmp = np.array(0, dtype=np.float32)
+            tmp = np.float32(0.0)
             for row in range(nrows):
                 x_slice = x[:, row, channel, sample]
-                tmp=0
+                tmp = np.float32(0.0)
+
+                # 原始实现（保留）：
+                # tmp = 0
+                # for col in range(ncols):
+                #     tmp += np.float32(x_slice[col] * x_slice[col])
+
+                # 按硬件 SUMMAC 语义改为 fma 累加：
                 for col in range(ncols):
-                    tmp += np.float32(x_slice[col] * x_slice[col])
+                    tmp = fp32_fma_accumulate(tmp, x_slice[col], x_slice[col])
+
                 mean = tmp / ncols
                 scale = 1.0 / np.sqrt(mean + 0.000001)
                 dst[:, row, channel, sample] =  x_slice * scale
@@ -98,9 +118,17 @@ def rms_norm(x):
                 if CURRENT_NODE_PREFIX:
                     for s_idx in range(28):
                         s_data = x_slice[s_idx*32 : (s_idx+1)*32]
-                        s_sum = 0.0
+
+                        # 原始实现（保留）：
+                        # s_sum = 0.0
+                        # for c in range(32):
+                        #     s_sum += np.float32(s_data[c] * s_data[c])
+
+                        # 按硬件 SUMMAC 语义改为 fma 累加：
+                        s_sum = np.float32(0.0)
                         for c in range(32):
-                            s_sum += np.float32(s_data[c] * s_data[c])
+                            s_sum = fp32_fma_accumulate(s_sum, s_data[c], s_data[c])
+
                         sum_mac_out[row, s_idx, channel, sample] = s_sum
                     
                     # 记录一维结果
@@ -265,14 +293,15 @@ def rope(x):
                 mul1_out[i, j, k] = x0_cos
                 mul1_out[i+ne0//2, j, k] = x1_cos
 
-                # 第二个 mul: 计算 sin 相关项 (注意负号)
+                # 第二个 mul: 保存给文件的 in1 统一为 +sin
+                # 负号仅保留在计算路径，避免后续 relayout/硬件侧重复取负
                 mul2_in0[i, j, k] = x0
                 mul2_in0[i+ne0//2, j, k] = x1
                 mul2_in1[i, j, k] = sin_theta
-                mul2_in1[i+ne0//2, j, k] = -sin_theta # 关键：这里是 -sin
+                mul2_in1[i+ne0//2, j, k] = -sin_theta  # 改：保存时不带负号
 
                 x0_sin = x0 * sin_theta
-                x1_neg_sin = -x1 * sin_theta # 关键：这里是 -x1*sin
+                x1_neg_sin = -x1 * sin_theta  # 负号仅在计算中体现
                 mul2_out[i, j, k] = x0_sin
                 mul2_out[i+ne0//2, j, k] = x1_neg_sin
 
@@ -329,6 +358,7 @@ def soft_max(x, mask=None):
 
     base_dir = os.path.dirname(__file__)
     scale_path = os.path.join(base_dir, "softmax_scale.bin")
+    # 这里读取 softmax_scale.bin 的单个 fp32 缩放系数，用于 QK 分数预缩放
     with open(scale_path, "rb") as f:
         scale = np.frombuffer(f.read(), dtype=np.float32)[0]
 

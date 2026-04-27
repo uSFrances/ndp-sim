@@ -9,16 +9,34 @@ def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
-def convert_to_128bit_txt(bin_path):
+def convert_to_decimal_txt(bin_path, rows=None, cols=None):
+    """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）"""
+    if not os.path.exists(bin_path):
+        return
+    data = np.fromfile(bin_path, dtype=np.float32)
+    if rows is None or cols is None:
+        rows, cols = data.size, 1
+    if rows * cols != data.size:
+        print(f"  ⚠️ Decimal reshape mismatch: {bin_path}, fallback to Nx1")
+        rows, cols = data.size, 1
+
+    matrix = data.reshape((rows, cols), order='C')
+    txt_path = bin_path.replace('.bin', '_decimal.txt')
+    with open(txt_path, 'w') as f:
+        for r in range(rows):
+            f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
+            f.write("\n")
+
+def convert_to_128bit_txt(bin_path, rows=None, cols=None):
     """读取 bin 文件并输出为每行 128-bit (4个float32) 的 txt 文件(二进制格式)"""
     if not os.path.exists(bin_path):
         return
     data = np.fromfile(bin_path, dtype=np.float32)
-    
+
     remainder = len(data) % 4
     if remainder != 0:
         data = np.concatenate((data, np.zeros(4 - remainder, dtype=np.float32)))
-        
+
     txt_path = bin_path.replace('.bin', '.txt')
     with open(txt_path, 'w') as f:
         for i in range(0, len(data), 4):
@@ -28,6 +46,18 @@ def convert_to_128bit_txt(bin_path):
             str_float3 = float_to_bin(data[i+3])
             f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
     print(f"🔎 Converted to 128-bit binary TXT: {os.path.basename(txt_path)}")
+
+    convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
+
+def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d):
+    matrix_2d = np.asarray(matrix_2d, dtype=np.float32)
+    if matrix_2d.ndim == 1:
+        matrix_2d = matrix_2d.reshape(-1, 1)
+    slice_dir = os.path.join(before_install_dir, op_id, f"slice{slice_idx:02d}")
+    os.makedirs(slice_dir, exist_ok=True)
+    out_path = os.path.join(slice_dir, out_name)
+    matrix_2d.reshape(-1, order='C').tofile(out_path)
+    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
 
 def relayout_slice_M8N2M4N(slice_data):
     """
@@ -120,16 +150,24 @@ def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', 
                         
     # 处理完成，分别写入各 Slice 文件夹
     install_dir = os.path.join(target_dir, "install")
+    before_install_dir = os.path.join(target_dir, "install_beforerelayout")
+
     for s_idx, s_data in slice_data_map.items():
         output_data = np.array(s_data, dtype=np.float32)
-        
+
+        # 先保存未 relayout 权重切片（K x 32）
+        col_start = s_idx * SLICE_N
+        col_end = col_start + SLICE_N
+        before_matrix = weight_matrix[:, col_start:col_end]
+        save_before_relayout(before_install_dir, "op0", s_idx, "matrix_B_linearized_128bit.bin", before_matrix)
+
         slice_dir = os.path.join(install_dir, "op0", f"slice{s_idx:02d}")
         os.makedirs(slice_dir, exist_ok=True)
         
         # GEMM 的权重在硬件中通常作为 matrix_B 送入
         out_filepath = os.path.join(slice_dir, "matrix_B_linearized_128bit.bin")
         output_data.tofile(out_filepath)
-        convert_to_128bit_txt(out_filepath)
+        convert_to_128bit_txt(out_filepath, rows=K, cols=SLICE_N)
         
     print(f"✅ Hardware relayout distributed across {total_slices} slices in: {install_dir}/op0/")
 
@@ -150,6 +188,7 @@ def process_gemm_directory(input_dir, output_dir, order='F'):
     # --------------------------------
     
     install_dir = os.path.join(output_dir, "install")
+    before_install_dir = os.path.join(output_dir, "install_beforerelayout")
 
     for filepath in bin_files:
         filename = os.path.basename(filepath)
@@ -171,7 +210,7 @@ def process_gemm_directory(input_dir, output_dir, order='F'):
             K_val, N_val = dims[0], dims[1]
             print(f"📐 Detected Weight File [in0]: {filename}, K={K_val}, N={N_val}")
             # 处理并分发矩阵 B
-            relayout_systolic_weight(filepath, K_val, N_val, target_dir, input_order=order, block_order=order)
+            relayout_systolic_weight(filepath, K_val, N_val, output_dir, input_order=order, block_order=order)
             
         elif "in1" in filename:
             print(f"📐 Detected Input File [in1]: {filename}")
@@ -181,11 +220,12 @@ def process_gemm_directory(input_dir, output_dir, order='F'):
             # Input 为 [K, L], 广播给所有 28 个 slice 作为 matrix_A
             relayout_data = relayout_slice_M8N2M4N(data)
             for i in range(28):
+                save_before_relayout(before_install_dir, "op0", i, "matrix_A_linearized_128bit.bin", data)
                 slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
                 os.makedirs(slice_dir, exist_ok=True)
                 out_path = os.path.join(slice_dir, "matrix_A_linearized_128bit.bin")
                 relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path)
+                convert_to_128bit_txt(out_path, rows=data.shape[0], cols=data.shape[1])
                 
         elif "out" in filename:
             print(f"📐 Detected Output File [out]: {filename}")
@@ -196,13 +236,14 @@ def process_gemm_directory(input_dir, output_dir, order='F'):
             slice_width = data.shape[0] // 28
             for i in range(28):
                 slice_data = data[i*slice_width : (i+1)*slice_width, :]
+                save_before_relayout(before_install_dir, "op0", i, "matrix_D_linearized_128bit.bin", slice_data)
                 relayout_data = relayout_slice_M8N2M4N(slice_data)
                 
                 slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
                 os.makedirs(slice_dir, exist_ok=True)
                 out_path = os.path.join(slice_dir, "matrix_D_linearized_128bit.bin")
                 relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path)
+                convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Auto parse and relayout GEMM weight files.")

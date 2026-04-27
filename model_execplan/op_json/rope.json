@@ -58,9 +58,7 @@
       "inputs": {
         "A": {
           "shape": [1, 32, 32],
-          "source": {
-            "type": "op0"
-          }
+          "source":  "op0"
         },
         "B": {
           "shape": [1, 32, 32],
