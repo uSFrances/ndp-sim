@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import struct
 from math import ceil
 from pathlib import Path
 
@@ -112,6 +113,7 @@ def _patch_emulator_operator_json_payload(
     for field_key, value in updates.items():
         _apply_control_update_to_operator_json(
             payload=payload,
+            operator=operator,
             field_key=field_key,
             value=value,
         )
@@ -182,6 +184,7 @@ def _compute_operator_local_base_addrs(
 
 def _apply_control_update_to_operator_json(
     payload: dict[str, object],
+    operator: OperatorSpec,
     field_key: str,
     value: int,
 ) -> None:
@@ -218,6 +221,29 @@ def _apply_control_update_to_operator_json(
             inport1["constant"] = value
         return
 
+    if instance.startswith("ga_pe") and config_path == "general_array.PE_array.PE.inport1.constant":
+        pe_idx = _parse_instance_index(instance, prefix="ga_pe")
+        if pe_idx is None:
+            return
+        general_array = payload.get("general_array")
+        if not isinstance(general_array, dict):
+            return
+        pe_array = general_array.get("PE_array")
+        if not isinstance(pe_array, dict):
+            return
+        pe_key = _resolve_ga_pe_array_key(pe_array=pe_array, pe_idx=pe_idx)
+        if pe_key is None:
+            return
+        pe_node = pe_array.get(pe_key)
+        if not isinstance(pe_node, dict):
+            return
+        inport1 = pe_node.get("inport1")
+        if isinstance(inport1, dict):
+            # Keep symbolic form in emulator json for readability/debugging.
+            # Derive expression from encoded fp32 value instead of assuming a_k.
+            inport1["constant"] = _format_fp32_bits_as_symbolic(value)
+        return
+
     if instance.startswith("rd_stream") or instance.startswith("wr_stream"):
         if config_path != "stream_engine.stream.dim_stride":
             return
@@ -240,6 +266,59 @@ def _parse_instance_index(instance: str, prefix: str) -> int | None:
     if not suffix.isdigit():
         return None
     return int(suffix)
+
+
+def _resolve_ga_pe_array_key(pe_array: dict[str, object], pe_idx: int) -> str | None:
+    # If PE keys use 2D naming (PErc), map linear index in row-major order.
+    grid_keys: list[str] = []
+    for key in pe_array.keys():
+        if re.fullmatch(r"PE\d\d", key):
+            grid_keys.append(key)
+    if grid_keys:
+        cols = max(int(key[3]) for key in grid_keys) + 1
+        row = pe_idx // cols
+        col = pe_idx % cols
+        grid_key = f"PE{row}{col}"
+        if grid_key in pe_array:
+            return grid_key
+
+    direct_key = f"PE{pe_idx}"
+    if direct_key in pe_array:
+        return direct_key
+
+    padded_key = f"PE{pe_idx:02d}"
+    if padded_key in pe_array:
+        return padded_key
+
+    # Compat path: condensed logical index peRC -> physical PE(2R)(2C).
+    if 0 <= pe_idx < 100:
+        logical_row = pe_idx // 10
+        logical_col = pe_idx % 10
+        doubled_key = f"PE{logical_row * 2}{logical_col * 2}"
+        if doubled_key in pe_array:
+            return doubled_key
+
+    return None
+
+
+def _decode_fp32_bits(value: int) -> float:
+    packed = int(value & 0xFFFF_FFFF).to_bytes(4, byteorder="big", signed=False)
+    return float(struct.unpack(">f", packed)[0])
+
+
+def _format_fp32_bits_as_symbolic(value_bits: int) -> str:
+    fp_value = _decode_fp32_bits(value_bits)
+    if fp_value == 0.0:
+        return "0.0"
+
+    inv = 1.0 / fp_value
+    inv_rounded = int(round(inv))
+    tolerance = max(1e-6, abs(inv) * 1e-6)
+    if inv_rounded != 0 and abs(inv - inv_rounded) <= tolerance:
+        sign = "-" if inv_rounded < 0 else ""
+        return f"{sign}1.0 / {abs(inv_rounded)}"
+
+    return f"{fp_value:.16g}"
 
 
 def _find_stream_key_by_target(

@@ -146,14 +146,26 @@ class LCPEConfig(BaseConfigModule):
             return 0
         if isinstance(val, str):
             text = val.strip()
-            # Try fraction first (e.g., "1/1024"), then float
-            try:
-                val = float(Fraction(text))
-            except (ValueError, ZeroDivisionError):
+            compact = text.replace(" ", "")
+            # Try symbolic fraction first (e.g., "1.0 / 1024" or "1/1024"), then float.
+            if "/" in compact:
+                numerator_text, denominator_text = compact.split("/", maxsplit=1)
                 try:
-                    val = float(text)
-                except ValueError:
-                    return val
+                    numerator = float(Fraction(numerator_text))
+                    denominator = float(Fraction(denominator_text))
+                    if denominator == 0:
+                        return val
+                    val = numerator / denominator
+                except (ValueError, ZeroDivisionError):
+                    pass
+            if isinstance(val, str):
+                try:
+                    val = float(Fraction(text))
+                except (ValueError, ZeroDivisionError):
+                    try:
+                        val = float(text)
+                    except ValueError:
+                        return val
         if isinstance(val, numbers.Integral):
             return int(val)
         if isinstance(val, numbers.Real):
