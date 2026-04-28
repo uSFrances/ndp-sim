@@ -84,40 +84,40 @@ def relayout_slice_M8N2M4N(slice_data):
                             
     return np.array(relayout_data, dtype=slice_data.dtype)
 
-def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', block_order='F'):
+def relayout_systolic_weight(input_filepath, K, N, target_dir, input_dtype=np.float32):
     """
     根据硬件数据流重排 GEMM 权重:
-    - 7个Head并行，1个Head(Cluster)宽128
-    - 1个Cluster分4个Slice，1个Slice宽32
+    - 7个Head并行，1个Head(Cluster)宽 CLUSTER_N
+    - 1个Cluster分4个Slice，1个Slice宽 SLICE_N
     - 按 Slice 分别保存至 install/op0/sliceXX/
     """
-    # 硬件架构常量
-    CLUSTER_N = 128    # 一个 Head / Cluster 的 N 宽度
-    SLICE_N = 32       # 一个 Slice 的 N 宽度
-    K_MACRO = 32       # K维度的对角线调度宏块
-    BK = 8             # 微块 K (匹配M8)
-    BN = 2             # 微块 N (原来是8，现在最小单位切成了2)
+    # 硬件架构常量 - 动态计算以适配任何 N（固定28个slice，7个head）
+    CLUSTER_N = N // 7         # 一个 Head / Cluster 的 N 宽度
+    SLICE_N = N // 28          # 一个 Slice 的 N 宽度
+    K_MACRO = 32               # K维度的对角线调度宏块
+    BK = 8                     # 微块 K (匹配M8)
+    BN = 2                     # 微块 N (原来是8，现在最小单位切成了2)
 
     print(f"\n--- Relayout GEMM Hardware Weight: {os.path.basename(input_filepath)} ---")
-    data = np.fromfile(input_filepath, dtype=np.float32)
+    data = np.fromfile(input_filepath, dtype=input_dtype).astype(np.float32, copy=False)
     if data.size < K * N:
         raise ValueError(f"File size {data.size} is smaller than expected K*N = {K*N}")
         
-    weight_matrix = data[:K*N].reshape((K, N), order=input_order)
+    weight_matrix = data[:K*N].reshape((K, N), order='F')
     
     if N % CLUSTER_N != 0 or CLUSTER_N % SLICE_N != 0:
-        raise ValueError("N dimensions don't match Cluster(128) and Slice(32) alignment.")
+        raise ValueError("N dimensions don't match Cluster and Slice alignment.")
     if K % K_MACRO != 0:
         raise ValueError("K dimensions don't match K_MACRO(32) alignment.")
         
-    num_slices = CLUSTER_N // SLICE_N     # 128 / 32 = 4
+    num_slices = CLUSTER_N // SLICE_N     # 每个cluster 4个slice
     num_time_steps = K_MACRO // BK        # 32 / 8 = 4
     
-    total_slices = N // SLICE_N
+    total_slices = 28 # 永远为28个物理slice
     # 为每一个 slice 初始化一个列表用于缓存数据
     slice_data_map = {idx: [] for idx in range(total_slices)}
     
-    # 1. 遍历并行的 Heads (Cluster), N维每次走128
+    # 1. 遍历并行的 Heads (Cluster)
     for head_n in range(0, N, CLUSTER_N):
         # 2. 遍历 K 维度的 32x32 宏块
         for k_macro in range(0, K, K_MACRO):
@@ -133,7 +133,7 @@ def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', 
                     row_start = k_macro + i * BK
                     col_start_base = head_n + j * SLICE_N
                     
-                    # 5. 一个 Slice 宽 32，微块现在设为 N=2，即横向遍历16次
+                    # 5. 一个 Slice 宽 SLICE_N，微块设为 N=2
                     for n_sub in range(0, SLICE_N, BN):
                         col_start = col_start_base + n_sub
                         block_8x2 = weight_matrix[row_start : row_start + BK, 
@@ -155,13 +155,13 @@ def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', 
     for s_idx, s_data in slice_data_map.items():
         output_data = np.array(s_data, dtype=np.float32)
 
-        # 先保存未 relayout 权重切片（K x 32）
+        # 先保存未 relayout 权重切片（K x SLICE_N）
         col_start = s_idx * SLICE_N
         col_end = col_start + SLICE_N
         before_matrix = weight_matrix[:, col_start:col_end]
         save_before_relayout(before_install_dir, "op0", s_idx, "matrix_B_linearized_128bit.bin", before_matrix)
 
-        slice_dir = os.path.join(install_dir, "op0", f"slice{s_idx:02d}")
+        slice_dir = os.path.join(install_dir, f"slice{s_idx:02d}")
         os.makedirs(slice_dir, exist_ok=True)
         
         # GEMM 的权重在硬件中通常作为 matrix_B 送入
@@ -169,92 +169,166 @@ def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', 
         output_data.tofile(out_filepath)
         convert_to_128bit_txt(out_filepath, rows=K, cols=SLICE_N)
         
-    print(f"✅ Hardware relayout distributed across {total_slices} slices in: {install_dir}/op0/")
+    print(f"✅ Hardware relayout distributed across {total_slices} slices in: {install_dir}/")
+
+def build_systolic_input_a_by_slice(input_a, total_slices=28, slices_per_group=4, k_macro=32, bk=8):
+    """
+    按 GEMM 权重同样的对角线调度规则，为每个 slice 生成 A(KxL)：
+    - t=0 取本地 slice 对应行块
+    - t=1..3 取相邻 slice 对应行块（轮转）
+    """
+    K, L = input_a.shape
+    if K % k_macro != 0:
+        raise ValueError(f"K={K} 必须能被 k_macro={k_macro} 整除")
+    if total_slices % slices_per_group != 0:
+        raise ValueError("total_slices 必须能被 slices_per_group 整除")
+
+    num_groups = total_slices // slices_per_group
+    result = {}
+
+    for g in range(num_groups):
+        for j in range(slices_per_group):
+            global_slice_idx = g * slices_per_group + j
+            blocks = []
+            for k0 in range(0, K, k_macro):
+                for t in range(slices_per_group):
+                    i = (j - t) % slices_per_group
+                    row_start = k0 + i * bk
+                    blocks.append(input_a[row_start:row_start + bk, :])
+            result[global_slice_idx] = np.vstack(blocks).astype(np.float32)
+
+    return result
+
+def _parse_mul_mat_shape(filename):
+    m = re.search(r"_shape([\dx]+)_dtype", filename)
+    if not m:
+        return None
+    return tuple(map(int, m.group(1).split("x")))
+
+def _parse_mul_mat_dtype(filename):
+    m = re.search(r"_dtype_(f16|f32|i32)\.bin$", filename)
+    if not m:
+        return np.float32
+    return {"f16": np.float16, "f32": np.float32, "i32": np.int32}[m.group(1)]
+
+def _group_mul_mat_triplets(bin_files):
+    groups = {}
+    for filepath in bin_files:
+        filename = os.path.basename(filepath)
+        if "systolic" in filename or "linearized" in filename or "_op-mul_mat" not in filename:
+            continue
+        m = re.search(r"(?P<prefix>.+?)_(?P<io>in0|in1|out)_shape", filename)
+        if not m:
+            continue
+        groups.setdefault(m.group("prefix"), {})[m.group("io")] = filepath
+    return groups
+
+def _safe_prefix_dir(prefix: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_.-]+", "_", prefix)
 
 def process_gemm_directory(input_dir, output_dir, order='F'):
-    """自动处理目录下的所有 GEMM 相关文件"""
+    """
+    自动处理目录下的所有 GEMM 相关文件。
+
+    读取目录：上一级 python_golden
+    分组方式：按文件名前缀把每个 mul_mat 的 in0 / in1 / out 作为一组处理，
+    避免 q/k 等不同算子串读。
+    """
     print(f"🚀 Scanning for GEMM tensors in: {input_dir}")
     bin_files = glob.glob(os.path.join(input_dir, "*mul_mat*.bin"))
-    
     valid_files = [f for f in bin_files if "systolic" not in f and "linearized" not in f]
     if not valid_files:
         print("❌ No valid mul_mat .bin files found in the directory.")
         return
-        
-    # --- 提取并锁死完整的算子实例前缀 ---
-    prefixes = sorted(list(set([re.split(r"_(in0|in1|out)", os.path.basename(f))[0] for f in valid_files if "_op-mul_mat" in f])))
-    target_prefix = prefixes[0] if prefixes else ""
-    if target_prefix: print(f"🎯 Locking to specific GEMM instance: '{target_prefix}'")
-    # --------------------------------
-    
-    install_dir = os.path.join(output_dir, "install")
-    before_install_dir = os.path.join(output_dir, "install_beforerelayout")
 
-    for filepath in bin_files:
-        filename = os.path.basename(filepath)
-        if "systolic" in filename or "linearized" in filename:
-            continue # 跳过已经重排过的文件
-            
-        if target_prefix and not filename.startswith(target_prefix):
+    triplets = _group_mul_mat_triplets(valid_files)
+    if not triplets:
+        print("❌ No valid mul_mat triplets found in the directory.")
+        return
+
+    for gemm_idx, (prefix, files) in enumerate(sorted(triplets.items())):
+        # ======== 锁定目标文件 ========
+        if prefix != "blk.0_node_0_q_op-mul_mat":
             continue
-            
-        # 匹配形状提取
-        match = re.search(r"_shape([\dx]+)_dtype", filename)
-        if not match:
+        # ============================
+
+        if not {"in0", "in1", "out"} <= set(files):
             continue
-            
-        dims = list(map(int, match.group(1).split('x')))
+
+        # 将目录直接命名为 gemm_前缀
+        safe_prefix = _safe_prefix_dir(prefix)
+        group_dir = f"gemm_{safe_prefix}"
+        group_root = os.path.join(output_dir, group_dir)
+        install_dir = os.path.join(group_root, "install")
+        before_install_dir = os.path.join(group_root, "install_beforerelayout")
+        os.makedirs(install_dir, exist_ok=True)
+        os.makedirs(before_install_dir, exist_ok=True)
+
+        in0_path = files["in0"]
+        in1_path = files["in1"]
+        out_path = files["out"]
+
+        in0_dims = _parse_mul_mat_shape(os.path.basename(in0_path))
+        in1_dims = _parse_mul_mat_shape(os.path.basename(in1_path))
+        out_dims = _parse_mul_mat_shape(os.path.basename(out_path))
+        if not in0_dims or not in1_dims or not out_dims:
+            continue
+
+        in0_dtype = _parse_mul_mat_dtype(os.path.basename(in0_path))
+        in1_dtype = _parse_mul_mat_dtype(os.path.basename(in1_path))
+        out_dtype = _parse_mul_mat_dtype(os.path.basename(out_path))
+
+        K_val, N_val = in0_dims[0], in0_dims[1]
+        active_slices = 28 # 永远固定28个切片
+        print(f"🎯 Processing mul_mat prefix: '{prefix}' -> '{group_dir}' | active slices={active_slices}")
+
+        # in0 -> matrix_B
+        relayout_systolic_weight(
+            in0_path, K_val, N_val, group_root, input_dtype=in0_dtype
+        )
+
+        # in1 -> matrix_A: 固定 K x L，并为全硬件 28 个 slice 准备输入
+        K_a, L_a = in1_dims[0], in1_dims[1]
+        data_a = np.fromfile(in1_path, dtype=in1_dtype).astype(np.float32, copy=False)
+        data_a = data_a[:K_a * L_a].reshape((K_a, L_a), order=order)
         
-        # in0 是 weight (K x N), in1 是 Input, out 是 Output
-        if "in0" in filename:
-            K_val, N_val = dims[0], dims[1]
-            print(f"📐 Detected Weight File [in0]: {filename}, K={K_val}, N={N_val}")
-            # 处理并分发矩阵 B
-            relayout_systolic_weight(filepath, K_val, N_val, output_dir, input_order=order, block_order=order)
-            
-        elif "in1" in filename:
-            print(f"📐 Detected Input File [in1]: {filename}")
-            data = np.fromfile(filepath, dtype=np.float32).reshape(dims, order=order).squeeze()
-            if data.ndim == 1: data = data.reshape(-1, 1)
-            
-            # Input 为 [K, L], 广播给所有 28 个 slice 作为 matrix_A
-            relayout_data = relayout_slice_M8N2M4N(data)
-            for i in range(28):
-                save_before_relayout(before_install_dir, "op0", i, "matrix_A_linearized_128bit.bin", data)
-                slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
-                os.makedirs(slice_dir, exist_ok=True)
-                out_path = os.path.join(slice_dir, "matrix_A_linearized_128bit.bin")
-                relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=data.shape[0], cols=data.shape[1])
-                
-        elif "out" in filename:
-            print(f"📐 Detected Output File [out]: {filename}")
-            data = np.fromfile(filepath, dtype=np.float32).reshape(dims, order=order).squeeze()
-            if data.ndim == 1: data = data.reshape(-1, 1)
-            
-            # Output 为 [N, L], 沿 N (dim 0) 切分为 28 份，分配给矩阵 D
-            slice_width = data.shape[0] // 28
-            for i in range(28):
-                slice_data = data[i*slice_width : (i+1)*slice_width, :]
-                save_before_relayout(before_install_dir, "op0", i, "matrix_D_linearized_128bit.bin", slice_data)
-                relayout_data = relayout_slice_M8N2M4N(slice_data)
-                
-                slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
-                os.makedirs(slice_dir, exist_ok=True)
-                out_path = os.path.join(slice_dir, "matrix_D_linearized_128bit.bin")
-                relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
+        # 始终生成 28 份 A 的切片数据
+        a_by_slice = build_systolic_input_a_by_slice(data_a, total_slices=28, slices_per_group=4, k_macro=32, bk=8)
+        for i in range(28):
+            slice_a = a_by_slice[i]
+            save_before_relayout(before_install_dir, "op0", i, "matrix_A_linearized_128bit.bin", slice_a)
+            slice_dir = os.path.join(install_dir, f"slice{i:02d}")
+            os.makedirs(slice_dir, exist_ok=True)
+            out_a_path = os.path.join(slice_dir, "matrix_A_linearized_128bit.bin")
+            relayout_data = relayout_slice_M8N2M4N(slice_a)
+            relayout_data.tofile(out_a_path)
+            convert_to_128bit_txt(out_a_path, rows=slice_a.shape[0], cols=slice_a.shape[1])
+
+        # out -> matrix_D: N x L
+        N_d, L_d = out_dims[0], out_dims[1]
+        data_d = np.fromfile(out_path, dtype=out_dtype).astype(np.float32, copy=False)
+        data_d = data_d[:N_d * L_d].reshape((N_d, L_d), order=order)
+        
+        slice_width = N_d // 28
+        for i in range(28):
+            slice_data = data_d[i * slice_width:(i + 1) * slice_width, :]
+            save_before_relayout(before_install_dir, "op0", i, "matrix_D_linearized_128bit.bin", slice_data)
+            slice_dir = os.path.join(install_dir, f"slice{i:02d}")
+            os.makedirs(slice_dir, exist_ok=True)
+            out_d_path = os.path.join(slice_dir, "matrix_D_linearized_128bit.bin")
+            relayout_data = relayout_slice_M8N2M4N(slice_data)
+            relayout_data.tofile(out_d_path)
+            convert_to_128bit_txt(out_d_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Auto parse and relayout GEMM weight files.")
-    
-    # 默认寻找上级目录中的 python_golden 文件夹
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_in = os.path.abspath(os.path.join(current_dir, "..", "python_golden"))
     default_out = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "gemm"))
-    
+
     parser.add_argument('--dir', type=str, default=default_in, help="Directory containing the .bin files")
     parser.add_argument('--order', type=str, choices=['C', 'F'], default='F', help="Matrix layout in .bin")
-    
+
     args = parser.parse_args()
     process_gemm_directory(args.dir, default_out, order=args.order)

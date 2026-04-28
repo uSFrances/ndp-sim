@@ -46,6 +46,10 @@ def relayout_slice_M8_N(slice_data):
     """
     对一个 MxN 的 slice 进行 M8_N 重排。
     """
+    # 假设输入为 (N, M)，转置后为 (M, N)
+    slice_data = slice_data.T
+
+
     M, N = slice_data.shape
     relayout_data = []
     for m_outer in range(0, M, 8):
