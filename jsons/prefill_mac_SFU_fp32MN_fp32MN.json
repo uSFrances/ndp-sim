@@ -223,7 +223,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -255,6 +255,7 @@
                 }
             },
             "PE02": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -266,7 +267,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -298,6 +299,7 @@
                 }
             },
             "PE10": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -309,7 +311,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -341,6 +343,7 @@
                 }
             },            
             "PE12": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -352,7 +355,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -384,6 +387,7 @@
                 }
             },            
             "PE20": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -395,7 +399,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -427,6 +431,7 @@
                 }
             },
             "PE22": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -438,7 +443,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -470,6 +475,7 @@
                 }
             },
             "PE30": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -481,7 +487,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,
@@ -513,6 +519,7 @@
                 }
             },
             "PE32": {
+                "alu_opcode": "mac",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -524,7 +531,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": "1/896"
                 },
                 "inport0": {
                     "src_id": 0,

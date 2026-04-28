@@ -452,8 +452,7 @@ def write_instruction_outputs(
     binary_path = install_dir / "execplan.txt"
     explanation_path = output_dir / "instructions_explained.txt"
 
-    binary_lines = _to_128bit_lines(artifact.commands)
-    binary_path.write_text("\n".join(binary_lines) + "\n", encoding="utf-8")
+    _write_execplan_binary(artifact.commands, binary_path)
 
     explanation_lines: list[str] = []
     current_operator_id: str | None = None
@@ -474,6 +473,64 @@ def write_instruction_outputs(
     explanation_path.write_text("\n".join(explanation_lines) + "\n", encoding="utf-8")
 
     return binary_path, explanation_path
+
+
+def write_instruction_op_outputs(
+    artifact: ExecutionPlanArtifact,
+    output_prefix: str | Path,
+) -> list[Path]:
+    prefix = Path(output_prefix)
+    output_dir = prefix if prefix.suffix == "" else prefix.parent / prefix.stem
+    output_dir.mkdir(parents=True, exist_ok=True)
+    install_dir = output_dir / "install"
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    op_blocks = _collect_instruction_op_command_blocks(artifact)
+    written_paths: list[Path] = []
+    for op_id, commands in op_blocks:
+        output_path = install_dir / f"execplan_{op_id}.txt"
+        _write_execplan_binary(commands, output_path)
+        written_paths.append(output_path)
+
+    return written_paths
+
+
+def _collect_instruction_op_command_blocks(artifact: ExecutionPlanArtifact) -> list[tuple[str, list[int]]]:
+    preamble_commands: list[int] = []
+    blocks: list[tuple[str, list[int]]] = []
+    current_operator_id: str | None = None
+    current_commands: list[int] = []
+
+    for idx, command in enumerate(artifact.commands):
+        explanation = ""
+        if idx < len(artifact.command_explanations):
+            explanation = artifact.command_explanations[idx]
+        operator_id = _extract_operator_id(explanation)
+
+        if operator_id is None:
+            if current_operator_id is None:
+                preamble_commands.append(command)
+            else:
+                current_commands.append(command)
+            continue
+
+        if operator_id != current_operator_id:
+            if current_operator_id is not None:
+                blocks.append((current_operator_id, current_commands))
+            current_operator_id = operator_id
+            current_commands = list(preamble_commands)
+
+        current_commands.append(command)
+
+    if current_operator_id is not None:
+        blocks.append((current_operator_id, current_commands))
+
+    return blocks
+
+
+def _write_execplan_binary(commands: list[int], output_path: Path) -> None:
+    binary_lines = _to_128bit_lines(commands)
+    output_path.write_text("\n".join(binary_lines) + "\n", encoding="utf-8")
 
 
 def write_install_manifest(

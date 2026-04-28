@@ -121,11 +121,9 @@ class InstructionGenerator:
             reorder_const_fields=True,
             map_const_fields_to_const_addresses=True,
         )
-        # Original-register extraction intentionally ignores const0/1/2 special
-        # address remapping and follows normal cumulative Xbit ordering.
         self._original_value_register_db = self._load_default_register_db(
-            reorder_const_fields=False,
-            map_const_fields_to_const_addresses=False,
+            reorder_const_fields=True,
+            map_const_fields_to_const_addresses=True,
         )
 
         # Extension points for IO base_addr special handling:

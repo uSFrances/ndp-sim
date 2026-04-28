@@ -324,8 +324,13 @@ def _parse_register_map(
                 out.append((group_name, module_name, config_name, high, low))
 
     if reorder_const_fields:
+        total_special_width = sum(width for _, _, _, width in special_rows)
+        next_high = total_special_width - 1
         for group_name, module_name, config_name, width in special_rows:
-            out.append((group_name, module_name, config_name, width - 1, 0))
+            high = next_high
+            low = high - width + 1
+            next_high = low - 1
+            out.append((group_name, module_name, config_name, high, low))
 
     return out
 def _resolve_special_const_segments(
