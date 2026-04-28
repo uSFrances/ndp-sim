@@ -465,11 +465,13 @@ def write_instruction_outputs(
             if explanation_lines:
                 explanation_lines.append("")
             if operator_id is not None:
-                explanation_lines.append(f"===== operator {operator_id} =====")
+                explanation_lines.append(f"")
+                explanation_lines.append(f"")
+                explanation_lines.append(f"=" * 30 + f" operator {operator_id} " + "=" * 150)
             else:
                 explanation_lines.append("===== operator unknown =====")
             current_operator_id = operator_id
-        explanation_lines.append(f"{idx:04d}  {command:064b}  {explanation}".rstrip())
+        explanation_lines.extend(_format_instruction_explanation_block(idx, command, explanation))
     explanation_path.write_text("\n".join(explanation_lines) + "\n", encoding="utf-8")
 
     return binary_path, explanation_path
@@ -531,6 +533,23 @@ def _collect_instruction_op_command_blocks(artifact: ExecutionPlanArtifact) -> l
 def _write_execplan_binary(commands: list[int], output_path: Path) -> None:
     binary_lines = _to_128bit_lines(commands)
     output_path.write_text("\n".join(binary_lines) + "\n", encoding="utf-8")
+
+
+def _format_instruction_explanation_block(idx: int, command: int, explanation: str) -> list[str]:
+    header = f"{idx:04d}  <{command:064b}>"
+    if not explanation.strip():
+        return [header]
+
+    clauses = [part.strip() for part in explanation.split(",") if part.strip()]
+    if not clauses:
+        return [header]
+    indent = " " * 4
+    lines = [f"{header} \n{indent}{clauses[0]},"]
+    for clause in clauses[1:-1]:
+        lines.append(f"{indent}{clause},")
+    if len(clauses) > 1:
+        lines.append(f"{indent}{clauses[-1]}")
+    return lines
 
 
 def write_install_manifest(
