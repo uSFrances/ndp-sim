@@ -194,12 +194,6 @@ class OperatorTemplateManager:
     ) -> dict[str, OperatorTemplate]:
         templates: dict[str, OperatorTemplate] = {}
         for op in execution_input.operators:
-            if op.op_type not in self._base_info:
-                available = ", ".join(sorted(self._base_info.keys()))
-                raise ValueError(
-                    f"Operator type '{op.op_type}' is not defined in operator_base_info.json. "
-                    f"Available operator types: {available}"
-                )
             target_io_sizes = {name: tensor.shape for name, tensor in op.inputs.items()}
             target_io_sizes["D"] = op.output.shape
             base_template = self.load_template(op.op_type, target_io_sizes=target_io_sizes)

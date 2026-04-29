@@ -26,6 +26,7 @@ from execution_plan_generator.output_writer import (
     write_emulator_bundle,
     write_install_manifest,
     write_instruction_outputs,
+    write_instruction_op_outputs,
 )
 from execution_plan_generator.pipeline import ExecutionPlanPipeline
 
@@ -276,6 +277,7 @@ def main() -> int:
     if output_prefix is None:
         output_prefix = PROJECT_ROOT / "output" / args.json_file.stem
     hex_path, explanation_path = write_instruction_outputs(result.artifact, output_prefix)
+    op_explanation_paths = write_instruction_op_outputs(result.artifact, output_prefix)
     manifest_path = write_install_manifest(
         execution_input=result.execution_input,
         address_plan=result.address_plan,
@@ -291,6 +293,10 @@ def main() -> int:
     )
     print(f"Instruction stream written to: {hex_path}")
     print(f"Instruction explanation written to: {explanation_path}")
+    if op_explanation_paths:
+        print("Per-op instruction-only outputs written to:")
+        for path in op_explanation_paths:
+            print(f"  {path}")
     print(f"Install manifest written to: {manifest_path}")
     print(f"Input with baseaddr written to: {with_baseaddr_path}")
 

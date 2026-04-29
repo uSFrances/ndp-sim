@@ -685,6 +685,20 @@ padding		chunk_size	chunk
     * 每行为 32bit 大端 hex（`0xXXXXXXXX`），地址基于 bank 内 `base_addr=0`。
     * 依据地址规划规则按 128bit 粒度放置数据，空洞自动补 0。
     * 整个 bank 无数据时不输出该 bank 文件。
+* 已完成可选 `emulator` 导出：
+    * 通过 `-e` / `--export-emulator` 启用（默认关闭）。
+    * 输出目录为 `<output_prefix>/emulator_<输入json文件名去后缀>/`（例如 `emulator_rope`）。
+    * 目录结构按算子与 slice 展开：`opX/sliceYY/`。
+    * 每个 `sliceYY` 下输出两个文件：
+        * 算子配置 JSON（文件名与 `jsons/<op_type>.json` 保持一致）。
+        * `dram_data.bin`（按输入顺序拼接 `install/opX/sliceYY/matrix_*_linearized_128bit.bin`，跳过 `B'`）。
+    * 导出的算子 JSON 会根据当前算子形状自动回写控制字段（复用 `compute_control_register_updates` 规则）。
+    * 导出的 stream `base_addr` 使用“算子内局部地址空间”重新规划：
+        * 每个算子从 `0x0` 开始。
+        * 输入按出现顺序累积（16B 对齐）。
+        * `B'` 复用 `B` 地址。
+        * 输出 `D` 紧跟在所有输入之后。
+    * 导出的 `base_addr` 使用十六进制字符串格式（如 `0x0`、`0x1000`）。
 * 已完成算子配置目录自动补齐：
     * 运行 `model_execplan/main.py` 时，会按输入 JSON 中出现的算子类型检查 `model_execplan/config/<op_type>/`。
     * 若缺少 `parsed_bitstream.txt` 或 `*bitstream_64b.bin/*bitstream_128b.bin`，会自动调用 `bitstream/main.py` 生成。
@@ -740,6 +754,20 @@ python main.py examples/rmsnorm.json -b
 ```bash
 python main.py examples/rmsnorm.json --export-bank-data
 ```
+
+启用 emulator 导出：
+
+```bash
+python main.py examples/rope.json -e
+```
+
+等价长参数：
+
+```bash
+python main.py examples/rope.json --export-emulator
+```
+
+启用 emulator 导出后，产物会额外生成在 `output/<输入json名>/emulator_<输入json名>/` 下。
 
 可选输出归一化后的 JSON：
 

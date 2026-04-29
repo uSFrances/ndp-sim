@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 from pathlib import Path
 
 from .models import OperatorSpec, OperatorTemplate
@@ -27,6 +28,11 @@ def _fit_i16(value: int) -> int:
     if not (-(1 << 15) <= value < (1 << 15)):
         raise ValueError(f"value out of int16 range: {value}")
     return value & 0xFFFF
+
+
+def _to_fp32_bits(value: float) -> int:
+    """Return IEEE754 fp32 bit pattern as unsigned 32-bit int."""
+    return int.from_bytes(struct.pack(">f", float(value)), byteorder="big", signed=False)
 
 
 def pack_address_remapping(remapping: tuple[int, ...]) -> int:
@@ -392,6 +398,14 @@ def _compute_prefill_mac_SFU_fp32MN_fp32MN_control_register_updates(
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
         "iga_lc0.dram_loop_configs.end": a_n // 8 if a_n is not None else 0,
+        "ga_pe0.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe2.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe4.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe6.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe8.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe10.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe12.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe14.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
     }
 
 
@@ -918,6 +932,36 @@ def _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates(
         ),
     }
 
+def _compute_prefill_add_fp16MN_fp32N_fp16MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Placeholder for prefill_add_fp16MN_fp32N_fp16MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_m or 0) * 32,
+            port2 = 32,
+        ),
+        "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (d_m or 0) * 32,
+            port2 = 32,
+        ),
+    }
+
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -944,6 +988,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_gemm_ring_4slice": _compute_prefill_gemm_ring_4slice_control_register_updates,
     "prefill_add_fp32MN_fp32MN_fp32MN": _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_mul_fp32MN_fp32MN_fp32MN": _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates,
+    "prefill_add_fp16MN_fp32N_fp16MN": _compute_prefill_add_fp16MN_fp32N_fp16MN_control_register_updates,
 
 
 }

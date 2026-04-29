@@ -394,9 +394,10 @@ def soft_max(x, mask=None):
             sub_SFU_out[start:start+ncols] = r_sub
             
             r_sum = np.sum(r_sub)
-            sum_SFU_out[rowx] = r_sum
+            # op3: sum_SFU 计算 1 / sum(exp(...))
+            sum_SFU_out[rowx] = np.float32(1.0) / r_sum
             
-            dst_flat[start:start+ncols] = r_sub / r_sum
+            dst_flat[start:start+ncols] = r_sub * sum_SFU_out[rowx]
         return dst_flat
 
     soft_max_f32_simple(src0_flat, mask_flat, dst_python, ncols, nrows_x, nrows_y, scale)
@@ -422,12 +423,14 @@ def soft_max(x, mask=None):
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sub_SFU_in1", max_out_re, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sum_SFU_in0", sub_SFU_out_re, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_in0", sub_SFU_out_re, is_sub_op=True)
+        # op3 输出：sum_SFU_out 是 1/sum(exp(...))，也是 op4 的输入
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_in1", sum_SFU_out_re, is_sub_op=True)
         
         # 保存输出
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-add_MN_MN_out", scaled_masked_x_re, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-max_out", max_out_re, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sub_SFU_out", sub_SFU_out_re, is_sub_op=True)
+        # op3 输出：sum_SFU 的结果是倒数
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sum_SFU_out", sum_SFU_out_re, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_out", dst_python, is_sub_op=True)
 
@@ -661,7 +664,7 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     store.set(f"cache_k_l{layer_id}", k_selected)
     store.set(f"cache_v_l{layer_id}", v_selected)
     
-    timed_op(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
+    store.set(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
     timed_op(f"node_{layer_id}_attn_scores", mul_mat, k_selected, store.get(f"Qcur-{layer_id}-permute"))
     timed_op(f"node_{layer_id}_attn_probs", soft_max, store.get(f"node_{layer_id}_attn_scores"), mask=store.get("leaf_12"))
     
@@ -669,11 +672,16 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     store.set(f"kqv_out-{layer_id}", store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'))
     timed_op(f"node_{layer_id}_attn_final", mul_mat, store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
-    # get_rows 取出第 token_index 个（默认 0）进行 residual add
-    timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
-    timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
-    timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
-    
+    # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
+    if NUM_LAYERS == 1:
+        # 直接用完整序列 residual 进入 FFN
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
+    else:
+        # 多层情形保留原有的 token gather 行为
+        timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
+        timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
+
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
     timed_op(f"ffn_norm-{layer_id}", mul, store.get(f"norm_ffn-{layer_id}"), store.get(f"{lid}.ffn_norm.weight"))
     timed_op(f"ffn_gate-{layer_id}", mul_mat, store.get(f"{lid}.ffn_gate.weight"), store.get(f"ffn_norm-{layer_id}"))
@@ -743,10 +751,15 @@ def run_final_layer(store: TensorStore, token_num: int):
     store.set(f"kqv_out-{layer_id}", store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'))
     timed_op(f"node_{layer_id}_attn_final", mul_mat, store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
-    # get_rows 取出第 token_index 个（默认 0）进行 residual add
-    timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
-    timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
-    timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
+    # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
+    if NUM_LAYERS == 1:
+        # 直接用完整序列 residual 进入 FFN
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
+    else:
+        # 多层情形保留原有的 token gather 行为
+        timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
+        timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
     
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
     timed_op(f"ffn_norm-{layer_id}", mul, store.get(f"norm_ffn-{layer_id}"), store.get(f"{lid}.ffn_norm.weight"))
@@ -759,11 +772,12 @@ def run_final_layer(store: TensorStore, token_num: int):
     
     store.set_debug(f"l_out-{layer_id}", store.get(f"l_out-{layer_id}"))
 
-    # Final norm and output projection
-    timed_op("norm", rms_norm, store.get(f"l_out-{layer_id}"))
-    timed_op("result_norm", mul, store.get("norm"), store.get("output_norm.weight"))
-    timed_op("result_output", mul_mat, store.get("output.weight"), store.get("result_norm"))
-    store.set_debug("result_output", store.get("result_output"))
+    # Final norm and output projection 
+    # (纯Python计算 L=32 时的词表投影极慢，且调试单层特征时通常不需要这部分，故注释跳过)
+    # timed_op("norm", rms_norm, store.get(f"l_out-{layer_id}"))
+    # timed_op("result_norm", mul, store.get("norm"), store.get("output_norm.weight"))
+    # timed_op("result_output", mul_mat, store.get("output.weight"), store.get("result_norm"))
+    # store.set_debug("result_output", store.get("result_output"))
     
     duration = time.time() - start_time
     print(f"✅ Finished layer {layer_id} in {duration:.3f} seconds | Output: l_out-{layer_id} shape = {store.get(f'l_out-{layer_id}').shape}")
@@ -783,7 +797,8 @@ def run_transformer(store: TensorStore, token_num: int):
     # 取消这里的注释！必须让最后一层运行！
     run_final_layer(store, token_num)
 
-    return store.get("result_output")
+    # 兼容注释掉 output 投影的情况，获取不到 result_output 就返回最后一层的 l_out
+    return store.store.get("result_output", store.get(f"l_out-{NUM_LAYERS - 1}"))
 
 # 示例用法
 if __name__ == "__main__":
