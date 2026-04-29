@@ -507,7 +507,7 @@
                 }
             },
             "PE01": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -529,7 +529,7 @@
                 }
             },
             "PE03": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -551,7 +551,7 @@
                 }
             },
             "PE11": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -573,7 +573,7 @@
                 }
             },
             "PE13": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -595,7 +595,7 @@
                 }
             },
             "PE21": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -617,7 +617,7 @@
                 }
             },
             "PE23": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -639,7 +639,7 @@
                 }
             },
             "PE31": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,
@@ -661,7 +661,7 @@
                 }
             },
             "PE33": {
-                "alu_opcode": "SFU_ACTIVATION",
+                "alu_opcode": "ex",
                 "transout_last_index": null,
                 "inport2": {
                     "src_id": null,

@@ -39,10 +39,10 @@
             "alu_opcode": "mul",
             "inport2":{
                     "src_id": null,
-                    "mode": null,        
+                    "mode": null,
                     "keep_last_index": null,
                     "constant": 0
-            },
+                },
             "inport1": {
                     "src_id": null,
                     "mode": "constant",
@@ -50,7 +50,28 @@
                     "constant": 1
             },
             "inport0":{
-                    "src_id": "DRAM_LC.LC2",
+                    "src_id": "DRAM_LC.LC0",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
+        },
+        "PE1": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "LC_PE.PE0",
                     "mode": "buffer",
                     "keep_last_index": null,
                     "constant": 0
@@ -131,7 +152,7 @@
             "mem_idx_mode": ["buffer", null, null],
             "mem_idx_keep_last_index": [7, null, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["LC_PE.PE0", null, null],
+            "idx": ["LC_PE.PE1", null, null],
             "idx_size": [31, null, null],
             "dim_stride": [32, null, null],
             "tailing_enable": [0, 0, 0],

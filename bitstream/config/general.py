@@ -101,7 +101,7 @@ class GAPEConfig(BaseConfigModule):
     """
     FIELD_MAP = [
         # ALU opcode (3 bits)
-        ("alu_opcode", 5, lambda x: x if isinstance(x, int) else (GAPEConfig.opcode_map().get(x, 0) if x is not None else 0)),
+        ("alu_opcode", 5, lambda x: GAPEConfig._encode_opcode(x)),
         ("transout_last_index", 4),
         
         # Port 2: src_id(3) + keep_last_index(4) + mode(2) + constant(32)
@@ -161,6 +161,18 @@ class GAPEConfig(BaseConfigModule):
         if isinstance(val, numbers.Real):
             return int.from_bytes(struct.pack('<f', float(val)), byteorder='little', signed=False)
         return val
+
+    @staticmethod
+    def _encode_opcode(val):
+        """Encode opcode and reject unknown symbolic names."""
+        if val is None:
+            return 0
+        if isinstance(val, int):
+            return val
+        opcode = GAPEConfig.opcode_map().get(val)
+        if opcode is None:
+            raise ValueError(f"Unsupported GAPE opcode: {val}")
+        return opcode
     
     @staticmethod
     def opcode_map():
@@ -180,7 +192,7 @@ class GAPEConfig(BaseConfigModule):
             "rec": 17,
             "sqrt": 18,
             "rec_sqrt": 20,
-            "sfu_activation": 24,
+            "ex": 24,
         }
     
     @staticmethod
