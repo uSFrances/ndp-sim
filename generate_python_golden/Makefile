@@ -8,7 +8,7 @@ all: golden single_op
 # 1. 产生 inputs 文件
 inputs:
 	@echo "=> Generating dummy inputs based on config.json..."
-	$(PYTHON) create_dummy_inputs.py
+	$(PYTHON) generate_seq_input.py
 
 # 2. 产生 weight 文件
 weights:

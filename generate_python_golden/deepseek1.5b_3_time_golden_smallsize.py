@@ -7,6 +7,11 @@ from tqdm import tqdm
 import json
 import math
 
+try:
+    FLOAT_ACCUM = np.float128  # Prefer highest precision available
+except AttributeError:  # pragma: no cover - fallback on platforms without float128
+    FLOAT_ACCUM = np.longdouble
+
 # --- Model Configuration Loader ---
 def load_config(config_path):
     """从 JSON 文件加载模型配置"""
@@ -156,26 +161,33 @@ def rms_norm(x):
     return dst
 
 @log_op
-def mul(x, y): return x * y
+def ensure_fp32(x):
+    if isinstance(x, np.ndarray) and x.dtype != np.float32:
+        return x.astype(np.float32, copy=False)
+    return x
 
 @log_op
-def matmul_2d(src0, src1, m, n ,k):
+def mul(x, y):
+    return ensure_fp32(x) * ensure_fp32(y)
+
+@log_op
+def matmul_2d(src0, src1, m, n ,k, out_dtype=np.float32):
     dst_py = np.zeros((m,n), dtype=np.float32) 
   
     for i in range(m):          
         for j in range(n):      
-            sum_val = np.float64(0.0)       
+            sum_val = FLOAT_ACCUM(0.0)       
             for l in range(k):  
-                a_val = np.float64(src0[i, l])
-                b_val = np.float64(src1[l, j])
+                a_val = src0[i, l].astype(FLOAT_ACCUM)
+                b_val = src1[l, j].astype(FLOAT_ACCUM)
                 tmp = a_val * b_val
                 sum_val += tmp
             dst_py[i, j] = np.float32(sum_val)  
 
-    return dst_py
+    return dst_py.astype(out_dtype, copy=False)
 
 @log_op
-def mul_mat(src0, src1):
+def mul_mat(src0, src1, out_dtype=np.float32):
     # print("src0.shape:", src0.shape)
     # print("src1.shape:", src1.shape)
 
@@ -199,9 +211,9 @@ def mul_mat(src0, src1):
 
         src0_re_T = src0_re.T
 
-        dst_py = matmul_2d(src0_re_T, src1_re, m, n, k)
+        dst_py = matmul_2d(src0_re_T, src1_re, m, n, k, out_dtype=out_dtype)
 
-        return dst_py.reshape((m,n,1,1), order='F')
+        return dst_py.reshape((m,n,1,1), order='F').astype(out_dtype, copy=False)
 
     elif (ne04 == ne14) and (ne04 == 1):#批次为1的三维张量处理
 
@@ -211,7 +223,7 @@ def mul_mat(src0, src1):
             return None
 
         #dst_py = np.zeros((1,ne13,n,m), dtype=np.float32) 
-        dst_py = np.zeros((m,n,ne13,1), dtype=np.float32) 
+        dst_py = np.zeros((m,n,ne13,1), dtype=out_dtype) 
         for j in range(ne03):
             for i in range(scale):
                 '''
@@ -232,7 +244,7 @@ def mul_mat(src0, src1):
                 ex_src0 = src0[:,:,j,0]
                 ex_src1 = src1[:,:,j*scale+i,0]
                 ex_src0_T = ex_src0.T
-                dst = matmul_2d(ex_src0_T, ex_src1, m, n, k)
+                dst = matmul_2d(ex_src0_T, ex_src1, m, n, k, out_dtype=out_dtype)
                 dst_py[:,:,j*scale+i,0] = dst
 
         return dst_py
@@ -242,7 +254,8 @@ def mul_mat(src0, src1):
         return None
 
 @log_op
-def add(x, y): return x + y
+def add(x, y):
+    return ensure_fp32(x) + ensure_fp32(y)
 
 @log_op
 def rope(x):
@@ -437,7 +450,9 @@ def soft_max(x, mask=None):
     return dst_python
 
 @log_op
-def unary(x): return x / (1 + np.exp(-x))
+def unary(x):
+    x_fp32 = ensure_fp32(x)
+    return x_fp32 / (1 + np.exp(-x_fp32))
 
 @log_op
 def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
@@ -448,14 +463,14 @@ def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
     """
     assert src0.ndim == 4
     assert src1.ndim == 4
-    assert src0.dtype == np.float32
+    assert src0.dtype in (np.float16, np.float32)
     assert src1.dtype == np.int32
 
     D0, D1_src, D2, D3 = src0.shape
     _, D1_dst, D2_dst, D3_dst = src1.shape
     assert (D1_src >= np.max(src1) + 1), "src1索引超出src0范围"
 
-    dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=np.float32, order='F')
+    dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=src0.dtype, order='F')
 
     for i1 in range(D1_dst):
         for i2 in range(D2_dst):
@@ -615,7 +630,7 @@ class TensorStore:
 
 
 def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
-    def timed_op(name: str, func, *args, **kwargs):
+    def timed_op(name: str, func, *args, store_dtype=None, **kwargs):
         global CURRENT_NODE_PREFIX
         op_name = func.__name__
         # 拼接：层数 + 节点名 + 算子名
@@ -633,6 +648,9 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
         result = func(*args, **kwargs)
         duration = time.time() - start
         print(f"  ⏱️ {name:<30} took {duration:.4f} seconds")
+
+        if store_dtype is not None:
+            result = convert(result, dtype=store_dtype)
         
         # 2. 自动保存带有名称的输出节点张量
         if isinstance(result, np.ndarray):
@@ -640,6 +658,27 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
             
         store.set(name, result)
         CURRENT_NODE_PREFIX = ""
+
+    def timed_matmul_fp16(name: str, lhs: np.ndarray, rhs: np.ndarray):
+        timed_op(
+            name,
+            mul_mat,
+            lhs,
+            rhs,
+            out_dtype=np.float32,
+            store_dtype='fp16',
+        )
+    def timed_matmul_fp32(name: str, lhs: np.ndarray, rhs: np.ndarray):
+        timed_op(
+            name,
+            mul_mat,
+            lhs,
+            rhs,
+            out_dtype=np.float32
+        )
+
+    def store_fp16(name: str, value: np.ndarray):
+        store.set(name, convert(value, dtype='fp16'))
         
     lid = f"blk.{layer_id}"
     print(f"🟡 Running transformer layer {layer_id}...")
@@ -647,16 +686,35 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
 
     input_key = "inp_embd" if layer_id == 0 else f"l_out-{layer_id - 1}"
     timed_op(f"norm-{layer_id}", rms_norm, store.get(input_key))
-    timed_op(f"attn_norm-{layer_id}", mul, store.get(f"norm-{layer_id}"), store.get(f"{lid}.attn_norm.weight"))
-    timed_op(f"node_{layer_id}_q", mul_mat, store.get(f"{lid}.attn_q.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_op(
+        f"attn_norm-{layer_id}",
+        mul,
+        store.get(f"norm-{layer_id}"),
+        store.get(f"{lid}.attn_norm.weight"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"node_{layer_id}_q", store.get(f"{lid}.attn_q.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Qcur-{layer_id}-add", add, store.get(f"node_{layer_id}_q"), store.get(f"{lid}.attn_q.bias"))
-    timed_op(f"Qcur-{layer_id}", rope, store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'))
-    timed_op(f"node_{layer_id}_k", mul_mat, store.get(f"{lid}.attn_k.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_op(
+        f"Qcur-{layer_id}",
+        rope,
+        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"node_{layer_id}_k", store.get(f"{lid}.attn_k.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Kcur-{layer_id}-add", add, store.get(f"node_{layer_id}_k"), store.get(f"{lid}.attn_k.bias"))
-    timed_op(f"Kcur-{layer_id}", rope, store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'))
-    timed_op(f"node_{layer_id}_v", mul_mat, store.get(f"{lid}.attn_v.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_op(
+        f"Kcur-{layer_id}",
+        rope,
+        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"node_{layer_id}_v", store.get(f"{lid}.attn_v.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Vcur-{layer_id}-add", add, store.get(f"node_{layer_id}_v"), store.get(f"{lid}.attn_v.bias"))
-    store.set(f"Vcur-{layer_id}", store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'))
+    store_fp16(
+        f"Vcur-{layer_id}",
+        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
+    )
     
     update_kv_cache(store, layer_id, store.get(f"Kcur-{layer_id}"), store.get(f"Vcur-{layer_id}"))
     
@@ -664,13 +722,22 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     store.set(f"cache_k_l{layer_id}", k_selected)
     store.set(f"cache_v_l{layer_id}", v_selected)
     
-    store.set(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
-    timed_op(f"node_{layer_id}_attn_scores", mul_mat, k_selected, store.get(f"Qcur-{layer_id}-permute"))
-    timed_op(f"node_{layer_id}_attn_probs", soft_max, store.get(f"node_{layer_id}_attn_scores"), mask=store.get("leaf_12"))
+    store_fp16(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
+    timed_matmul_fp32(f"node_{layer_id}_attn_scores", k_selected, store.get(f"Qcur-{layer_id}-permute"))
+    timed_op(
+        f"node_{layer_id}_attn_probs",
+        soft_max,
+        store.get(f"node_{layer_id}_attn_scores"),
+        mask=store.get("leaf_12"),
+        store_dtype='fp16',
+    )
     
-    timed_op(f"node_{layer_id}_attn_out", mul_mat, v_selected, store.get(f"node_{layer_id}_attn_probs"))
-    store.set(f"kqv_out-{layer_id}", store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'))
-    timed_op(f"node_{layer_id}_attn_final", mul_mat, store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
+    timed_matmul_fp16(f"node_{layer_id}_attn_out", v_selected, store.get(f"node_{layer_id}_attn_probs"))
+    store_fp16(
+        f"kqv_out-{layer_id}",
+        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'),
+    )
+    timed_matmul_fp16(f"node_{layer_id}_attn_final", store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
     # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
     if NUM_LAYERS == 1:
@@ -683,12 +750,24 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
         timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
 
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
-    timed_op(f"ffn_norm-{layer_id}", mul, store.get(f"norm_ffn-{layer_id}"), store.get(f"{lid}.ffn_norm.weight"))
-    timed_op(f"ffn_gate-{layer_id}", mul_mat, store.get(f"{lid}.ffn_gate.weight"), store.get(f"ffn_norm-{layer_id}"))
+    timed_op(
+        f"ffn_norm-{layer_id}",
+        mul,
+        store.get(f"norm_ffn-{layer_id}"),
+        store.get(f"{lid}.ffn_norm.weight"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"ffn_gate-{layer_id}", store.get(f"{lid}.ffn_gate.weight"), store.get(f"ffn_norm-{layer_id}"))
     timed_op(f"ffn_silu-{layer_id}", unary, store.get(f"ffn_gate-{layer_id}"))
-    timed_op(f"ffn_up-{layer_id}", mul_mat, store.get(f"{lid}.ffn_up.weight"), store.get(f"ffn_norm-{layer_id}"))
-    timed_op(f"ffn_gate_par-{layer_id}", mul, store.get(f"ffn_silu-{layer_id}"), store.get(f"ffn_up-{layer_id}"))
-    timed_op(f"ffn_out-{layer_id}", mul_mat, store.get(f"{lid}.ffn_down.weight"), store.get(f"ffn_gate_par-{layer_id}"))
+    timed_matmul_fp16(f"ffn_up-{layer_id}", store.get(f"{lid}.ffn_up.weight"), store.get(f"ffn_norm-{layer_id}"))
+    timed_op(
+        f"ffn_gate_par-{layer_id}",
+        mul,
+        store.get(f"ffn_silu-{layer_id}"),
+        store.get(f"ffn_up-{layer_id}"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"ffn_out-{layer_id}", store.get(f"{lid}.ffn_down.weight"), store.get(f"ffn_gate_par-{layer_id}"))
     timed_op(f"l_out-{layer_id}", add, store.get(f"ffn_out-{layer_id}"), store.get(f"ffn_inp-{layer_id}"))
     
     store.set_debug(f"l_out-{layer_id}", store.get(f"l_out-{layer_id}"))
@@ -703,7 +782,7 @@ def run_final_layer(store: TensorStore, token_num: int):
     start_time = time.time()
 
     # 此处同样植入带跟踪的 timed_op，替换原来的 store.set
-    def timed_op(name: str, func, *args, **kwargs):
+    def timed_op(name: str, func, *args, store_dtype=None, **kwargs):
         global CURRENT_NODE_PREFIX
         op_name = func.__name__
         prefix = f"blk.{layer_id}_{name}_op-{op_name}"
@@ -712,27 +791,69 @@ def run_final_layer(store: TensorStore, token_num: int):
         for i, arg in enumerate(args):
             if isinstance(arg, np.ndarray): save_io_tensor(f"{prefix}_in{i}", arg)
         result = func(*args, **kwargs)
+        if store_dtype is not None:
+            result = convert(result, dtype=store_dtype)
         if isinstance(result, np.ndarray): save_io_tensor(f"{prefix}_out", result)
         store.set(name, result)
         CURRENT_NODE_PREFIX = ""
+
+    def timed_matmul_fp16(name: str, lhs: np.ndarray, rhs: np.ndarray):
+        timed_op(
+            name,
+            mul_mat,
+            lhs,
+            rhs,
+            out_dtype=np.float32,
+            store_dtype='fp16',
+        )
+    def timed_matmul_fp32(name: str, lhs: np.ndarray, rhs: np.ndarray):
+        timed_op(
+            name,
+            mul_mat,
+            lhs,
+            rhs,
+            out_dtype=np.float32
+        )
+
+    def store_fp16(name: str, value: np.ndarray):
+        store.set(name, convert(value, dtype='fp16'))
 
     # 处理单层情况：如果是第一层(layer_id=0)，输入为inp_embd
     input_key = "inp_embd" if layer_id == 0 else f"l_out-{layer_id - 1}"
 
     # Q/K/V 分支
     timed_op(f"norm-{layer_id}", rms_norm, store.get(input_key))
-    timed_op(f"attn_norm-{layer_id}", mul, store.get(f"norm-{layer_id}"), store.get(f"{lid}.attn_norm.weight"))
-    timed_op(f"node_{layer_id}_q", mul_mat, store.get(f"{lid}.attn_q.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_op(
+        f"attn_norm-{layer_id}",
+        mul,
+        store.get(f"norm-{layer_id}"),
+        store.get(f"{lid}.attn_norm.weight"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"node_{layer_id}_q", store.get(f"{lid}.attn_q.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Qcur-{layer_id}-add", add, store.get(f"node_{layer_id}_q"), store.get(f"{lid}.attn_q.bias"))
-    timed_op(f"Qcur-{layer_id}", rope, store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'))
+    timed_op(
+        f"Qcur-{layer_id}",
+        rope,
+        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'),
+        store_dtype='fp16',
+    )
     
-    timed_op(f"node_{layer_id}_k", mul_mat, store.get(f"{lid}.attn_k.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_matmul_fp16(f"node_{layer_id}_k", store.get(f"{lid}.attn_k.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Kcur-{layer_id}-add", add, store.get(f"node_{layer_id}_k"), store.get(f"{lid}.attn_k.bias"))
-    timed_op(f"Kcur-{layer_id}", rope, store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'))
+    timed_op(
+        f"Kcur-{layer_id}",
+        rope,
+        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
+        store_dtype='fp16',
+    )
     
-    timed_op(f"node_{layer_id}_v", mul_mat, store.get(f"{lid}.attn_v.weight"), store.get(f"attn_norm-{layer_id}"))
+    timed_matmul_fp16(f"node_{layer_id}_v", store.get(f"{lid}.attn_v.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Vcur-{layer_id}-add", add, store.get(f"node_{layer_id}_v"), store.get(f"{lid}.attn_v.bias"))
-    store.set(f"Vcur-{layer_id}", store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'))
+    store_fp16(
+        f"Vcur-{layer_id}",
+        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
+    )
     
     # 更新 KV Cache
     update_kv_cache(store, layer_id, store.get(f"Kcur-{layer_id}"), store.get(f"Vcur-{layer_id}"))
@@ -743,13 +864,22 @@ def run_final_layer(store: TensorStore, token_num: int):
     store.set(f"cache_v_l{layer_id}", v_selected)
     
     # 计算注意力
-    store.set(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
-    timed_op(f"node_{layer_id}_attn_scores", mul_mat, k_selected, store.get(f"Qcur-{layer_id}-permute"))
-    timed_op(f"node_{layer_id}_attn_probs", soft_max, store.get(f"node_{layer_id}_attn_scores"), mask=store.get("leaf_12"))
+    store_fp16(f"Qcur-{layer_id}-permute", store.get(f"Qcur-{layer_id}").transpose(0, 2, 1, 3))
+    timed_matmul_fp32(f"node_{layer_id}_attn_scores", k_selected, store.get(f"Qcur-{layer_id}-permute"))
+    timed_op(
+        f"node_{layer_id}_attn_probs",
+        soft_max,
+        store.get(f"node_{layer_id}_attn_scores"),
+        mask=store.get("leaf_12"),
+        store_dtype='fp16',
+    )
     
-    timed_op(f"node_{layer_id}_attn_out", mul_mat, v_selected, store.get(f"node_{layer_id}_attn_probs"))
-    store.set(f"kqv_out-{layer_id}", store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'))
-    timed_op(f"node_{layer_id}_attn_final", mul_mat, store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
+    timed_matmul_fp16(f"node_{layer_id}_attn_out", v_selected, store.get(f"node_{layer_id}_attn_probs"))
+    store_fp16(
+        f"kqv_out-{layer_id}",
+        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'),
+    )
+    timed_matmul_fp16(f"node_{layer_id}_attn_final", store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
     # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
     if NUM_LAYERS == 1:
@@ -762,12 +892,24 @@ def run_final_layer(store: TensorStore, token_num: int):
         timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
     
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
-    timed_op(f"ffn_norm-{layer_id}", mul, store.get(f"norm_ffn-{layer_id}"), store.get(f"{lid}.ffn_norm.weight"))
-    timed_op(f"ffn_gate-{layer_id}", mul_mat, store.get(f"{lid}.ffn_gate.weight"), store.get(f"ffn_norm-{layer_id}"))
+    timed_op(
+        f"ffn_norm-{layer_id}",
+        mul,
+        store.get(f"norm_ffn-{layer_id}"),
+        store.get(f"{lid}.ffn_norm.weight"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"ffn_gate-{layer_id}", store.get(f"{lid}.ffn_gate.weight"), store.get(f"ffn_norm-{layer_id}"))
     timed_op(f"ffn_silu-{layer_id}", unary, store.get(f"ffn_gate-{layer_id}"))
-    timed_op(f"ffn_up-{layer_id}", mul_mat, store.get(f"{lid}.ffn_up.weight"), store.get(f"ffn_norm-{layer_id}"))
-    timed_op(f"ffn_gate_par-{layer_id}", mul, store.get(f"ffn_silu-{layer_id}"), store.get(f"ffn_up-{layer_id}"))
-    timed_op(f"ffn_out-{layer_id}", mul_mat, store.get(f"{lid}.ffn_down.weight"), store.get(f"ffn_gate_par-{layer_id}"))
+    timed_matmul_fp16(f"ffn_up-{layer_id}", store.get(f"{lid}.ffn_up.weight"), store.get(f"ffn_norm-{layer_id}"))
+    timed_op(
+        f"ffn_gate_par-{layer_id}",
+        mul,
+        store.get(f"ffn_silu-{layer_id}"),
+        store.get(f"ffn_up-{layer_id}"),
+        store_dtype='fp16',
+    )
+    timed_matmul_fp16(f"ffn_out-{layer_id}", store.get(f"{lid}.ffn_down.weight"), store.get(f"ffn_gate_par-{layer_id}"))
     timed_op(f"l_out-{layer_id}", add, store.get(f"ffn_out-{layer_id}"), store.get(f"ffn_inp-{layer_id}"))
     
     store.set_debug(f"l_out-{layer_id}", store.get(f"l_out-{layer_id}"))

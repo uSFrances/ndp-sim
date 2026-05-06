@@ -46,9 +46,17 @@ def save_new_weight(folder, name, tensor):
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-    tensor = tensor.astype(np.float32)
     shape_str = "x".join(map(str, tensor.shape))
-    dtype_str = "f32" 
+    dtype_str = {
+        np.float32: "f32",
+        np.float16: "f16",
+        np.float64: "f64",
+        np.int32: "i32"
+    }.get(tensor.dtype.type, "unknown")
+    
+    if dtype_str == "unknown":
+        raise ValueError(f"Unsupported dtype for saving: {tensor.dtype}")
+
     filename = f"{name}_shape{shape_str}_dtype_{dtype_str}.bin"
     filepath = os.path.join(folder, filename)
     tensor.flatten(order='F').tofile(filepath)
