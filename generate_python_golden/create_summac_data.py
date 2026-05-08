@@ -21,7 +21,7 @@ def convert_to_128bit_txt(bin_path, rows=None, cols=None):
             str_float1 = float_to_bin(data[i+1])
             str_float2 = float_to_bin(data[i+2])
             str_float3 = float_to_bin(data[i+3])
-            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\\n")
+            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
 
     convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
 
@@ -39,7 +39,7 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None):
     with open(txt_path, 'w') as f:
         for r in range(rows):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
-            f.write("\\n")
+            f.write("\n")
 
 def fp32_fma_accumulate(acc, a, b):
     """
@@ -81,7 +81,8 @@ def main():
     os.makedirs(os.path.join(before_install_dir, op_id), exist_ok=True)
 
     # 1. 生成 M512xN512 大小的 fp32 随机数据
-    M, N = 512, 512
+    # M, N = 512, 512
+    M, N = 64, 64
     np.random.seed(0)
     input_data = np.random.rand(M, N).astype(np.float32)
 
