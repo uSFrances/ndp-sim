@@ -32,11 +32,11 @@ DEFAULT_OPLIST = [
     "add_fp32MN_fp16MN_fp32MN",
     "rmsnorm",
     "mul_fp32MN_fp32N_fp16MN",
-    "gemm_ring",
+    "gemm_ring_fnn",
     "silu",
-    "gemm_ring",
+    "gemm_ring_fnn",
     "mul_fp32MN_fp16MN_fp16MN",
-    "gemm_ring",
+    "gemm_ring_fnn",
     "add_fp32MN_fp16MN_fp32MN"
 ]
 
@@ -46,6 +46,7 @@ ALIAS_TO_FILE = {
     "rope": "rope.json",
     "rmsnorm": "rmsnorm.json",
     "gemm_ring": "gemm_ring.json",
+    "gemm_ring_fnn": "gemm_ring_fnn.json",
     "gemm_local": "gemm_local.json",
     "layer0": "layer0.json",
 
