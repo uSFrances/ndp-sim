@@ -932,7 +932,7 @@ def _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates(
         ),
     }
 
-def _compute_prefill_add_fp16MN_fp32N_fp16MN_control_register_updates(
+def _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,) -> dict[str, int]:
     """Placeholder for prefill_add_fp16MN_fp32N_fp16MN control register logic."""
@@ -988,7 +988,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_gemm_ring_4slice": _compute_prefill_gemm_ring_4slice_control_register_updates,
     "prefill_add_fp32MN_fp32MN_fp32MN": _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_mul_fp32MN_fp32MN_fp32MN": _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates,
-    "prefill_add_fp16MN_fp32N_fp16MN": _compute_prefill_add_fp16MN_fp32N_fp16MN_control_register_updates,
+    "prefill_add_V_fp16MN_fp32N_fp16MN": _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates,
 
 
 }

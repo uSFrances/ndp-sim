@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,9 @@ def load_execution_plan_json(file_path: str | Path) -> ExecutionPlanInput:
     if not isinstance(raw, dict):
         raise JsonFormatError("Top-level JSON must be an object.")
 
+    params = _parse_params(raw)
     used_slices = _parse_used_slices(raw)
-    operators = _parse_operators(_pick(raw, "operators", "ops", "算子列表"), used_slices)
+    operators = _parse_operators(_pick(raw, "operators", "ops", "算子列表"), used_slices, params)
     if not operators:
         raise JsonFormatError("No operators found in JSON.")
 
@@ -75,7 +77,11 @@ def _parse_used_slices(raw: dict[str, Any]) -> int:
     return _parse_slice_mask_value(value, field_name="used_slices")
 
 
-def _parse_operators(raw_ops: Any, default_used_slices: int) -> list[OperatorSpec]:
+def _parse_operators(
+    raw_ops: Any,
+    default_used_slices: int,
+    params: dict[str, int],
+) -> list[OperatorSpec]:
     if raw_ops is None:
         raise JsonFormatError("Missing operators section.")
 
@@ -85,14 +91,24 @@ def _parse_operators(raw_ops: Any, default_used_slices: int) -> list[OperatorSpe
             if not isinstance(item, dict):
                 raise JsonFormatError(f"operators[{idx}] must be an object.")
             operators.append(
-                _parse_operator(item, fallback_id=f"op_{idx}", default_used_slices=default_used_slices)
+                _parse_operator(
+                    item,
+                    fallback_id=f"op_{idx}",
+                    default_used_slices=default_used_slices,
+                    params=params,
+                )
             )
     elif isinstance(raw_ops, dict):
         for key, item in raw_ops.items():
             if not isinstance(item, dict):
                 raise JsonFormatError(f"operators[{key}] must be an object.")
             operators.append(
-                _parse_operator(item, fallback_id=str(key), default_used_slices=default_used_slices)
+                _parse_operator(
+                    item,
+                    fallback_id=str(key),
+                    default_used_slices=default_used_slices,
+                    params=params,
+                )
             )
     else:
         raise JsonFormatError("operators must be a list or object.")
@@ -100,7 +116,12 @@ def _parse_operators(raw_ops: Any, default_used_slices: int) -> list[OperatorSpe
     return operators
 
 
-def _parse_operator(raw_op: dict[str, Any], fallback_id: str, default_used_slices: int) -> OperatorSpec:
+def _parse_operator(
+    raw_op: dict[str, Any],
+    fallback_id: str,
+    default_used_slices: int,
+    params: dict[str, int],
+) -> OperatorSpec:
     op_id = _pick(raw_op, "id", "op_id", "算子编号") or fallback_id
     if not isinstance(op_id, str) or not op_id.strip():
         raise JsonFormatError("Operator id must be a non-empty string.")
@@ -116,12 +137,12 @@ def _parse_operator(raw_op: dict[str, Any], fallback_id: str, default_used_slice
         else _parse_slice_mask_value(raw_used_slices, field_name=f"Operator {op_id}: used_slices")
     )
 
-    inputs = _parse_inputs(raw_op, op_id)
-    output = _parse_output(raw_op, op_id)
+    inputs = _parse_inputs(raw_op, op_id, params)
+    output = _parse_output(raw_op, op_id, params)
     return OperatorSpec(op_id=op_id, op_type=op_type, used_slices=used_slices, inputs=inputs, output=output)
 
 
-def _parse_inputs(raw_op: dict[str, Any], op_id: str) -> dict[str, TensorSpec]:
+def _parse_inputs(raw_op: dict[str, Any], op_id: str, params: dict[str, int]) -> dict[str, TensorSpec]:
     raw_inputs = _pick(raw_op, "inputs", "输入")
 
     if raw_inputs is None:
@@ -139,7 +160,7 @@ def _parse_inputs(raw_op: dict[str, Any], op_id: str) -> dict[str, TensorSpec]:
         raw_tensor = _pick(raw_inputs, *aliases, *(f"输入{a}" for a in aliases))
         if raw_tensor is None:
             continue
-        inputs[canonical] = _parse_input_tensor(raw_tensor, op_id, canonical)
+        inputs[canonical] = _parse_input_tensor(raw_tensor, op_id, canonical, params)
 
     if not inputs:
         raise JsonFormatError(f"Operator {op_id}: at least one input is required.")
@@ -147,11 +168,11 @@ def _parse_inputs(raw_op: dict[str, Any], op_id: str) -> dict[str, TensorSpec]:
     return inputs
 
 
-def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str) -> TensorSpec:
+def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str, params: dict[str, int]) -> TensorSpec:
     if not isinstance(raw_tensor, dict):
         raise JsonFormatError(f"Operator {op_id}: input {name} must be an object.")
 
-    shape = _parse_shape(raw_tensor, f"Operator {op_id}: input {name}")
+    shape = _parse_shape(raw_tensor, f"Operator {op_id}: input {name}", params)
     dtype = _parse_dtype(raw_tensor, f"Operator {op_id}: input {name}")
     remapping = _parse_remapping(raw_tensor, f"Operator {op_id}: input {name}")
     special_type = _parse_special_type(raw_tensor, f"Operator {op_id}: input {name}")
@@ -166,14 +187,14 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str) -> TensorSpec:
     )
 
 
-def _parse_output(raw_op: dict[str, Any], op_id: str) -> TensorSpec:
+def _parse_output(raw_op: dict[str, Any], op_id: str, params: dict[str, int]) -> TensorSpec:
     raw_output = _pick(raw_op, "output", "D", "输出D", "输出")
     if raw_output is None:
         raise JsonFormatError(f"Operator {op_id}: output is required.")
     if not isinstance(raw_output, dict):
         raise JsonFormatError(f"Operator {op_id}: output must be an object.")
 
-    shape = _parse_shape(raw_output, f"Operator {op_id}: output")
+    shape = _parse_shape(raw_output, f"Operator {op_id}: output", params)
     dtype = _parse_dtype(raw_output, f"Operator {op_id}: output")
     remapping = _parse_remapping(raw_output, f"Operator {op_id}: output")
     special_type = _parse_special_type(raw_output, f"Operator {op_id}: output")
@@ -222,15 +243,112 @@ def _parse_dtype(raw_tensor: dict[str, Any], location: str) -> str:
     return mapped
 
 
-def _parse_shape(raw_tensor: dict[str, Any], location: str) -> tuple[int, int, int]:
+def _parse_shape(raw_tensor: dict[str, Any], location: str, params: dict[str, int]) -> tuple[int, int, int]:
     raw_shape = _pick(raw_tensor, "shape", "tensor_shape", "tensor形状")
     if raw_shape is None:
         raise JsonFormatError(f"{location} missing shape.")
     if not isinstance(raw_shape, list) or len(raw_shape) != 3:
         raise JsonFormatError(f"{location} shape must be [K, M, N].")
-    if not all(isinstance(x, int) and x > 0 for x in raw_shape):
-        raise JsonFormatError(f"{location} shape values must be positive integers.")
-    return (raw_shape[0], raw_shape[1], raw_shape[2])
+    dims = tuple(_parse_shape_dim(x, location, idx, params) for idx, x in enumerate(raw_shape))
+    return (dims[0], dims[1], dims[2])
+
+
+def _parse_shape_dim(value: Any, location: str, idx: int, params: dict[str, int]) -> int:
+    if isinstance(value, int):
+        dim = value
+    elif isinstance(value, str):
+        dim = _eval_shape_expression(value, params, f"{location} shape[{idx}]")
+    else:
+        raise JsonFormatError(
+            f"{location} shape[{idx}] must be a positive integer or expression string."
+        )
+
+    if dim <= 0:
+        raise JsonFormatError(f"{location} shape[{idx}] must be a positive integer.")
+    return dim
+
+
+def _parse_params(raw: dict[str, Any]) -> dict[str, int]:
+    raw_params = _pick(raw, "params", "常量", "参数")
+    if raw_params is None:
+        return {}
+    if not isinstance(raw_params, dict):
+        raise JsonFormatError("params must be an object.")
+
+    params: dict[str, int] = {}
+    for key, value in raw_params.items():
+        if not isinstance(key, str) or not key.strip():
+            raise JsonFormatError("params keys must be non-empty strings.")
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            params[key] = value
+            continue
+        # Keep params permissive: non-numeric entries like target_op are ignored
+        # by shape expression evaluation instead of failing the whole JSON load.
+    return params
+
+
+def _eval_shape_expression(expr: str, params: dict[str, int], field_name: str) -> int:
+    text = expr.strip()
+    if not text:
+        raise JsonFormatError(f"{field_name} expression cannot be empty.")
+
+    try:
+        node = ast.parse(text, mode="eval")
+    except SyntaxError as exc:
+        raise JsonFormatError(f"{field_name} has invalid expression syntax: {expr}") from exc
+
+    value = _eval_ast_node(node.body, params, field_name)
+    if isinstance(value, bool):
+        raise JsonFormatError(f"{field_name} expression must evaluate to an integer.")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise JsonFormatError(f"{field_name} expression result must be an integer, got {value}.")
+        value = int(value)
+    if not isinstance(value, int):
+        raise JsonFormatError(f"{field_name} expression must evaluate to an integer.")
+    return value
+
+
+def _eval_ast_node(node: ast.AST, params: dict[str, int], field_name: str) -> int | float:
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise JsonFormatError(f"{field_name} contains unsupported constant: {node.value!r}")
+        return node.value
+
+    if isinstance(node, ast.Name):
+        if node.id not in params:
+            raise JsonFormatError(f"{field_name} references unknown parameter: {node.id}")
+        return params[node.id]
+
+    if isinstance(node, ast.UnaryOp):
+        operand = _eval_ast_node(node.operand, params, field_name)
+        if isinstance(node.op, ast.UAdd):
+            return +operand
+        if isinstance(node.op, ast.USub):
+            return -operand
+        raise JsonFormatError(f"{field_name} contains unsupported unary operator.")
+
+    if isinstance(node, ast.BinOp):
+        left = _eval_ast_node(node.left, params, field_name)
+        right = _eval_ast_node(node.right, params, field_name)
+        try:
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.FloorDiv):
+                return left // right
+            if isinstance(node.op, ast.Mod):
+                return left % right
+        except ZeroDivisionError as exc:
+            raise JsonFormatError(f"{field_name} expression division by zero.") from exc
+        raise JsonFormatError(f"{field_name} contains unsupported binary operator.")
+
+    raise JsonFormatError(f"{field_name} contains unsupported expression element.")
 
 
 def _parse_remapping(raw_tensor: dict[str, Any], location: str) -> tuple[int, ...] | None:

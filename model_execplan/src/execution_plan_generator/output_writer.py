@@ -544,7 +544,7 @@ def _format_instruction_explanation_block(idx: int, command: int, explanation: s
     if not clauses:
         return [header]
     indent = " " * 4
-    lines = [f"{header} \n{indent}{clauses[0]},"]
+    lines = [f"{header} {indent}{clauses[0]},"]
     for clause in clauses[1:-1]:
         lines.append(f"{indent}{clause},")
     if len(clauses) > 1:
