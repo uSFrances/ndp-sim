@@ -2,259 +2,285 @@ import numpy as np
 import os
 import glob
 import re
-import argparse
 import struct
+
+def float16_to_bin(f):
+    """将单个 float16 转换为 16 位二进制字符串"""
+    # 使用 numpy 直接提取其二进制表示
+    return bin(np.float16(f).view(np.uint16))[2:].zfill(16)
 
 def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
-def convert_to_decimal_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）"""
-    if not os.path.exists(bin_path):
-        return
-    data = np.fromfile(bin_path, dtype=np.float32)
+def convert_to_decimal_txt(bin_path, rows=None, cols=None, file_order='C'):
+    """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行），根据 file_order 解释一维序列到矩阵"""
+    data = np.fromfile(bin_path, dtype=np.float16)
     if rows is None or cols is None:
         rows, cols = data.size, 1
     if rows * cols != data.size:
         print(f"  ⚠️ Decimal reshape mismatch: {bin_path}, fallback to Nx1")
         rows, cols = data.size, 1
 
-    matrix = data.reshape((rows, cols), order='C')
-    txt_path = bin_path.replace('.bin', '_decimal.txt')
+    # 使用传入的 file_order ('C' 或 'F') 来重塑矩阵
+    matrix = data.reshape((rows, cols), order=file_order)
+    txt_path = bin_path.replace('.bin', f'_{rows}x{cols}_decimal.txt')
     with open(txt_path, 'w') as f:
         for r in range(rows):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
             f.write("\n")
 
-def convert_to_128bit_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出为每行 128-bit (4个float32) 的 txt 文件(二进制格式)"""
-    if not os.path.exists(bin_path):
-        return
-    data = np.fromfile(bin_path, dtype=np.float32)
+    # 追加保存十六进制 txt (float16 转 uint16)
+    hex_txt_path = bin_path.replace('.bin', f'_{rows}x{cols}_hex.txt')
+    matrix_uint = data.view(np.uint16).reshape((rows, cols), order=file_order)
+    with open(hex_txt_path, 'w') as f:
+        for r in range(rows):
+            f.write(",".join(f"{v:04x}" for v in matrix_uint[r]))
+            f.write("\n")
 
-    remainder = len(data) % 4
+def convert_to_128bit_txt(bin_path, rows=None, cols=None, file_order='C'):
+    """读取 bin 文件并输出为每行 128-bit (8个float16) 的txt文件(二进制格式)，并根据 file_order 生成 decimal/hex txt"""
+    data = np.fromfile(bin_path, dtype=np.float16)
+
+    remainder = len(data) % 8
     if remainder != 0:
-        data = np.concatenate((data, np.zeros(4 - remainder, dtype=np.float32)))
+        data = np.concatenate((data, np.zeros(8 - remainder, dtype=np.float16)))
 
     txt_path = bin_path.replace('.bin', '.txt')
     with open(txt_path, 'w') as f:
-        for i in range(0, len(data), 4):
-            str_float0 = float_to_bin(data[i])
-            str_float1 = float_to_bin(data[i+1])
-            str_float2 = float_to_bin(data[i+2])
-            str_float3 = float_to_bin(data[i+3])
-            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
-    print(f"🔎 Converted to 128-bit binary TXT: {os.path.basename(txt_path)}")
+        for i in range(0, len(data), 8):
+            strs = [float16_to_bin(data[i+j]) for j in range(8)]
+            # 倒序拼接保证低地址对应底层比特
+            f.write("".join(reversed(strs)) + "\n")
 
-    convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
+    # 将 decimal/hex txt 的 reshape 也用 file_order 解释
+    convert_to_decimal_txt(bin_path, rows=rows, cols=cols, file_order=file_order)
 
-def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d):
-    matrix_2d = np.asarray(matrix_2d, dtype=np.float32)
+def relayout_in0_N8K2N4K(slice_data):
+    """
+    in0 张量 relayout: (K=896, N=64) -> N8K2N4K
+    假设维度拆分为: K=(448, 2), N=(2, 4, 8)
+    """
+    # 调整 reshape 结构：K=448*2, N=2*4*8
+    reshaped = slice_data.reshape(448, 2, 2, 4, 8)
+    # 对应维度索引：K448=0, K2=1, N2=2, N4=3, N8=4
+    # 若规则是 "先从N读8个，再从第2个K读8个"，即 N8 最内侧，其次 K2，其次 N4...
+    # 外向内顺序应为 N2, K448, N4, K2, N8 -> 对应索引: 2, 0, 3, 1, 4
+    relayout_data = reshaped.transpose(2, 0, 3, 1, 4).flatten()
+    return relayout_data
+
+def reorder_in0_slice_by_ring(slice_data, slice_idx):
+    """
+    针对 in0 的每个 slice，按环形顺序和对角线（交织复用）重排 K 维度 (896 拆为 28 个 32)
+    使得每个 slice 优先计算与自己 local tile (slice_idx) 对应的数据。
+    """
+    # ring_order = [0,1,3,5,7,6,4,2,14,16,18,20,22,24,8,9,11,10,26,27,25,23,21,19,17,15,13,12]
+    # ring_order = [0,2,1,4,7,6,5,3,12,16,19,20,23,26,8,10,9,11,25,27,24,22,21,18,17,13,15,14]
+    ring_order = [0,3,2,4,7,6,5,1,13,16,19,20,23,25,8,11,10,9,24,27,26,22,21,18,17,12,14,15]
+    
+    # 将 K=896 切分为 28 个连续的 sub_block，每个 sub_block 大小为 K32 x N64
+    blocks = np.split(slice_data, 28, axis=0) # [28, (32, 64)]
+    
+    # 1. 所有 slice 均先按照公共的 ring_order 排列块，这个顺序全 slice 相同
+    base_blocks = [blocks[idx] for idx in ring_order]
+    stacked_blocks = np.stack(base_blocks, axis=0) # (28_nodes, 32, 64)
+    
+    # 2. 将每个 K32 拆分为 16 个时间步 (每个 K2)
+    reshaped_for_interleave = stacked_blocks.reshape(28, 16, 2, 64)
+    
+    # 3. 交织：时间步外置 -> (16_steps, 28_nodes, 2, 64)
+    interleaved = reshaped_for_interleave.transpose(1, 0, 2, 3)
+    
+    # 展平为 448 个 tile (每个 tile K2xN64)
+    tiles_448 = interleaved.reshape(448, 2, 64)
+    
+    # 4. 根据 slice_idx 确定环中起始位置，整体环移这些 tiles
+    # 以使得该 slice 取到的第一个 tile 就是它对应的 local tile
+    start_pos = ring_order.index(slice_idx)
+    
+    # 使用 np.roll 将数组滚动，使得索引为 start_pos 的元素移到开头
+    # 因为是要把 start_pos 提上来，所以是向前滚动，roll 负数步
+    reordered_tiles = np.roll(tiles_448, -start_pos, axis=0)
+    
+    # 还原回 (896, 64) 结构
+    reordered_slice = reordered_tiles.reshape(896, 64)
+    
+    return reordered_slice
+
+def relayout_in1_L8K2L4K(slice_data):
+    """
+    in1 张量 relayout: 输入按 (K=32, L=32) 解释 -> L8K2L4K
+    维度拆分: K=(16,2), L=(4,8)
+    目标: L8 最快变化（最内层）
+    """
+    # 输入语义改为 KxL
+    reshaped = slice_data.reshape(16, 2, 4, 8)      # (K16, K2, L4, L8)
+    relayout_data = reshaped.transpose(0, 2, 1, 3).flatten()  # (K16, L4, K2, L8)
+    return relayout_data
+
+def relayout_out_L8N8L4N4N2L1(slice_data):
+    """
+    out 张量 relayout: 输入 (N=64, L=32)，每一行代表一个 N 值对应的 L 序列。
+    重排逻辑：对每一行的 32 个 L 值进行重排，使得访问顺序为：
+    L8 -> N8 -> L4 -> N4 -> N2 -> L1 (但这里只处理 L 维度，所以实际是 L 的新排列)
+    
+    L (32) 拆分为: L8(8) * L4(4) * L1(1)
+    新的 L 访问顺序：先取 L8=0 的 4 组（每组 8 个），再取 L8=1 的 4 组...
+    即: [L1=0,L4=0,L8=0], [L1=0,L4=1,L8=0], [L1=0,L4=2,L8=0], [L1=0,L4=3,L8=0],
+        [L1=0,L4=0,L8=1], ...
+    线性索引映射: (L1, L4, L8) -> 原索引位置 L1*16 + L4*4 + L8
+    """
+    # 原始 L 排列（C-order）: (L1, L4, L8) = (1, 4, 8)
+    # 线性索引 i = L1*16 + L4*4 + L8，即 L8 最快变化
+    # 但这里输入已经是线性的 L0-L31
+    
+    # 新排列顺序应该是: L8 最快，其次 L4，最后 L1
+    # 将 L 重新索引：新位置 j = L8*16 + L4*4 + L1
+    relayout_matrix = np.zeros_like(slice_data)
+    
+    for n in range(slice_data.shape[0]):  # 遍历每一个 N
+        original_row = slice_data[n, :]  # (L32,)
+        new_row = np.zeros(32, dtype=np.float16)
+        
+        # 遍历原始 L 索引，按新的访问顺序填充
+        for L1 in range(1):
+            for L4 in range(4):
+                for L8 in range(8):
+                    # 原始位置：按 (L1, L4, L8) C-order 组织
+                    old_idx = L1 * 16 + L4 * 4 + L8
+                    # 新位置：按 (L8, L4, L1) 顺序排列
+                    new_idx = L8 * 4 + L4  # 因为 L1 只有 1，所以可以简化
+                    new_row[new_idx] = original_row[old_idx]
+        
+        relayout_matrix[n, :] = new_row
+    
+    return relayout_matrix.flatten()
+
+def relayout_slice_default(slice_data):
+    """
+    默认的重排函数，作为框架占位使用，后续可根据需求补充具体的重排逻辑
+    """
+    return slice_data.flatten()
+
+def save_slice(output_dir, op_id, slice_idx, out_name, matrix_2d, file_order):
+    """将切割后的 slice 保存并调用格式转换函数，按 file_order 展平写入"""
+    matrix_2d = np.asarray(matrix_2d, dtype=np.float16)
     if matrix_2d.ndim == 1:
         matrix_2d = matrix_2d.reshape(-1, 1)
-    slice_dir = os.path.join(before_install_dir, op_id, f"slice{slice_idx:02d}")
+        
+    slice_dir = os.path.join(output_dir, op_id, f"slice{slice_idx:02d}")
     os.makedirs(slice_dir, exist_ok=True)
+    
     out_path = os.path.join(slice_dir, out_name)
-    matrix_2d.reshape(-1, order='C').tofile(out_path)
-    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
+    # 按指定的 file_order 展平再写文件，避免默认硬编码 'C'
+    matrix_2d.reshape(-1, order=file_order).tofile(out_path)
+    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1], file_order=file_order)
 
-def relayout_slice_M8N2M4N(slice_data):
-    """
-    对一个 MxN 的 slice 进行 M8 N2 M4 N 的层级重排。
-    """
-    M, N = slice_data.shape
-    relayout_data = []
-    
-    # 最外层 M=8, N=2 的宏块循环
-    for m_outer in range(0, M, 8):
-        limit_m = min(m_outer + 8, M)
-        for n_outer in range(0, N, 2):
-            limit_n = min(n_outer + 2, N)
-            
-            block = slice_data[m_outer:limit_m, n_outer:limit_n]
-            
-            # 内层 M=4, N=1
-            for m4_idx in range(0, 8, 4):
-                for n1_idx in range(0, 2, 1):
-                    for m1_idx in range(4):
-                        m_curr = m4_idx + m1_idx
-                        if m_curr < block.shape[0] and n1_idx < block.shape[1]:
-                            relayout_data.append(block[m_curr, n1_idx])
-                            
-    return np.array(relayout_data, dtype=slice_data.dtype)
-
-def relayout_systolic_weight(input_filepath, K, N, target_dir, input_order='F', block_order='F'):
-    """
-    根据硬件数据流重排 GEMM 权重:
-    - 7个Head并行，1个Head(Cluster)宽128
-    - 1个Cluster分4个Slice，1个Slice宽32
-    - 按 Slice 分别保存至 install/op0/sliceXX/
-    """
-    # 硬件架构常量
-    CLUSTER_N = 128    # 一个 Head / Cluster 的 N 宽度
-    SLICE_N = 32       # 一个 Slice 的 N 宽度
-    K_MACRO = 32       # K维度的对角线调度宏块
-    BK = 8             # 微块 K (匹配M8)
-    BN = 2             # 微块 N (原来是8，现在最小单位切成了2)
-
-    print(f"\n--- Relayout GEMM Hardware Weight: {os.path.basename(input_filepath)} ---")
-    data = np.fromfile(input_filepath, dtype=np.float32)
-    if data.size < K * N:
-        raise ValueError(f"File size {data.size} is smaller than expected K*N = {K*N}")
-        
-    weight_matrix = data[:K*N].reshape((K, N), order=input_order)
-    
-    if N % CLUSTER_N != 0 or CLUSTER_N % SLICE_N != 0:
-        raise ValueError("N dimensions don't match Cluster(128) and Slice(32) alignment.")
-    if K % K_MACRO != 0:
-        raise ValueError("K dimensions don't match K_MACRO(32) alignment.")
-        
-    num_slices = CLUSTER_N // SLICE_N     # 128 / 32 = 4
-    num_time_steps = K_MACRO // BK        # 32 / 8 = 4
-    
-    total_slices = N // SLICE_N
-    # 为每一个 slice 初始化一个列表用于缓存数据
-    slice_data_map = {idx: [] for idx in range(total_slices)}
-    
-    # 1. 遍历并行的 Heads (Cluster), N维每次走128
-    for head_n in range(0, N, CLUSTER_N):
-        # 2. 遍历 K 维度的 32x32 宏块
-        for k_macro in range(0, K, K_MACRO):
-            
-            # 3. 在 Cluster 内部，遍历 4 个 Slice
-            for j in range(num_slices):
-                # 确定当前属于全图 28 个 slice 中的哪一个
-                global_slice_idx = (head_n // SLICE_N) + j
-                
-                # 4. 遍历计算时间步 (Time steps) 进行对角线数据请求
-                for t in range(num_time_steps):
-                    i = (j - t) % num_slices
-                    row_start = k_macro + i * BK
-                    col_start_base = head_n + j * SLICE_N
-                    
-                    # 5. 一个 Slice 宽 32，微块现在设为 N=2，即横向遍历16次
-                    for n_sub in range(0, SLICE_N, BN):
-                        col_start = col_start_base + n_sub
-                        block_8x2 = weight_matrix[row_start : row_start + BK, 
-                                                  col_start : col_start + BN]
-                        
-                        # M8_N2_M4_N 层级展平重排
-                        for m4_idx in range(0, BK, 4):         
-                            for n1_idx in range(0, BN, 1):     
-                                for m1_idx in range(4):        
-                                    m_curr = m4_idx + m1_idx
-                                    if m_curr < block_8x2.shape[0] and n1_idx < block_8x2.shape[1]:
-                                        # 数据追加到对应的 slice 列表中
-                                        slice_data_map[global_slice_idx].append(block_8x2[m_curr, n1_idx])
-                        
-    # 处理完成，分别写入各 Slice 文件夹
-    install_dir = os.path.join(target_dir, "install")
-    before_install_dir = os.path.join(target_dir, "install_beforerelayout")
-
-    for s_idx, s_data in slice_data_map.items():
-        output_data = np.array(s_data, dtype=np.float32)
-
-        # 先保存未 relayout 权重切片（K x 32）
-        col_start = s_idx * SLICE_N
-        col_end = col_start + SLICE_N
-        before_matrix = weight_matrix[:, col_start:col_end]
-        save_before_relayout(before_install_dir, "op0", s_idx, "matrix_B_linearized_128bit.bin", before_matrix)
-
-        slice_dir = os.path.join(install_dir, "op0", f"slice{s_idx:02d}")
-        os.makedirs(slice_dir, exist_ok=True)
-        
-        # GEMM 的权重在硬件中通常作为 matrix_B 送入
-        out_filepath = os.path.join(slice_dir, "matrix_B_linearized_128bit.bin")
-        output_data.tofile(out_filepath)
-        convert_to_128bit_txt(out_filepath, rows=K, cols=SLICE_N)
-        
-    print(f"✅ Hardware relayout distributed across {total_slices} slices in: {install_dir}/op0/")
-
-def process_gemm_directory(input_dir, output_dir, order='F'):
-    """自动处理目录下的所有 GEMM 相关文件"""
-    print(f"🚀 Scanning for GEMM tensors in: {input_dir}")
-    bin_files = glob.glob(os.path.join(input_dir, "*mul_mat*.bin"))
-    
-    valid_files = [f for f in bin_files if "systolic" not in f and "linearized" not in f]
-    if not valid_files:
-        print("❌ No valid mul_mat .bin files found in the directory.")
-        return
-        
-    # --- 提取并锁死完整的算子实例前缀 ---
-    prefixes = sorted(list(set([re.split(r"_(in0|in1|out)", os.path.basename(f))[0] for f in valid_files if "_op-mul_mat" in f])))
-    target_prefix = prefixes[0] if prefixes else ""
-    if target_prefix: print(f"🎯 Locking to specific GEMM instance: '{target_prefix}'")
-    # --------------------------------
-    
+def process_gemm_tensors(input_dir, output_dir):
+    print(f"🚀 Starting GEMM tensor split and relayout in: {input_dir}")
     install_dir = os.path.join(output_dir, "install")
+    install_logic_dir = os.path.join(output_dir, "install_logic")
     before_install_dir = os.path.join(output_dir, "install_beforerelayout")
+    after_ring_dir = os.path.join(output_dir, "install_after_ring")
+    num_slices = 28
+    
+    physical_mapping = [0, 2, 3, 1, 5, 4, 6, 7, 8, 10, 11, 9, 15, 14, 12, 13, 16, 17, 19, 18, 20, 21, 23, 22, 26, 24, 25, 27]
 
-    for filepath in bin_files:
-        filename = os.path.basename(filepath)
-        if "systolic" in filename or "linearized" in filename:
-            continue # 跳过已经重排过的文件
-            
-        if target_prefix and not filename.startswith(target_prefix):
+    target_files = {
+        "in0": "blk.0_ffn_gate-0_op-mul_mat_in0_shape896x1792x1x1_dtype_f16.bin",
+        "in1": "blk.0_ffn_gate-0_op-mul_mat_in1_shape896x32x1x1_dtype_f16.bin",
+        "out": "blk.0_ffn_gate-0_op-mul_mat_out_shape1792x32x1x1_dtype_f16.bin"
+    }
+
+    for key, filename in target_files.items():
+        filepath = os.path.join(input_dir, filename)
+        if not os.path.exists(filepath):
+            print(f"❌ File not found: {filepath}")
             continue
-            
-        # 匹配形状提取
-        match = re.search(r"_shape([\dx]+)_dtype", filename)
+
+        # 从文件名解析 shape 和 dtype
+        match = re.search(r"_shape([\dx]+)_dtype_([a-z0-9]+)", filename)
         if not match:
+            print(f"⚠️ Could not parse shape/dtype from filename: {filename}")
             continue
             
-        dims = list(map(int, match.group(1).split('x')))
+        shape_str = match.group(1)
+        shape_tuple = tuple(map(int, shape_str.split('x')))
+        dtype_str = match.group(2)
         
-        # in0 是 weight (K x N), in1 是 Input, out 是 Output
-        if "in0" in filename:
-            K_val, N_val = dims[0], dims[1]
-            print(f"📐 Detected Weight File [in0]: {filename}, K={K_val}, N={N_val}")
-            # 处理并分发矩阵 B
-            relayout_systolic_weight(filepath, K_val, N_val, output_dir, input_order=order, block_order=order)
-            
-        elif "in1" in filename:
-            print(f"📐 Detected Input File [in1]: {filename}")
-            data = np.fromfile(filepath, dtype=np.float32).reshape(dims, order=order).squeeze()
-            if data.ndim == 1: data = data.reshape(-1, 1)
-            
-            # Input 为 [K, L], 广播给所有 28 个 slice 作为 matrix_A
-            relayout_data = relayout_slice_M8N2M4N(data)
-            for i in range(28):
-                save_before_relayout(before_install_dir, "op0", i, "matrix_A_linearized_128bit.bin", data)
-                slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
-                os.makedirs(slice_dir, exist_ok=True)
-                out_path = os.path.join(slice_dir, "matrix_A_linearized_128bit.bin")
-                relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=data.shape[0], cols=data.shape[1])
+        print(f"📦 Processing: {filename} | Parsed Shape: {shape_tuple} | Dtype: {dtype_str}")
+        
+        # 假设当前均为 float16 数据
+        # 明确指定文件在磁盘上的存储顺序：in0=C, in1=F, out=F
+        file_order = 'C' if key == "in0" else 'F'
+        data = np.fromfile(filepath, dtype=np.float16).reshape(shape_tuple, order=file_order)
+        
+        # 挤掉无用维度（去除H1等大小为1的维度）
+        data_2d = data.squeeze()
+        if data_2d.ndim == 0:
+            data_2d = data_2d.reshape(1, 1)
+        elif data_2d.ndim == 1:
+            data_2d = data_2d.reshape(-1, 1)
+        
+        op_id = "gemm"
+        
+        if key == "in0":
+            # in0 是 weight: (K896, N1792) -> KxN = 896x1792
+            out_name = "matrix_in0_linearized_128bit.bin"
+            for i in range(num_slices):
+                n_start = i * 64
+                slice_data = data_2d[:, n_start:n_start+64]
+                # 保存 relayout 前的矩阵（按 file_order 写出）
+                save_slice(before_install_dir, op_id, i, out_name, slice_data, file_order)
                 
-        elif "out" in filename:
-            print(f"📐 Detected Output File [out]: {filename}")
-            data = np.fromfile(filepath, dtype=np.float32).reshape(dims, order=order).squeeze()
-            if data.ndim == 1: data = data.reshape(-1, 1)
-            
-            # Output 为 [N, L], 沿 N (dim 0) 切分为 28 份，分配给矩阵 D
-            slice_width = data.shape[0] // 28
-            for i in range(28):
-                slice_data = data[i*slice_width : (i+1)*slice_width, :]
-                save_before_relayout(before_install_dir, "op0", i, "matrix_D_linearized_128bit.bin", slice_data)
-                relayout_data = relayout_slice_M8N2M4N(slice_data)
+                # 环形对角线重排 K 块
+                reordered_slice = reorder_in0_slice_by_ring(slice_data, i)
                 
-                slice_dir = os.path.join(install_dir, "op0", f"slice{i:02d}")
-                os.makedirs(slice_dir, exist_ok=True)
-                out_path = os.path.join(slice_dir, "matrix_D_linearized_128bit.bin")
-                relayout_data.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
+                # 保存环形重排后的中间矩阵
+                save_slice(after_ring_dir, op_id, i, out_name, reordered_slice, file_order)
+                
+                # N8K2N4K specific relayout
+                relayout_data = relayout_in0_N8K2N4K(reordered_slice) 
+                
+                relayout_matrix = relayout_data.reshape(slice_data.shape)
+                save_slice(install_logic_dir, op_id, i, out_name, relayout_matrix, file_order)
+                save_slice(install_dir, op_id, physical_mapping[i], out_name, relayout_matrix, file_order)
+                
+        elif key == "in1":
+            # in1 是输入数据: (K896, L32) -> slice 得到 (K32, L32)
+            out_name = "matrix_in1_linearized_128bit.bin"
+            for i in range(num_slices):
+                k_start = i * 32
+                slice_data = data_2d[k_start:k_start+32, :]  # (K=32, L=32)
+                save_slice(before_install_dir, op_id, i, out_name, slice_data, file_order)
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Auto parse and relayout GEMM weight files.")
-    
-    # 默认寻找上级目录中的 python_golden 文件夹
+                # L8K2L4K specific relayout（仅重排）
+                relayout_data = relayout_in1_L8K2L4K(slice_data)
+                relayout_matrix = relayout_data.reshape(slice_data.shape)
+                save_slice(install_logic_dir, op_id, i, out_name, relayout_matrix, file_order)
+                save_slice(install_dir, op_id, physical_mapping[i], out_name, relayout_matrix, file_order)
+                
+        elif key == "out":
+            # out 是输出数据: F-style 存取的 (N64, L32)
+            # txt 输出时，每一行对应一条重排后的 N 行数据
+            out_name = "matrix_out_linearized_128bit.bin"
+            for i in range(num_slices):
+                n_start = i * 64
+                slice_data = data_2d[n_start:n_start+64, :]
+                save_slice(before_install_dir, op_id, i, out_name, slice_data, file_order)
+                
+                # L8N8L4N4N2L1 specific relayout
+                relayout_data = relayout_out_L8N8L4N4N2L1(slice_data)
+                relayout_matrix = relayout_data.reshape(slice_data.shape)
+
+                save_slice(install_logic_dir, op_id, i, out_name, relayout_matrix, file_order)
+                save_slice(install_dir, op_id, physical_mapping[i], out_name, relayout_matrix, file_order)
+
+    print(f"\n✅ All GEMM tensors split and saved under: {install_dir} and {install_logic_dir}")
+
+if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_in = os.path.abspath(os.path.join(current_dir, "..", "python_golden"))
-    default_out = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "gemm"))
-    
-    parser.add_argument('--dir', type=str, default=default_in, help="Directory containing the .bin files")
-    parser.add_argument('--order', type=str, choices=['C', 'F'], default='F', help="Matrix layout in .bin")
-    
-    args = parser.parse_args()
-    process_gemm_directory(args.dir, default_out, order=args.order)
+    input_dir = os.path.abspath(os.path.join(current_dir, "..", "python_golden"))
+    # 输出文件夹参考 rmsnorm，存入 ndp-sim/model_execplan/data/gemm
+    output_dir = os.path.abspath(os.path.join(current_dir, "..", "..", "model_execplan", "data", "gemm"))
+    process_gemm_tensors(input_dir, output_dir)

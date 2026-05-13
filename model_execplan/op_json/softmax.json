@@ -7,14 +7,14 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "remapping": null,
           "source": {
-            "type": "external"
+            "type": "op0"
           }
         },
         "B": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "remapping": null,
           "source": {
             "type": "external"
@@ -22,7 +22,7 @@
         }
       },
       "output": {
-        "shape": [1, 32, 32],
+        "shape": [1, "hidden_size//28", "sequence_length"],
         "remapping": null
       }
     },    
@@ -32,12 +32,12 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": "op0"
         }
       },
       "output": {
-        "shape": [1, 1, 32]
+        "shape": [1, 1, "sequence_length"]
       }
     },
     {
@@ -46,18 +46,18 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": {
             "type": "external"
           }
         },
         "B": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": "op1"
         }
       },
       "output": {
-        "shape": [1, 32, 32]
+        "shape": [1, "hidden_size//28", "sequence_length"]
       }
     },
     {
@@ -66,30 +66,30 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": "op2"
         }
       },
       "output": {
-        "shape": [1, 1, 32]
+        "shape": [1, 1, "sequence_length"]
       }
     },
      {
       "id": "op4",
-      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "type": "prefill_mul_fp32MN_fp32M_fp16MN",
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": "op2"
         },
         "B": {
-          "shape": [1, 1, 32],
+          "shape": [1, 1, "sequence_length"],
           "source": "op3"
         }
       },
       "output": {
-        "shape": [1, 32, 32]
+        "shape": [1, "hidden_size//28", "sequence_length"]
       }
     }
   ]

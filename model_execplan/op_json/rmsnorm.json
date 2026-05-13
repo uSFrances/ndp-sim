@@ -7,15 +7,13 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "remapping": null,
-          "source": {
-            "type": "external"
-          }
+          "source": "op0"
         }
       },
       "output": {
-        "shape": [1, 1, 32],
+        "shape": [1, 1, "sequence_length"],
         "remapping": null
       }
     },    
@@ -25,12 +23,12 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 28, 32],
+          "shape": [1, "used_slices", "sequence_length"],
           "source": "op0"
         }
       },
       "output": {
-        "shape": [1, 1, 32]
+        "shape": [1, 1, "sequence_length"]
       }
     },
     {
@@ -39,12 +37,12 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 1, 32],
+          "shape": [1, 1, "sequence_length"],
           "source":"op1"
         }
       },
       "output": {
-        "shape": [1, 1, 32]
+        "shape": [1, 1, "sequence_length"]
       }
     },
     {
@@ -53,18 +51,18 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, 32, 32],
+          "shape": [1, "hidden_size//28", "sequence_length"],
           "source": {
             "type": "external"
           }
         },
         "B": {
-          "shape": [1, 1, 32],
+          "shape": [1, 1, "sequence_length"],
           "source": "op2"
         }
       },
       "output": {
-        "shape": [1, 32, 32]
+        "shape": [1, "hidden_size//28", "sequence_length"]
       }
     }
   ]

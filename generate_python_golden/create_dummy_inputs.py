@@ -20,8 +20,8 @@ def create_dummy_bin_file(folder, name, shape, dtype):
         # 对于索引，通常用0或特定值，这里用0
         data = np.zeros(shape, dtype=np_dtype) 
     else:
-        # 对于浮点数，生成范围在[0, 1)的随机数
-        data = np.random.rand(*shape).astype(np_dtype)
+        # 对于浮点数，生成范围在[-1, 1)的随机数
+        data = (np.random.rand(*shape) * 2.0 - 1.0).astype(np_dtype)
 
     # 构建文件名
     shape_str = "x".join(map(str, shape))
