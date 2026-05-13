@@ -51,6 +51,7 @@ def execution_plan_to_dict(plan: ExecutionPlanInput) -> dict[str, Any]:
                         "dtype": spec.dtype,
                         "remapping": list(spec.remapping) if spec.remapping is not None else None,
                         "type": spec.special_type,
+                        "write_reg_hint": spec.write_reg_hint,
                         "source": {
                             "type": spec.source.source_type.value if spec.source else None,
                             "operator_id": spec.source.operator_id if spec.source else None,
@@ -63,6 +64,7 @@ def execution_plan_to_dict(plan: ExecutionPlanInput) -> dict[str, Any]:
                     "dtype": op.output.dtype,
                     "remapping": list(op.output.remapping) if op.output.remapping is not None else None,
                     "type": op.output.special_type,
+                    "write_reg_hint": op.output.write_reg_hint,
                 },
             }
             for op in plan.operators
@@ -176,6 +178,7 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str, params: dict[str
     dtype = _parse_dtype(raw_tensor, f"Operator {op_id}: input {name}")
     remapping = _parse_remapping(raw_tensor, f"Operator {op_id}: input {name}")
     special_type = _parse_special_type(raw_tensor, f"Operator {op_id}: input {name}")
+    write_reg_hint = _parse_write_reg_hint(raw_tensor, f"Operator {op_id}: input {name}")
     source = _parse_source(_pick(raw_tensor, "source", "输入来源", "来源"), op_id, name)
 
     return TensorSpec(
@@ -184,6 +187,7 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str, params: dict[str
         source=source,
         remapping=remapping,
         special_type=special_type,
+        write_reg_hint=write_reg_hint,
     )
 
 
@@ -198,7 +202,14 @@ def _parse_output(raw_op: dict[str, Any], op_id: str, params: dict[str, int]) ->
     dtype = _parse_dtype(raw_output, f"Operator {op_id}: output")
     remapping = _parse_remapping(raw_output, f"Operator {op_id}: output")
     special_type = _parse_special_type(raw_output, f"Operator {op_id}: output")
-    return TensorSpec(shape=shape, dtype=dtype, remapping=remapping, special_type=special_type)
+    write_reg_hint = _parse_write_reg_hint(raw_output, f"Operator {op_id}: output")
+    return TensorSpec(
+        shape=shape,
+        dtype=dtype,
+        remapping=remapping,
+        special_type=special_type,
+        write_reg_hint=write_reg_hint,
+    )
 
 
 def _parse_special_type(raw_tensor: dict[str, Any], location: str) -> str | None:
@@ -211,6 +222,18 @@ def _parse_special_type(raw_tensor: dict[str, Any], location: str) -> str | None
     if not normalized:
         raise JsonFormatError(f"{location} type cannot be empty.")
     return normalized
+
+
+def _parse_write_reg_hint(raw_tensor: dict[str, Any], location: str) -> str | None:
+    raw_hint = _pick(raw_tensor, "write_reg_hint", "write_hint", "写寄存器提示")
+    if raw_hint is None:
+        return None
+    if not isinstance(raw_hint, str):
+        raise JsonFormatError(f"{location} write_reg_hint must be a string.")
+    text = raw_hint.strip()
+    if not text:
+        raise JsonFormatError(f"{location} write_reg_hint cannot be empty.")
+    return text
 
 
 def _parse_dtype(raw_tensor: dict[str, Any], location: str) -> str:

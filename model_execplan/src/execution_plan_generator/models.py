@@ -22,6 +22,7 @@ class TensorSpec:
     source: InputSource | None = None
     remapping: tuple[int, ...] | None = None
     special_type: str | None = None
+    write_reg_hint: str | None = None
 
 
 @dataclass(frozen=True)
