@@ -900,12 +900,15 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
 
     updates: dict[str, object] = {
         "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
-        "iga_lc1.dram_loop_configs.end": a_n // 32 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": b_n // 32 if b_n is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
         "iga_lc4.dram_loop_configs.end": b_k // 4 if b_k is not None else 0,
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n // 2) if a_n is not None else 0,
+        "se_nse0.n2n.mem_loop":b_k//a_k if a_k is not None and b_k is not None and a_k != 0 else 0,
+        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, # pyright: ignore[reportOperatorIssue]
+        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, 
     }
 
 
