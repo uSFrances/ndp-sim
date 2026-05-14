@@ -6,6 +6,7 @@
     "head_dim": 128,
     "num_hidden_layers": 1,
     "sequence_length": 32,
+    "slice_per_head": 4,
     "target_op": "gemm"
 }
 

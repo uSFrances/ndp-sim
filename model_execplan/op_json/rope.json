@@ -7,12 +7,12 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "remapping": null,
-          "source": "op0"
+          "source": "op-1"
         },
         "B": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "remapping": null,
           "source": {
             "type": "external"
@@ -20,7 +20,7 @@
         }
       },
       "output": {
-        "shape": [1, "head_dim//4", "sequence_length"],
+        "shape": [1, "sequence_length", "hidden_size//used_slices"],
         "remapping": null
       }
     },    
@@ -30,12 +30,12 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "remapping": null,
-          "source":  "op0"
+          "source":  "op-1"
         },
         "B": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "remapping": null,
           "source": {
             "type": "external"
@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "shape": [1, "head_dim//4", "sequence_length"],
+        "shape": [1, "sequence_length", "hidden_size//used_slices"],
         "remapping": null
       }
     },
@@ -53,16 +53,16 @@
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "source":  "op0"
         },
         "B": {
-          "shape": [1, "head_dim//4", "sequence_length"],
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
           "source": "op1"
         }
       },
       "output": {
-        "shape": [1, "head_dim//4", "sequence_length"]
+        "shape": [1, "sequence_length", "hidden_size//used_slices"]
       }
     }
   ]
