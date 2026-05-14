@@ -4,77 +4,83 @@
 ## json文件读取
 ### json文件格式
 * 顶层 `used_slices`
-    * 28bit 二进制掩码字符串，例如 `0b1111`
+    * 28bit 二进制掩码字符串，例如 `0b0000000000000000000000001111`
     * 作为默认 slice 分配，若某个算子未单独声明 `used_slices`，则继承该默认值
 * 算子编号
   * 算子类型(add/mul/matmul/max...)  
     * used_slices
         * 28bit 二进制掩码字符串，例如 `0b0000000000000000000000001111`
         * 每个算子单独维护，用于更灵活的 slice 分配
-  * 输入A 
-    * tensor形状(K * M * N)
-    * 输入来源(来自其他算子(给出算子编号)/外部输入)
-  * 输入B 
-    * tensor形状(K * M * N)
-    * 输入来源(来自其他算子(给出算子编号)/外部输入)
-  * 输入C tensor形状
-    * tensor形状(K * M * N)
-    * 输入来源(来自其他算子(给出算子编号)/外部输入)
-  * 输出D
-    * tensor形状(K * M * N)
-* 额外输入与扩展字段
-        * 支持 `B'` 输入（适用于 `gemm_local` 等算子）；地址规划中 `B'` 与 `B` 共享同一地址空间。
-    * 支持 tensor 级 `dtype` 字段（A/B/B'/C/D）：
-        * 可选值：`fp16`、`fp32`、`int8`、`uint8`、`int16`、`uint16`、`int32`、`uint32`。
-        * 兼容别名：`float16 -> fp16`、`float32/pf32 -> fp32`。
-        * 未填写 `dtype` 时默认按 `fp32` 处理。
-        * 支持 tensor 级 `remapping` 字段（A/B/B'/C/D）：
-                * 可为 `null`，或长度为 26 的数组。
-                * 数组元素范围为 `0..25`。
-        * `config_length` 语义为“该算子 config 数据包含多少个 64bit 行”。
-    * `config_sfu` 语义为 SFU 配置类型（非布尔）：
-        * 支持：`GELU`、`REC`、`REC_SQRT`、`ReLU`、`Sigmoid`、`SiLU`、`SQRT`、`Tanh`、`Ex`。
-        * 兼容别名：`Sigmiod` 会自动归一为 `Sigmoid`。
-        * 当 `config_sfu` 非空时，算子会额外生成一条 SFU 配置加载指令。
-
-### 完成读取后
-建立字表，根据读取顺序输出控制指令
-
-## 指令生成
-
-### 指令生成逻辑
-单个算子可以被分割为四段指令：时钟使能指令、初始配置载入指令、关键寄存器修改指令(数据基地址修改(涉及地址规划)，由于算子计算形状修改导致的访存模块变量修改)、算子开始计算指令
-* 时钟使能指令(通过广播的方式使能Slice的指定时钟, Clock_Enable)
-  * 格式：{{29'd0}, {Clock_Select: 4bit(0b1111)}, {Slice_Mask: 28bit}, {Opcode: 3bit(Clock_Enable: 001)}}  
-  * 该指令位于所有指令之前，一次运行只执行一次  
-* 初始配置载入指令(每一类算子拥有同一种初始配置载入指令) (Load_Config)
-    * 格式：{{Config_Length: 8bit}, {DDR_Config_Addr: 22bit}, {2'd0}, {Config_SFU: 1bit}, {Slice_Mask: 28bit}, {Opcode: 3bit(Config: 000)}}  
-    * 变量解析：  
-    Config_Length：配置长度，常量，参数化，每类算子值不同。  当前加速器设计的地址空间为32bit，按照字节编址。实际总线和DDR Bank的存储粒度为128bit，且实际使用的地址空间大小为8MB * 8 * 16，即占用0x4000_0000大小（30bit）的地址空间。因此综合考虑，只需要28bit的地址就可以完成整个空间的寻址。为了压缩该条指令，现要求Config配置包必须与BANK Row对齐（放在每行的起始处），从而省去6bit的Row寻址。因此最终使用22bit进行寻址。  
-    DDR_Config_Addr:配置字在内存中的位置，常量，参数化，每类算子值不同。 
-        config 起始地址强制落在 BANK Row 起点（`col=0, subword=0`），并按整行预留空间，保证下一包也从行首开始。
-    Config_SFU：区分当前 Load_Config 的配置包类型。
-        `0` 表示算子 bitstream 配置；`1` 表示 SFU 系数配置。
-        当 `config_sfu` 非空时，单算子会生成两条 Load_Config：先下发 `Config_SFU=0` 的算子配置，再下发 `Config_SFU=1` 的 SFU 配置。
-    Slice_Mask：控制哪些slice会接收到该指令，由当前算子的 `used_slices` 28bit 二进制掩码直接给出；若算子未单独配置，则继承顶层默认值。
-    * 当前实现细节：
-        * `DDR_Config_Addr` 由地址规划结果生成，不再回退模板静态地址字段。
-        * 指令中的 `DDR_Config_Addr` 编码规则为：`ddr_config_addr_bin = full_addr >> 10`。
-        * 当 `config_length=0` 时，`DDR_Config_Addr` 输出为 0。
-        * 当 `config_length>0` 但缺失规划地址时，生成流程会报错终止。
-
-* 关键寄存器修改指令 (Write_Reg, 为指定Slice单独写寄存器)
-  该指令分为数据基地址寄存器修改与由于算子计算形状修改导致的访存模块变量修改。
-  * 格式：{{Write_Value: 32bit}, {Write_Addr: 14bit}, {10'd0}, {Slice_ID: 5bit}, {Opcode: 3bit(WriteReg: 100)}}
-  * 变量解析：  
-  Write_Value: 指定该寄存器配置值  
-  Write_Addr: 指定配置的寄存器地址  
-  10'd0: 占位符  
-  Slice_ID: 配置ID，指示该指令需要配置的单Slice  
-  Opcode: 固定为3'b100。指示指令类型，代表该指令为Write_Reg  
-  * 数据基地址修改  
-  涉及地址规划
-  * 由于算子计算形状修改导致的访存模块变量修改
+    * 输入A / 输入B / 输入B' / 输入C
+        * tensor形状 `[K, M, N]`
+        "used_slices": "0b1111111111111111111111111111",
+        "operators": [
+            {
+                "id": "op0",
+                "type": "prefill_gemm_local",
+                "used_slices": "0b1111111111111111111111111111",
+                "inputs": {
+                    "A": {
+                        "shape": [128, 128, 32],
+                        "dtype": "fp32",
+                        "remapping": null,
+                        "source": {
+                            "type": "external"
+                        }
+                    },
+                    "B": {
+                        "shape": [128, 128, 32],
+                        "dtype": "fp32",
+                        "remapping": null,
+                        "source": {
+                            "type": "external"
+                        }
+                    },
+                    "B'": {
+                        "shape": [128, 128, 32],
+                        "dtype": "fp32",
+                        "remapping": null,
+                        "source": {
+                            "type": "external"
+                        }
+                    },
+                    "C": {
+                        "shape": [128, 128, 32],
+                        "dtype": "fp32",
+                        "remapping": null,
+                        "source": {
+                            "type": "external"
+                        }
+                    }
+                },
+                "output": {
+                    "shape": [1, 128, 128],
+                    "dtype": "fp32",
+                    "remapping": null
+                },
+                "config_sfu": "GELU"
+            },
+            {
+                "id": "op1",
+                "type": "prefill_max_fp16MN_fp32MN",
+                "used_slices": "0b1111111111111111111111111111",
+                "inputs": {
+                    "A": {
+                        "shape": [1, 128, 128],
+                        "dtype": "fp32",
+                        "remapping": null,
+                        "source": {
+                            "type": "operator",
+                            "operator_id": "op0"
+                        }
+                    }
+                },
+                "output": {
+                    "shape": [1, 1, 128],
+                    "dtype": "fp32",
+                    "remapping": null
+                }
+            }
   每类算子需要修改的寄存器不同，由于每个算子配置文件中包含一个初始size该size每个算子不同需要单独作为可以修改的常量进行储存，需要对初始size与json中读取到的目标size进行比较后再决定是否修改控制寄存器，若相同则不需要相关的修改控制寄存器指令
   * 要点，由于修改时会同时修改32位寄存器，但是往往修改寄存器时仅需修改个别位数，所以需要提前获知原有其他无关位数的原始值，避免对无关寄存器进行修改。
     * 当前实现已支持按 tensor 的 `remapping` 自动下发 `stream_engine.stream.address_remapping`（26 x 5bit 打包）。
@@ -785,63 +791,75 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 
 ```json
 {
-  "used_slices": 28,
-  "operators": [
-    {
-      "id": "op0",
-      "type": "prefill_gemm_local",
-      "used_slices": "0b1111111111111111111111111111",
-      "inputs": {
-        "A": {
-          "shape": [128, 128, 32],
-          "dtype": "fp32",
-          "remapping": null,
-          "source": {
-            "type": "external"
-          }
+    "used_slices": "0b1111111111111111111111111111",
+    "operators": [
+        {
+            "id": "op0",
+            "type": "prefill_gemm_local",
+            "used_slices": "0b1111111111111111111111111111",
+            "inputs": {
+                "A": {
+                    "shape": [128, 128, 32],
+                    "dtype": "fp32",
+                    "remapping": null,
+                    "source": {
+                        "type": "external"
+                    }
+                },
+                "B": {
+                    "shape": [128, 128, 32],
+                    "dtype": "fp32",
+                    "remapping": null,
+                    "source": {
+                        "type": "external"
+                    }
+                },
+                "B'": {
+                    "shape": [128, 128, 32],
+                    "dtype": "fp32",
+                    "remapping": null,
+                    "source": {
+                        "type": "external"
+                    }
+                },
+                "C": {
+                    "shape": [128, 128, 32],
+                    "dtype": "fp32",
+                    "remapping": null,
+                    "source": {
+                        "type": "external"
+                    }
+                }
+            },
+            "output": {
+                "shape": [1, 128, 128],
+                "dtype": "fp32",
+                "remapping": null
+            },
+            "config_sfu": "GELU"
         },
-        "B": {
-          "shape": [128, 128, 32],
-          "dtype": "fp32",
-          "remapping": null,
-          "source": {
-            "type": "external"
-          }
-        },
-        "B'": {
-          "shape": [128, 128, 32],
-          "dtype": "fp32",
-          "remapping": null,
-          "source": {
-            "type": "external"
-          }
+        {
+            "id": "op1",
+            "type": "prefill_max_fp16MN_fp32MN",
+            "used_slices": "0b1111111111111111111111111111",
+            "inputs": {
+                "A": {
+                    "shape": [1, 128, 128],
+                    "dtype": "fp32",
+                    "remapping": null,
+                    "source": {
+                        "type": "operator",
+                        "operator_id": "op0"
+                    }
+                }
+            },
+            "output": {
+                "shape": [1, 1, 128],
+                "dtype": "fp32",
+                "remapping": null
+            }
         }
-      },
-      "output": {
-        "shape": [1, 128, 128],
-        "dtype": "fp32",
-        "remapping": null
-      }
-    },    
-    {
-      "id": "op1",
-      "type": "prefill_max_fp16MN_fp32MN",
-      "used_slices": "0b1111111111111111111111111111",
-      "inputs": {
-        "A": {
-          "shape": [1, 128, 128],
-          "dtype": "fp32",
-          "remapping": null,
-          "source": "op0"
-        }
-      },
-      "output": {
-        "shape": [1, 1, 128],
-        "dtype": "fp32",
-        "remapping": null
-      }
-    }
-  ]
+    ]
 }
 
 ```

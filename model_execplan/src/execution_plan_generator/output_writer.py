@@ -539,17 +539,14 @@ def _format_instruction_explanation_block(idx: int, command: int, explanation: s
     header = f"{idx:04d}  <{command:064b}>"
     if not explanation.strip():
         return [header]
-
     clauses = [part.strip() for part in explanation.split(",") if part.strip()]
     if not clauses:
         return [header]
-    indent = " " * 4
-    lines = [f"{header} {indent}{clauses[0]},"]
-    for clause in clauses[1:-1]:
-        lines.append(f"{indent}{clause},")
-    if len(clauses) > 1:
-        lines.append(f"{indent}{clauses[-1]}")
-    return lines
+
+    # Put all detailed clauses on the same line after the header.
+    joined = ", ".join(clauses)
+    # Keep a small indent between header and details for readability.
+    return [f"{header}    {joined}"]
 
 
 def write_install_manifest(

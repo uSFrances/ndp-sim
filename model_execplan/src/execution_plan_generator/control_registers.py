@@ -5,7 +5,7 @@ import re
 import struct
 from pathlib import Path
 
-from .models import OperatorSpec, OperatorTemplate
+from .models import OperatorSpec, OperatorTemplate, TensorSpec
 
 
 BASE_ADDR_BITS = 30
@@ -15,6 +15,12 @@ REMAPPING_ENTRY_COUNT = 26
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MAPPING_REVIEW_CACHE: dict[str, dict[str, str]] = {}
+
+# Support exact-match tag hints from JSON. write_reg_hint is a single string.
+def _has_hint(tensor: TensorSpec | None, tag: str) -> bool:
+    if tensor is None:
+        return False
+    return tensor.write_reg_hint == tag
 
 
 def _fit_u20(value: int) -> int:
@@ -59,6 +65,23 @@ def pack_dim_stride(port0: int, port1: int, port2: int) -> int:
     port1 = _fit_u20(port1)
     port2 = _fit_u20(port2)
     return (port2 << 40) | (port1 << 20) | port0
+
+
+def pack_buf_spatial_stride(values: list[int] | tuple[int, ...]) -> int:
+    """Pack 16 entries (5 bits each) into one 80-bit unsigned integer.
+
+    Bit layout uses low-to-high order: values[i] occupies bits [5*i+4:5*i].
+    """
+
+    if len(values) != 16:
+        raise ValueError(f"buf_spatial_stride must have 16 entries, got {len(values)}")
+
+    packed = 0
+    for idx, value in enumerate(values):
+        if not (0 <= value <= 31):
+            raise ValueError(f"buf_spatial_stride[{idx}] out of range [0,31]: {value}")
+        packed |= value << (idx * REMAPPING_ENTRY_BITS)
+    return packed
 
 
 def parse_base_addr(value: int | str, bits: int = BASE_ADDR_BITS) -> int:
@@ -240,13 +263,13 @@ def _load_operator_instance_mapping(op_type: str) -> dict[str, str]:
 
 
 def _apply_instance_mapping_to_updates(
-    updates: dict[str, int],
+    updates: dict[str, object],
     instance_mapping: dict[str, str],
-) -> dict[str, int]:
+) -> dict[str, object]:
     if not updates or not instance_mapping:
         return updates
 
-    mapped_updates: dict[str, int] = {}
+    mapped_updates: dict[str, object] = {}
     for field_key, value in updates.items():
         if "." not in field_key:
             mapped_key = field_key
@@ -758,6 +781,26 @@ def _compute_prefill_remote_sum_4slice_fp32MN_fp32MN_control_register_updates(
         ),
     }
 
+def _compute_prefill_remote_sum_4slice_fp16MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for remote_sum_4slice control register logic."""
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": a_n // 8 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_m // 2 if a_m is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32 * 32,
+            port2 = 32,
+        ),
+    }
+
 
 def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
     operator: OperatorSpec,
@@ -844,7 +887,7 @@ def _compute_decode_add_fp16N_fp32N_fp32N_control_register_updates(
 def _compute_prefill_gemm_ring_4slice_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Placeholder for gemm_ring_4slice control register logic."""
     input_a = operator.inputs.get("A")
     input_b = operator.inputs.get("B")
@@ -854,15 +897,39 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
-    return {
+
+    updates: dict[str, object] = {
         "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
-        "iga_lc1.dram_loop_configs.end": a_n // 32 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": b_n // 32 if b_n is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
         "iga_lc4.dram_loop_configs.end": b_k // 4 if b_k is not None else 0,
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n // 2) if a_n is not None else 0,
+        "se_nse0.n2n.mem_loop":b_k//a_k if a_k is not None and b_k is not None and a_k != 0 else 0,
+        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, # pyright: ignore[reportOperatorIssue]
+        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, 
     }
+
+
+    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
+        updates.update({
+            "iga_col_lc0.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc0.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream0.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+    if _has_hint(input_b, "reorder(n8,k2)->(k2,n8)"):
+        updates.update({
+            "iga_col_lc1.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc1.buffer_loop_configs.COL_LC.stride": 2,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+            "rd_stream3.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+    return updates
 
 def _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates(
     operator: OperatorSpec,
@@ -980,6 +1047,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_remote_sum_fp32MN_fp32MN": _compute_prefill_remote_sum_fp32MN_fp32MN_control_register_updates,
     "prefill_remote_max_fp32MN_fp32MN": _compute_prefill_remote_max_fp32MN_fp32MN_control_register_updates,
     "prefill_remote_sum_4slice_fp32MN_fp32MN": _compute_prefill_remote_sum_4slice_fp32MN_fp32MN_control_register_updates,
+    "prefill_remote_sum_4slice_fp16MN_fp32MN": _compute_prefill_remote_sum_4slice_fp16MN_fp32MN_control_register_updates,
     "prefill_mul_fp32MN_fp32N_fp16MN": _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates,
     "prefill_mul_fp32MN_fp32M_fp32MN": _compute_prefill_mul_fp32MN_fp32M_fp32MN_control_register_updates,
     "prefill_add_fp16MN_fp32N_fp32MN": _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates,
@@ -996,7 +1064,7 @@ OP_CONTROL_REGISTER_FN = {
 
 def _append_remapping_register_updates(
     operator: OperatorSpec,
-    updates: dict[str, int],
+    updates: dict[str, object],
 ) -> None:
     field_by_tensor_name = {
         "A": "rd_stream0.stream_engine.stream.address_remapping",
@@ -1021,7 +1089,7 @@ def compute_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
     apply_instance_mapping: bool = True,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Placeholder for shape-driven control register computation.
 
     Return format:
@@ -1034,7 +1102,7 @@ def compute_control_register_updates(
     This function is intentionally left as a stable extension point for per-op logic.
     """
 
-    updates: dict[str, int] = {}
+    updates: dict[str, object] = {}
 
     handler = OP_CONTROL_REGISTER_FN.get(operator.op_type)
     if handler is not None:
@@ -1046,3 +1114,5 @@ def compute_control_register_updates(
 
     instance_mapping = _load_operator_instance_mapping(operator.op_type)
     return _apply_instance_mapping_to_updates(updates, instance_mapping)
+
+
