@@ -15,14 +15,12 @@ DEFAULT_OPLIST = [
     "add_fp16MN_fp32N_fp32MN",
     "rope",
 
-    "rmsnorm_kv",
-    "mul_fp32MN_fp32N_fp16MN_kv",
     "gemm_ring_k",
-    "add_fp16MN_fp32N_fp32MN_k",
-    "rope_k",
+    "add_fp16MN_fp32N_fp32MN",
+    "rope",
 
     "gemm_ring_v",
-    "add_V_fp16MN_fp32N_fp16MN",
+    "add_V_fp16MN_fp32N_fp32MN",
     # "prefill_qkt_kt_view_fp16_fp16"
 
     "gemm_local_qkt",
@@ -46,9 +44,7 @@ DEFAULT_OPLIST = [
 ALIAS_TO_FILE = {
     "softmax": "softmax.json",
     "rope": "rope.json",
-    "rope_k": "rope_k.json",
     "rmsnorm": "rmsnorm.json",
-    "rmsnorm_kv": "rmsnorm_kv.json",
     "gemm_ring": "gemm_ring.json",
     "gemm_ring_k": "gemm_ring_k.json",
     "gemm_ring_v": "gemm_ring_v.json",
@@ -60,10 +56,8 @@ ALIAS_TO_FILE = {
     "layer0": "layer0.json",
 
     "mul_fp32MN_fp32N_fp16MN": "prefill_mul_fp32MN_fp32N_fp16MN.json",
-    "mul_fp32MN_fp32N_fp16MN_kv": "prefill_mul_fp32MN_fp32N_fp16MN_kv.json",
     "add_fp16MN_fp32N_fp32MN": "prefill_add_fp16MN_fp32N_fp32MN.json",
-    "add_fp16MN_fp32N_fp32MN_k": "prefill_add_fp16MN_fp32N_fp32MN_k.json",
-    "add_V_fp16MN_fp32N_fp16MN": "prefill_add_V_fp16MN_fp32N_fp16MN.json",
+    "add_V_fp16MN_fp32N_fp32MN": "prefill_add_V_fp16MN_fp32N_fp16MN.json",
     "mul_fp32MN_fp16MN_fp16MN": "prefill_mul_fp32MN_fp16MN_fp16MN.json",
     "add_fp32MN_fo32MN_fp16MN": "prefill_add_fp32MN_fp32MN_fp16MN.json",
     "add_fp32MN_fp16MN_fp32MN_residual": "prefill_add_fp32MN_fp16MN_fp32MN_residual.json",
