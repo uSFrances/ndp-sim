@@ -791,75 +791,53 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 
 ```json
 {
-    "used_slices": "0b1111111111111111111111111111",
-    "operators": [
-        {
-            "id": "op0",
-            "type": "prefill_gemm_local",
-            "used_slices": "0b1111111111111111111111111111",
-            "inputs": {
-                "A": {
-                    "shape": [128, 128, 32],
-                    "dtype": "fp32",
-                    "remapping": null,
-                    "source": {
-                        "type": "external"
-                    }
-                },
-                "B": {
-                    "shape": [128, 128, 32],
-                    "dtype": "fp32",
-                    "remapping": null,
-                    "source": {
-                        "type": "external"
-                    }
-                },
-                "B'": {
-                    "shape": [128, 128, 32],
-                    "dtype": "fp32",
-                    "remapping": null,
-                    "source": {
-                        "type": "external"
-                    }
-                },
-                "C": {
-                    "shape": [128, 128, 32],
-                    "dtype": "fp32",
-                    "remapping": null,
-                    "source": {
-                        "type": "external"
-                    }
-                }
-            },
-            "output": {
-                "shape": [1, 128, 128],
-                "dtype": "fp32",
-                "remapping": null
-            },
-            "config_sfu": "GELU"
+  "params": {
+		"hidden_size": 896,
+		"intermediate_size": 1792,
+		"num_attention_heads": 7,
+		"num_key_value_heads": 1,
+		"head_dim": 128,
+		"num_hidden_layers": 1,
+		"sequence_length": 32,
+    "used_slices": 28,
+		"target_op": "all"
+  },  
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": ["hidden_size//used_slices", "sequence_length", 1],
+          "remapping": null,
+          "source":  "external",
+		      "write_reg_hint": "reorder(m8,n2)->(n2,m8)",
+          "type":"slice_div4"
         },
-        {
-            "id": "op1",
-            "type": "prefill_max_fp16MN_fp32MN",
-            "used_slices": "0b1111111111111111111111111111",
-            "inputs": {
-                "A": {
-                    "shape": [1, 128, 128],
-                    "dtype": "fp32",
-                    "remapping": null,
-                    "source": {
-                        "type": "operator",
-                        "operator_id": "op0"
-                    }
-                }
-            },
-            "output": {
-                "shape": [1, 1, 128],
-                "dtype": "fp32",
-                "remapping": null
-            }
+        "B": {
+          "shape": ["hidden_size", 1, "intermediate_size//used_slices"],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+		      "write_reg_hint": "reorder(n8,k2)->(k2,n8)"
+        },
+        "B'": {
+          "shape": ["hidden_size", 1, "intermediate_size//used_slices"],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
         }
-    ]
+      },
+      "output": {
+        "shape": [1, "sequence_length", "intermediate_size//used_slices"],
+        "remapping": null
+      }
+    }
+  ]
 }
 
 ```

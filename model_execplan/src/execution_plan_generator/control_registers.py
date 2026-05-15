@@ -599,11 +599,11 @@ def _compute_prefill_mul_fp32MN_fp16MN_fp16MN_control_register_updates(
         ),
     }
 
-def _compute_prefill_silu_fp32MN_fp16MN_control_register_updates(
+def _compute_prefill_silu_fp16MN_fp32MN_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
 ) -> dict[str, int]:
-    """Placeholder for prefill_silu_fp32MN_fp16MN control register logic."""
+    """Placeholder for prefill_silu_fp16MN_fp32MN control register logic."""
     input_a = operator.inputs.get("A")
     a_shape = input_a.shape if input_a is not None else None
     d_shape = operator.output.shape
@@ -625,7 +625,7 @@ def _compute_prefill_silu_fp32MN_fp16MN_control_register_updates(
         ),
     }
 
-def _compute_prefill_sub_SFU_fp32MN_fp32MN_fp32MN_control_register_updates(
+def _compute_prefill_sub_SFU_fp32MN_fp32M_fp32MN_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
 ) -> dict[str, int]:
@@ -906,9 +906,9 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n // 2) if a_n is not None else 0,
-        "se_nse0.n2n.mem_loop":b_k//a_k if a_k is not None and b_k is not None and a_k != 0 else 0,
-        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, # pyright: ignore[reportOperatorIssue]
-        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) == 28) else 0, 
+        "se_nse0.n2n.mem_loop":b_k//a_k - 1 if a_k is not None and b_k is not None and a_k != 0 else 0,
+        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
+        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
     }
 
 
@@ -1040,8 +1040,8 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_add_fp32MN_fp16MN_fp32MN": _compute_prefill_add_fp32MN_fp16MN_fp32MN_control_register_updates,
     "prefill_add_fp32MN_fp32MN_fp16MN": _compute_prefill_add_fp32MN_fp32MN_fp16MN_control_register_updates,
     "prefill_mul_fp32MN_fp16MN_fp16MN": _compute_prefill_mul_fp32MN_fp16MN_fp16MN_control_register_updates,
-    "prefill_silu_fp32MN_fp16MN": _compute_prefill_silu_fp32MN_fp16MN_control_register_updates,
-    "prefill_sub_SFU_fp32MN_fp32MN_fp32MN": _compute_prefill_sub_SFU_fp32MN_fp32MN_fp32MN_control_register_updates,
+    "prefill_silu_fp16MN_fp32MN": _compute_prefill_silu_fp16MN_fp32MN_control_register_updates,
+    "prefill_sub_SFU_fp32MN_fp32M_fp32MN": _compute_prefill_sub_SFU_fp32MN_fp32M_fp32MN_control_register_updates,
     "quant_from_buffer_int32MN_uint8MN": _compute_quant_from_buffer_int32MN_uint8MN_control_register_updates,
     "add_dequant_uint8CWH_uint8CWH_fp32CWH": _compute_add_dequant_uint8CWH_uint8CWH_fp32CWH_control_register_updates,
     "prefill_remote_sum_fp32MN_fp32MN": _compute_prefill_remote_sum_fp32MN_fp32MN_control_register_updates,
