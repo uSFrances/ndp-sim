@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import re
 import struct
 from pathlib import Path
 
-from .models import OperatorSpec, OperatorTemplate, TensorSpec
+from .models import AddressPlan, OperatorSpec, OperatorTemplate, TensorSpec
 
 
 BASE_ADDR_BITS = 30
@@ -125,6 +126,28 @@ def parse_base_addr(value: int | str, bits: int = BASE_ADDR_BITS) -> int:
     if not (0 <= parsed < (1 << bits)):
         raise ValueError(f"base_addr out of {bits}-bit range: {parsed}")
     return parsed
+
+
+def _resolve_input_base_addr(
+    operator: OperatorSpec,
+    address_plan: AddressPlan | None,
+    input_name: str,
+) -> int | None:
+    if address_plan is None:
+        return None
+
+    io_key = f"{operator.op_id}.input.{input_name}"
+    tensor_name = address_plan.operator_io_to_tensor.get(io_key)
+    if tensor_name is None and input_name == "B'":
+        io_key = f"{operator.op_id}.input.B"
+        tensor_name = address_plan.operator_io_to_tensor.get(io_key)
+    if tensor_name is None:
+        return None
+
+    assignment = address_plan.assignments.get(tensor_name)
+    if assignment is None:
+        return None
+    return assignment.base_address
 
 
 def _to_iga_lc_instance(resource: str) -> str | None:
@@ -338,7 +361,7 @@ def _compute_prefill_gemm_local_control_register_updates(
     (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
     (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
 
-    return {
+    updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n // 32 if a_n is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
@@ -347,6 +370,13 @@ def _compute_prefill_gemm_local_control_register_updates(
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n // 2) if a_n is not None else 0,
     }
+
+    address_plan = template.address_plan
+    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+    if b_base_addr is not None:
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
+
+    return updates
 
 def _compute_prefill_summac_fp16MN_fp32MN_control_register_updates(
     operator: OperatorSpec,
@@ -887,7 +917,7 @@ def _compute_decode_add_fp16N_fp32N_fp32N_control_register_updates(
 def _compute_prefill_gemm_ring_4slice_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
-) -> dict[str, object]:
+) -> dict[str, int]:
     """Placeholder for gemm_ring_4slice control register logic."""
     input_a = operator.inputs.get("A")
     input_b = operator.inputs.get("B")
@@ -898,7 +928,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
 
-    updates: dict[str, object] = {
+    updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": b_n // 32 if b_n is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
@@ -929,6 +959,11 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
             "rd_stream3.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
+
+    address_plan = template.address_plan
+    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+    if b_base_addr is not None:
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
     return updates
 
 def _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates(
@@ -1088,6 +1123,7 @@ def _append_remapping_register_updates(
 def compute_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
+    address_plan: AddressPlan | None = None,
     apply_instance_mapping: bool = True,
 ) -> dict[str, object]:
     """Placeholder for shape-driven control register computation.
@@ -1101,6 +1137,9 @@ def compute_control_register_updates(
     Register names should follow the naming used in register_map_with_groups1.csv.
     This function is intentionally left as a stable extension point for per-op logic.
     """
+
+    if address_plan is not None and template.address_plan is None:
+        template = replace(template, address_plan=address_plan)
 
     updates: dict[str, object] = {}
 

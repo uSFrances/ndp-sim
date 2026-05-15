@@ -799,7 +799,7 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 		"head_dim": 128,
 		"num_hidden_layers": 1,
 		"sequence_length": 32,
-    "used_slices": 28,
+        "used_slices": 28,
 		"target_op": "all"
   },  
   "used_slices": 28,
@@ -813,22 +813,22 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
           "shape": ["hidden_size//used_slices", "sequence_length", 1],
           "remapping": null,
           "source":  "external",
-		      "write_reg_hint": "reorder(m8,n2)->(n2,m8)",
+		  "write_reg_hint": "reorder(m8,n2)->(n2,m8)",
           "type":"slice_div4"
         },
         "B": {
           "shape": ["hidden_size", 1, "intermediate_size//used_slices"],
           "remapping": null,
           "source": {
-            "type": "external"
+          "type": "external"
           },
-		      "write_reg_hint": "reorder(n8,k2)->(k2,n8)"
+		  "write_reg_hint": "reorder(n8,k2)->(k2,n8)"
         },
         "B'": {
           "shape": ["hidden_size", 1, "intermediate_size//used_slices"],
           "remapping": null,
           "source": {
-            "type": "external"
+          "type": "external"
           }
         }
       },

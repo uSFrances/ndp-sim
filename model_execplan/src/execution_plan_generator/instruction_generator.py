@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 from typing import Iterable
 
 from .errors import InvalidRegisterWritePlanError
+from .control_registers import compute_control_register_updates
 from .models import AddressPlan, ExecutionPlanArtifact, ExecutionPlanInput, InputSourceType, OperatorTemplate
 from .register_mapping import (
     PartialRegisterWrite,
@@ -165,6 +166,17 @@ class InstructionGenerator:
             enabled_slice_ids = op.enabled_slice_ids()
             slice_mask = op.used_slices
             template = templates.get(op.op_id, OperatorTemplate(op_type=op.op_type))
+            template = replace(template, address_plan=address_plan)
+            control_register_values: dict[str, object] = dict(template.control_register_values)
+            if template.should_update_control_registers:
+                dynamic_control_values = compute_control_register_updates(
+                    operator=op,
+                    template=template,
+                    address_plan=address_plan,
+                    apply_instance_mapping=True,
+                )
+                control_register_values.update(dynamic_control_values)
+            template = replace(template, control_register_values=control_register_values)
             config_len = int(template.config_length or 0)
             config_base_addr = address_plan.operator_config_base_addresses.get(op.op_id)
             if config_len > 0 and config_base_addr is None:
@@ -225,9 +237,17 @@ class InstructionGenerator:
                     continue
                 assignment = address_plan.assignments[tensor_name]
                 reg_field_key = self._base_addr_field_key_for_input(input_name)
+                assignment_base_address = assignment.base_address
+                if input_name == "B'":
+                    b_io_key = f"{op.op_id}.input.B"
+                    b_tensor_name = address_plan.operator_io_to_tensor.get(b_io_key)
+                    if b_tensor_name is not None:
+                        b_assignment = address_plan.assignments.get(b_tensor_name)
+                        if b_assignment is not None:
+                            assignment_base_address = b_assignment.base_address
                 base_seed_value = self._resolve_base_addr_seed_value(
                     field_key=reg_field_key,
-                    assignment_base_address=assignment.base_address,
+                    assignment_base_address=assignment_base_address,
                     template=template,
                     force_assignment_base=True,
                 )
@@ -290,7 +310,6 @@ class InstructionGenerator:
                             f"field_value_write_hex=0x{slice_base_addr:08X}"
                         )
                         write_reg_count += 1
-
             output_key = f"{op.op_id}.output.D"
             output_tensor_name = address_plan.operator_io_to_tensor.get(output_key)
             if output_tensor_name is not None:
@@ -372,14 +391,13 @@ class InstructionGenerator:
             if not template.should_update_control_registers:
                 skipped_control_ops += 1
             else:
-                for reg_name, reg_value in template.control_register_values.items():
+                for reg_name, reg_value in control_register_values.items():
                     resolved_reg_name = self._resolve_control_register_field_key(reg_name)
                     if resolved_reg_name is None:
                         unresolved_control_names.add(reg_name)
                         continue
-                    # Base-address fields are already emitted in IO base-address stage
-                    # with per-slice slave replacement; skip duplicated control writes.
-                    if self._is_base_addr_field_key(resolved_reg_name):
+                    if not isinstance(reg_value, int):
+                        unresolved_control_names.add(reg_name)
                         continue
                     effective_original_values = self._build_effective_original_values_for_field(
                         field_key=resolved_reg_name,
@@ -495,15 +513,14 @@ class InstructionGenerator:
     ) -> int:
         # For operator-to-operator edges, input must point to planned producer output
         # address, not to template's decoded original base_addr.
-        if force_assignment_base:
-            return assignment_base_address
-
-        # Priority 1: explicit base_addr override in control_registers.py
         explicit = template.control_register_values.get(field_key)
         if isinstance(explicit, int):
             return explicit
 
-        # Priority 2: original base_addr decoded from template bitstream
+        if force_assignment_base:
+            return assignment_base_address
+
+        # Priority 1: original base_addr decoded from template bitstream
         original = self._extract_field_value_from_original(
             field_key=field_key,
             original_register_values=template.original_register_values,
@@ -511,7 +528,7 @@ class InstructionGenerator:
         if original is not None:
             return original
 
-        # Priority 3: planner fallback when template has no decoded original value
+        # Priority 2: planner fallback when template has no decoded original value
         return assignment_base_address
 
     def _compose_slice_specific_base_addr(

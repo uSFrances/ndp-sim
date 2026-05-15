@@ -88,6 +88,7 @@ class OperatorTemplate:
     control_register_values: dict[str, int] = field(default_factory=dict)
     config_sfu_type: str | None = None
     sfu_config_length: int | None = None
+    address_plan: AddressPlan | None = None
 
 
 @dataclass(frozen=True)
