@@ -245,6 +245,50 @@ def _apply_control_update_to_operator_json(
             inport1["constant"] = _format_fp32_bits_as_symbolic(value)
         return
 
+    if instance.startswith("iga_col_lc") and config_path.startswith("buffer_loop_configs.COL_LC."):
+        suffix = config_path[len("buffer_loop_configs.COL_LC."):]
+        if suffix not in ("end", "stride"):
+            return
+        col_lc_idx = _parse_instance_index(instance, prefix="iga_col_lc")
+        if col_lc_idx is None:
+            return
+        buf_loop = payload.get("buffer_loop_configs")
+        if not isinstance(buf_loop, dict):
+            return
+        group_key = f"GROUP{col_lc_idx}"
+        group = buf_loop.get(group_key)
+        if not isinstance(group, dict):
+            return
+        col_lc = group.get("COL_LC")
+        if isinstance(col_lc, dict):
+            col_lc[suffix] = value
+        return
+
+    if instance.startswith("se_nse") and config_path.startswith("n2n."):
+        suffix = config_path[len("n2n."):]
+        if suffix not in ("mem_loop", "src_slice_sel", "dst_slice_sel"):
+            return
+        nse_idx = _parse_instance_index(instance, prefix="se_nse")
+        if nse_idx is None:
+            return
+        n2n = payload.get("n2n")
+        if not isinstance(n2n, dict):
+            return
+        ns_key = f"neighbor_stream{nse_idx}"
+        ns_node = n2n.get(ns_key)
+        if isinstance(ns_node, dict):
+            ns_node[suffix] = value
+        return
+
+    if instance.startswith("special_array") and config_path == "special_array.outport.mode":
+        special_array = payload.get("special_array")
+        if not isinstance(special_array, dict):
+            return
+        outport = special_array.get("outport")
+        if isinstance(outport, dict):
+            outport["mode"] = "row" if value == 1 else "col"
+        return
+
     if instance.startswith("rd_stream") or instance.startswith("wr_stream"):
         if config_path == "stream_engine.stream.dim_stride":
             stream_engine = payload.get("stream_engine")
@@ -268,6 +312,17 @@ def _apply_control_update_to_operator_json(
             stream_node = stream_engine.get(stream_key)
             if isinstance(stream_node, dict):
                 stream_node["base_addr"] = _format_base_addr_hex(value)
+            return
+        if config_path == "stream_engine.stream.buf_spatial_stride":
+            stream_engine = payload.get("stream_engine")
+            if not isinstance(stream_engine, dict):
+                return
+            stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
+            if stream_key is None:
+                return
+            stream_node = stream_engine.get(stream_key)
+            if isinstance(stream_node, dict):
+                stream_node["buf_spatial_stride"] = _decode_packed_buf_spatial_stride(value)
             return
         return
 
@@ -388,6 +443,14 @@ def _decode_packed_dim_stride(packed: int) -> list[int | None]:
         port1 if port1 != 0 else None,
         port0 if port0 != 0 else None,
     ]
+
+
+def _decode_packed_buf_spatial_stride(packed: int) -> list[int]:
+    """Decode 16 entries (5 bits each) from an 80-bit packed integer."""
+    entries: list[int] = []
+    for i in range(16):
+        entries.append((packed >> (i * 5)) & 0x1F)
+    return entries
 
 
 def _resolve_slice0_input_base_addr(

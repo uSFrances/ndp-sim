@@ -962,7 +962,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "iga_col_lc3.buffer_loop_configs.COL_LC.stride": 2,
             # buf_spatial_stride is intentionally a list here per your example.
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
-            "rd_stream3.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+            "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
     if _has_hint(output_d, "reorder(m8)->(n8)"):
         updates.update({

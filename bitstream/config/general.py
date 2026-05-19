@@ -192,7 +192,7 @@ class GAPEConfig(BaseConfigModule):
             "rec": 17,
             "sqrt": 18,
             "rec_sqrt": 20,
-            "ex": 24,
+            "sfu_activation": 24,
         }
     
     @staticmethod
