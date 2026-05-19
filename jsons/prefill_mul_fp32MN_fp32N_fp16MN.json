@@ -1,11 +1,15 @@
 {
+    "mul_shape": {
+        "M": 64,
+        "N": 32
+    },
     "CONFIG": "11011101",
     "dram_loop_configs": {
         "LC0": {
             "src_id": null,
             "outmost_loop": 1,
             "start": 0,
-            "end": 32,
+            "end": 1,
             "stride": 1,
             "last_index": 0
         },
@@ -13,7 +17,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 8,
             "stride": 1,
             "last_index": 1
         },
@@ -21,7 +25,7 @@
             "src_id": "DRAM_LC.LC1",
             "outmost_loop": 0,
             "start": 0,
-            "end": 8,
+            "end": 32,
             "stride": 1,
             "last_index": 2
         },
@@ -29,23 +33,23 @@
             "src_id": "DRAM_LC.LC2",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 8,
             "stride": 1,
             "last_index": 3
         },
         "LC4": {
-            "src_id": "DRAM_LC.LC1",
+            "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
             "end": 8,
             "stride": 1,
-            "last_index": 2
+            "last_index": 1
         },
         "LC5": {
-            "src_id": "DRAM_LC.LC1",
+            "src_id": "DRAM_LC.LC4",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 16,
             "stride": 1,
             "last_index": 2
         },
@@ -53,76 +57,13 @@
             "src_id": "DRAM_LC.LC5",
             "outmost_loop": 0,
             "start": 0,
-            "end": 8,
+            "end": 2,
             "stride": 1,
             "last_index": 3
         }
     },
     "lc_pe_configs": {
         "PE0": {
-            "alu_opcode": "mac",
-            "inport2": {
-                "src_id": "DRAM_LC.LC1",
-                "mode": "buffer",
-                "keep_last_index": null,
-                "constant": 0
-            },
-            "inport1": {
-                "src_id": null,
-                "mode": "constant",
-                "keep_last_index": null,
-                "constant": 4
-            },
-            "inport0": {
-                "src_id": "DRAM_LC.LC0",
-                "mode": "keep",
-                "keep_last_index": 1,
-                "constant": 0
-            }
-        },
-        "PE1": {
-            "alu_opcode": "mac",
-            "inport2": {
-                "src_id": "DRAM_LC.LC3",
-                "mode": "buffer",
-                "keep_last_index": null,
-                "constant": 0
-            },
-            "inport1": {
-                "src_id": null,
-                "mode": "constant",
-                "keep_last_index": null,
-                "constant": 4
-            },
-            "inport0": {
-                "src_id": "DRAM_LC.LC2",
-                "mode": "keep",
-                "keep_last_index": 3,
-                "constant": 0
-            }
-        },
-        "PE2": {
-            "alu_opcode": "mul",
-            "inport2": {
-                "src_id": null,
-                "mode": null,
-                "keep_last_index": null,
-                "constant": 0
-            },
-            "inport1": {
-                "src_id": null,
-                "mode": "constant",
-                "keep_last_index": null,
-                "constant": 1
-            },
-            "inport0": {
-                "src_id": "LC_PE.PE4",
-                "mode": "buffer",
-                "keep_last_index": null,
-                "constant": 0
-            }
-        },
-        "PE3": {
             "alu_opcode": "mac",
             "inport2": {
                 "src_id": "DRAM_LC.LC6",
@@ -134,33 +75,12 @@
                 "src_id": null,
                 "mode": "constant",
                 "keep_last_index": null,
-                "constant": 8
+                "constant": 2
             },
             "inport0": {
                 "src_id": "DRAM_LC.LC5",
                 "mode": "keep",
                 "keep_last_index": 3,
-                "constant": 0
-            }
-        },
-        "PE4": {
-            "alu_opcode": "mul",
-            "inport2": {
-                "src_id": null,
-                "mode": null,
-                "keep_last_index": null,
-                "constant": 0
-            },
-            "inport1": {
-                "src_id": null,
-                "mode": "constant",
-                "keep_last_index": null,
-                "constant": 1
-            },
-            "inport0": {
-                "src_id": "LC_PE.PE0",
-                "mode": "buffer",
-                "keep_last_index": null,
                 "constant": 0
             }
         }
@@ -171,7 +91,7 @@
             "ROW_LC": {
                 "src_id": "DRAM_LC.LC2",
                 "start": 0,
-                "end": 4,
+                "end": 1,
                 "stride": 1,
                 "last_index": 3
             },
@@ -186,18 +106,18 @@
         "GROUP1": {
             "target": "A",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC0",
+                "src_id": "DRAM_LC.LC2",
                 "start": 0,
-                "end": 4,
+                "end": 1,
                 "stride": 1,
-                "last_index": 1
+                "last_index": 3
             },
             "COL_LC": {
                 "src_id": "GROUP1.ROW_LC",
                 "start": 0,
                 "end": 32,
                 "stride": 16,
-                "last_index": 2
+                "last_index": 4
             }
         },
         "GROUP2": {
@@ -205,7 +125,7 @@
             "ROW_LC": {
                 "src_id": "DRAM_LC.LC5",
                 "start": 0,
-                "end": 4,
+                "end": 1,
                 "stride": 1,
                 "last_index": 3
             },
@@ -239,13 +159,13 @@
                 null
             ],
             "idx": [
-                "LC_PE.PE1",
-                "LC_PE.PE0",
+                "DRAM_LC.LC2",
+                "DRAM_LC.LC1",
                 null
             ],
             "idx_size": [
-                31,
                 0,
+                31,
                 null
             ],
             "dim_stride": [
@@ -331,7 +251,7 @@
             ],
             "mem_idx_keep_last_index": [
                 7,
-                2,
+                3,
                 null
             ],
             "mem_idx_constant": [
@@ -340,8 +260,8 @@
                 null
             ],
             "idx": [
-                "DRAM_LC.LC4",
-                "LC_PE.PE0",
+                "DRAM_LC.LC3",
+                "DRAM_LC.LC2",
                 null
             ],
             "idx_size": [
@@ -395,7 +315,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                2,
+                4,
                 7
             ],
             "buf_spatial_stride": [
@@ -417,7 +337,7 @@
                 15
             ],
             "buf_spatial_size": 16,
-            "buf_full_last_index": 1,
+            "buf_full_last_index": 3,
             "ping_pong": 0,
             "pingpong_last_index": null
         },
@@ -441,13 +361,13 @@
                 null
             ],
             "idx": [
-                "LC_PE.PE3",
-                "LC_PE.PE2",
+                "LC_PE.PE0",
+                "DRAM_LC.LC4",
                 null
             ],
             "idx_size": [
-                15,
                 0,
+                15,
                 null
             ],
             "dim_stride": [
@@ -522,12 +442,12 @@
                 1,
                 1
             ],
-            "buf_end_row_addr": 3
+            "buf_end_row_addr": 0
         },
         "buffer0": {
             "enable": 1,
             "nbr_enable": 0,
-            "buf_full_last_index": 1,
+            "buf_full_last_index": 3,
             "dst_port": 1,
             "buffer_life_time": 1,
             "mode": 0,
@@ -541,7 +461,7 @@
                 1,
                 1
             ],
-            "buf_end_row_addr": 3
+            "buf_end_row_addr": 0
         },
         "buffer5": {
             "enable": 1,
@@ -560,7 +480,7 @@
                 1,
                 1
             ],
-            "buf_end_row_addr": 3
+            "buf_end_row_addr": 0
         }
     },
     "general_array": {
@@ -663,8 +583,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -685,8 +605,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -707,8 +627,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -729,8 +649,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -751,8 +671,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -773,8 +693,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -795,8 +715,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             },
@@ -817,8 +737,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "keep",
-                    "keep_last_index": 2,
+                    "mode": "buffer",
+                    "keep_last_index": null,
                     "constant": 0
                 }
             }

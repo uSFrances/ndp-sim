@@ -843,17 +843,18 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc0.dram_loop_configs.end": d_n // 4 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_m // 32 if a_n is not None else 0,
-        "iga_lc5.dram_loop_configs.end": d_m // 64 if d_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (a_n or 0) * 32,
             port2 = 32,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (a_n or 0) * 16,
             port2 = 16,
         ),
     }
@@ -869,18 +870,21 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc0.dram_loop_configs.end": d_n // 4 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_m // 64 if a_n is not None else 0,
-        "iga_lc5.dram_loop_configs.end": d_m // 32 if d_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc7.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc8.dram_loop_configs.end": d_n if d_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
-            port2 = 32,
+            port1 = (a_n or 0) * 16,
+            port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
-            port2 = 16,
+            port1 = (a_n or 0) * 32,
+            port2 = 32,
         ),
     }
 
@@ -924,6 +928,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     a_shape = input_a.shape if input_a is not None else None
     b_shape = input_b.shape if input_b is not None else None
     d_shape = operator.output.shape
+    output_d = operator.output
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
@@ -934,8 +939,8 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
         "iga_lc4.dram_loop_configs.end": b_k // 4 if b_k is not None else 0,
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
-        "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
-        "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n // 2) if a_n is not None else 0,
+        "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * b_k) if b_k is not None else 0,
+        "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(b_n // 2) if b_n is not None else 0,
         "se_nse0.n2n.mem_loop":b_k//a_k - 1 if a_k is not None and b_k is not None and a_k != 0 else 0,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
         "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
@@ -949,7 +954,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             # buf_spatial_stride is intentionally a list here per your example.
             "rd_stream0.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
-    if _has_hint(input_b, "reorder(n8,k2)->(k2,n8)"):
+    if _has_hint(input_b, "reorder(m8,n2)->(n2,m8)") or _has_hint(input_b, "reorder(n8,m2)->(m2,n8)"):
         updates.update({
             "iga_col_lc1.buffer_loop_configs.COL_LC.end": 4,
             "iga_col_lc1.buffer_loop_configs.COL_LC.stride": 2,
@@ -959,7 +964,10 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
             "rd_stream3.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
-
+    if _has_hint(output_d, "reorder(m8)->(n8)"):
+        updates.update({
+            "special_array0.special_array.outport.mode": 1, #row = 1, col = 0
+        })
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
     if b_base_addr is not None:

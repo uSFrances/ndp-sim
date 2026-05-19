@@ -108,6 +108,7 @@ def _patch_emulator_operator_json_payload(
     updates = compute_control_register_updates(
         operator=operator,
         template=OperatorTemplate(op_type=operator.op_type),
+        address_plan=address_plan,
         apply_instance_mapping=False,
     )
     for field_key, value in updates.items():
@@ -245,18 +246,30 @@ def _apply_control_update_to_operator_json(
         return
 
     if instance.startswith("rd_stream") or instance.startswith("wr_stream"):
-        if config_path != "stream_engine.stream.dim_stride":
+        if config_path == "stream_engine.stream.dim_stride":
+            stream_engine = payload.get("stream_engine")
+            if not isinstance(stream_engine, dict):
+                return
+            stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
+            if stream_key is None:
+                return
+            stream_node = stream_engine.get(stream_key)
+            if not isinstance(stream_node, dict):
+                return
+            stream_node["dim_stride"] = _decode_packed_dim_stride(value)
             return
-        stream_engine = payload.get("stream_engine")
-        if not isinstance(stream_engine, dict):
+        if config_path == "stream_engine.stream.base_addr":
+            stream_engine = payload.get("stream_engine")
+            if not isinstance(stream_engine, dict):
+                return
+            stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
+            if stream_key is None:
+                return
+            stream_node = stream_engine.get(stream_key)
+            if isinstance(stream_node, dict):
+                stream_node["base_addr"] = _format_base_addr_hex(value)
             return
-        stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
-        if stream_key is None:
-            return
-        stream_node = stream_engine.get(stream_key)
-        if not isinstance(stream_node, dict):
-            return
-        stream_node["dim_stride"] = _decode_packed_dim_stride(value)
+        return
 
 
 def _parse_instance_index(instance: str, prefix: str) -> int | None:
