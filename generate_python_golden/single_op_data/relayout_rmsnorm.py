@@ -9,8 +9,16 @@ def float_to_bin(f):
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
 def convert_to_decimal_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）"""
+    """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）；对于 relayout 后的数据一维展开"""
     data = np.fromfile(bin_path, dtype=np.float32)
+    
+    # 执行过 relayout 后的数据，直接按一维展开输出
+    if "beforerelayout" not in bin_path:
+        txt_path = bin_path.replace('.bin', '_decimal_1d.txt')
+        with open(txt_path, 'w') as f:
+            f.write("\n".join(f"{float(v):.10g}" for v in data) + "\n")
+        return
+
     if rows is None or cols is None:
         rows, cols = data.size, 1
     if rows * cols != data.size:
@@ -19,7 +27,7 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None):
 
     # 统一按 F-style 解释二维形状
     matrix = data.reshape((rows, cols), order='F')
-    txt_path = bin_path.replace('.bin', '_decimal.txt')
+    txt_path = bin_path.replace('.bin', f'_decimal_{rows}x{cols}.txt')
     with open(txt_path, 'w') as f:
         for r in range(rows):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
@@ -90,12 +98,49 @@ def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_
     matrix_2d.reshape(-1, order='C').tofile(out_path)
     convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
 
+def infer_group_params_from_filename(group_files):
+    """
+    从文件名中的 _shapeNxM_dtype 推导:
+    - tile_m: 每个 slice 的 M
+    - num_slices: slice 数
+    优先从 sum_mac (大矩阵) 或 mul_MN_M 的文件名推导。
+    """
+    # 1) 优先从 sum_mac 或 mul_MN_M 的文件名中寻找 (N, M) 形状
+    for fp in group_files:
+        fn = os.path.basename(fp)
+        if "sum_mac" not in fn and "mul_MN_M" not in fn:
+            continue
+            
+        m = re.search(r"_shape([\dx]+)_dtype", fn)
+        if not m:
+            continue
+        
+        dims = [d for d in map(int, m.group(1).split('x')) if d > 1]
+        if len(dims) >= 2:
+            n, mm = max(dims), min(dims)
+            if n > mm and n % mm == 0:
+                return mm, n // mm
+
+    # 2) 退化：从其他文件中寻找 (M, S) 形状（比如 sum_mac_out）
+    for fp in group_files:
+        fn = os.path.basename(fp)
+        m = re.search(r"_shape([\dx]+)_dtype", fn)
+        if not m:
+            continue
+        
+        dims = [d for d in map(int, m.group(1).split('x')) if d > 1]
+        if len(dims) >= 2:
+            # 假设 M, S 两个维度都不为 1
+            return min(dims), max(dims)
+
+    return None, None
+
 def process_rmsnorm_tensors(input_dir, output_dir):
     """
     处理 rmsnorm 生成的所有 sub_op .bin 文件。
-    1. sum_mac_in0 / mul_MN_M_out 等原维度(896, 32): 在 M 维度切成 28 个 32x32 的 slice 并 relayout。
-    2. sum_mac_out (32, 28): 将28个列分离出来。每个变成 (32, 1)，分配给 28 个 slice 并 relayout。
-    3. remote_sum, mac_SFU 等 (32, 1): 以副本形式发送给 28 个 slice。
+    1. sum_mac_in0 / mul_MN_M_out 等原维度(N, M): 在 N 维度切成 num_slices 个 (N//slice, M) 的 slice 并 relayout。
+    2. sum_mac_out (M, num_slices): 将 num_slices 个列分离出来。每个变成 (M, 1)，分配给 num_slices 个 slice 并 relayout。
+    3. remote_sum, mac_SFU 等 (M, 1): 以副本形式发送给 num_slices 个 slice。
     """
     print(f"🚀 Starting RMSNorm tensor relayout in: {input_dir}")
 
@@ -118,6 +163,15 @@ def process_rmsnorm_tensors(input_dir, output_dir):
         before_install_dir = os.path.join(group_output_dir, "install_beforerelayout")
 
         group_files = [f for f in valid_files if os.path.basename(f).startswith(target_prefix)]
+
+        # 新增：从文件名参数化推导，不再硬编码 896/32/28
+        tile_m, inferred_slices = infer_group_params_from_filename(group_files)
+        if tile_m is None or inferred_slices is None:
+            print(f"  ⚠️ Cannot infer (tile_m, num_slices) from filenames for group: {target_prefix}, skip.")
+            continue
+        total_n = tile_m * inferred_slices
+        print(f"  🧩 Inferred params from filename: N={total_n}, M={tile_m}, slices={inferred_slices}")
+
         for filepath in group_files:
             filename = os.path.basename(filepath)
 
@@ -147,53 +201,40 @@ def process_rmsnorm_tensors(input_dir, output_dir):
             elif data_2d.ndim == 1:
                 data_2d = data_2d.reshape(-1, 1)
 
-            if matrix_id == "A" and data_2d.shape == (896, 32):
-                data_2d = data_2d.T
+            # 1A/1B 合并：原始维度 (N, M)，按 N 维切成 num_slices 个 (N//slice, M)
+            if data_2d.shape == (total_n, tile_m):
+                n_per_slice = total_n // inferred_slices
+                for i in range(inferred_slices):
+                    n_start = i * n_per_slice
+                    slice_nxm = data_2d[n_start:n_start + n_per_slice, :]
+                    save_before_relayout(before_install_dir, op_id, i, out_name, slice_nxm)
 
-            if matrix_id == "A" and data_2d.shape == (32, 896):
-                for i in range(num_slices):
-                    c_start = i * 32
-                    slice_32x32 = data_2d[:, c_start:c_start+32]
-                    save_before_relayout(before_install_dir, op_id, i, out_name, slice_32x32)
-
-                    relayout_data = relayout_slice_M8_N(slice_32x32)
+                    relayout_data = relayout_slice_M8_N(slice_nxm)
                     slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
                     os.makedirs(slice_dir, exist_ok=True)
 
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_32x32.shape[0], cols=slice_32x32.shape[1])
+                    convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1])
 
-            elif data_2d.shape[0] == 896:
-                for i in range(num_slices):
-                    m_start = i * 32
-                    slice_32x32 = data_2d[m_start:m_start+32, :]
-                    save_before_relayout(before_install_dir, op_id, i, out_name, slice_32x32)
+            # 2. sum 输出路径：(M, num_slices) -> 每列一个 (M,1)
+            elif data_2d.ndim >= 2 and data_2d.shape == (tile_m, inferred_slices):
+                for i in range(inferred_slices):
+                    slice_mx1 = data_2d[:, i:i+1]
+                    save_before_relayout(before_install_dir, op_id, i, out_name, slice_mx1)
 
-                    relayout_data = relayout_slice_M8_N(slice_32x32)
+                    relayout_data = relayout_slice_M8_N(slice_mx1)
                     slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
                     os.makedirs(slice_dir, exist_ok=True)
 
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_32x32.shape[0], cols=slice_32x32.shape[1])
+                    convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1])
 
-            elif data_2d.ndim >= 2 and data_2d.shape[1] == 28:
-                for i in range(num_slices):
-                    slice_32x1 = data_2d[:, i:i+1]
-                    save_before_relayout(before_install_dir, op_id, i, out_name, slice_32x1)
-
-                    relayout_data = relayout_slice_M8_N(slice_32x1)
-                    slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
-                    os.makedirs(slice_dir, exist_ok=True)
-
-                    out_path = os.path.join(slice_dir, out_name)
-                    relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_32x1.shape[0], cols=slice_32x1.shape[1])
-
-            elif data_2d.ndim >= 2 and data_2d.shape[1] == 1:
+            # 3. 汇总向量：(M,1) 复制到每个 slice
+            elif data_2d.ndim >= 2 and data_2d.shape[1] == 1 and data_2d.shape[0] == tile_m:
                 relayout_data = relayout_slice_M8_N(data_2d)
-                for i in range(num_slices):
+                for i in range(inferred_slices):
                     save_before_relayout(before_install_dir, op_id, i, out_name, data_2d)
                     slice_dir = os.path.join(install_dir, op_id, f"slice{i:02d}")
                     os.makedirs(slice_dir, exist_ok=True)
@@ -201,6 +242,7 @@ def process_rmsnorm_tensors(input_dir, output_dir):
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
                     convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1])
+
             else:
                 print(f"  ⚠️ Skipping unrecognized shape pattern: {data_2d.shape}")
 
