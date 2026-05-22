@@ -908,7 +908,31 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 
 ### 八、Bank_data 导出
 * 新增 CLI 开关：`-b` / `--export-bank-data`。
-* 启用后从 `sca_cfg.json` 读取矩阵数据项并导出到 `<output_prefix>/Bank_data/`。
+* 启用后从 `sca_cfg.json` 读取带 `base_addr` / `path` 的数据项并导出到 `<output_prefix>/Bank_data/`，包括 `ExecutionPlan` 和 `cfg_pkg` 中的 bitstream 文件。
 * 导出文件按 `(slice, bank)` 组织，命名为 `sliceXX_BankXX_data.txt`。
-* 输出格式为每行 32bit 大端 hex；bank 内地址从 0 开始连续展开。
+* 默认输出为二进制；可用 `--bank-output-format hex` 切换为 hex。
+* 可配合 `-lw` / `--bank-line-width` 选择每行 32bit 或 128bit。
 * 按 128bit 地址分配粒度填充空洞为 0；无数据 bank 不生成文件。
+* 新增整合模式（`--combined`）：
+    * 每个 slice 的 4 个 bank 数据合并为一个文件 `sliceXX_data.txt`。
+    * bank N 数据起始于偏移 `N × stride`（stride 为该 slice 最大 bank 数据量，对齐到 16 字节）。
+    * 可通过 `-bc` / `--bank-combined` 配合 `-b` 在 pipeline 中启用。
+
+### Bank_data 独立 CLI 调用
+
+```bash
+# 分 bank 导出（默认）
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --combined
+
+# 指定输出目录
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --out-dir ./my_bank_data
+
+# hex 输出
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --output-format hex
+
+# 整合模式（每 slice 一个文件）
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --combined
+
+# pipeline 中启用整合模式
+python main.py example.json -b -bc
+```

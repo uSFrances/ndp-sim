@@ -20,7 +20,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from execution_plan_generator.json_loader import execution_plan_to_dict
-from execution_plan_generator.bank_data_exporter import export_bank_data
+from execution_plan_generator.bank_data_exporter import export_bank_data, export_combined_bank_data
 from execution_plan_generator.output_writer import (
     write_input_with_baseaddr,
     write_emulator_bundle,
@@ -205,6 +205,27 @@ def parse_args() -> argparse.Namespace:
         help="Export per-slice per-bank data files to <output_prefix>/Bank_data",
     )
     parser.add_argument(
+        "-bc",
+        "--bank-combined",
+        action="store_true",
+        default=False,
+        help="Combine all banks into a single file per slice (only with --export-bank-data)",
+    )
+    parser.add_argument(
+        "-lw",
+        "--bank-line-width",
+        type=int,
+        choices=[32, 128],
+        default=32,
+        help="Bank data output line width in bits: 32 or 128 (only with --export-bank-data, default: 32)",
+    )
+    parser.add_argument(
+        "--bank-output-format",
+        choices=["binary", "hex"],
+        default="binary",
+        help="Bank data output format: binary or hex (default: binary)",
+    )
+    parser.add_argument(
         "-e",
         "--export-emulator",
         action="store_true",
@@ -306,15 +327,22 @@ def main() -> int:
             address_plan=result.address_plan,
             output_prefix=output_prefix,
             emulator_suffix=args.json_file.stem,
+            skip_missing_data=True,
         )
         print(f"Emulator bundle written to: {output_prefix / f'emulator_{args.json_file.stem}'} ({len(emulator_paths)} files)")
 
     if args.export_bank_data:
         bank_data_dir = output_prefix / "Bank_data"
-        bank_files = export_bank_data(manifest_path=manifest_path, output_dir=bank_data_dir)
+        export_fn = export_combined_bank_data if args.bank_combined else export_bank_data
+        bank_files = export_fn(
+            manifest_path=manifest_path,
+            output_dir=bank_data_dir,
+            line_width_bits=args.bank_line_width,
+            output_format=args.bank_output_format,
+        )
         print(
             f"Bank_data exported to: {bank_data_dir} "
-            f"(files={len(bank_files)})"
+            f"(files={len(bank_files)}, combined={args.bank_combined})"
         )
 
     if args.dump_normalized_json is not None:

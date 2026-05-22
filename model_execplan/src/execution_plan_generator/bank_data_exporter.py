@@ -54,25 +54,91 @@ def _extract_slice_id(entry_key: str) -> int:
     return int(match.group(1))
 
 
+def _resolve_slice_id(entry_key: str, base_addr: int) -> int:
+    try:
+        return _extract_slice_id(entry_key)
+    except ValueError:
+        slave, _, _, _, _ = _decode_addr_fields(base_addr)
+        return slave
+
+
 def _load_matrix_payload_bytes(data_path: Path) -> bytes | None:
     if data_path.is_file():
+        if data_path.suffix.lower() == ".txt":
+            return _parse_128bit_txt(data_path)
         return data_path.read_bytes()
 
-    if data_path.suffix.lower() == ".bin":
-        txt_path = data_path.with_suffix(".txt")
-        if txt_path.is_file():
-            words: list[bytes] = []
-            with txt_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    bits = line.strip()
-                    if not bits:
-                        continue
-                    if len(bits) != 128 or any(ch not in "01" for ch in bits):
-                        raise ValueError(f"Invalid 128-bit binary line in {txt_path}: {bits[:64]}...")
-                    words.append(int(bits, 2).to_bytes(16, byteorder="big", signed=False))
-            return b"".join(words)
+    # Manifest may point to .txt while data exists as .bin, or vice versa.
+    alt_path = data_path.with_suffix(".bin") if data_path.suffix.lower() != ".bin" else data_path.with_suffix(".txt")
+    if alt_path.is_file():
+        if alt_path.suffix.lower() == ".bin":
+            return alt_path.read_bytes()
+        return _parse_128bit_txt(alt_path)
 
     return None
+
+
+def _parse_128bit_txt(txt_path: Path) -> bytes:
+    words: list[bytes] = []
+    with txt_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            bits = line.strip()
+            if not bits:
+                continue
+            if len(bits) != 128 or any(ch not in "01" for ch in bits):
+                raise ValueError(f"Invalid 128-bit binary line in {txt_path}: {bits[:64]}...")
+            # Keep txt binary payloads in the same presentation order; the
+            # downstream writer already emits words in little-endian form.
+            words.append(int(bits, 2).to_bytes(16, byteorder="little", signed=False))
+    return b"".join(words)
+
+
+def _format_u32_word(word: int, output_format: str) -> str:
+    if output_format == "hex":
+        return f"0x{word:08X}"
+    return f"{word:032b}"
+
+
+def _resolve_manifest_path(manifest_arg: str) -> Path:
+    manifest_path = Path(manifest_arg).expanduser()
+    if manifest_path.is_file():
+        return manifest_path.resolve()
+
+    module_root = Path(__file__).resolve().parents[2]
+    repo_root = module_root.parent
+    search_roots = [Path.cwd(), module_root, repo_root]
+
+    candidate_paths = [manifest_path]
+    if manifest_path.parts and manifest_path.parts[0] == module_root.name:
+        stripped = Path(*manifest_path.parts[1:])
+        candidate_paths.append(stripped)
+
+    for candidate in candidate_paths:
+        if candidate.is_absolute() and candidate.is_file():
+            return candidate.resolve()
+        for root in search_roots:
+            resolved = (root / candidate).resolve()
+            if resolved.is_file():
+                return resolved
+
+    return manifest_path.resolve()
+
+
+def _resolve_output_path(output_arg: str, *, prefer_existing_parent: bool = False) -> Path:
+    output_path = Path(output_arg).expanduser()
+    if output_path.is_absolute():
+        return output_path.resolve()
+
+    module_root = Path(__file__).resolve().parents[2]
+    cwd = Path.cwd().resolve()
+
+    if cwd.name == module_root.name and output_path.parts and output_path.parts[0] == module_root.name:
+        output_path = Path(*output_path.parts[1:])
+
+    resolved = (cwd / output_path).resolve()
+    if prefer_existing_parent and not resolved.parent.exists():
+        return resolved
+    return resolved
 
 
 def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
@@ -82,8 +148,6 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
     missing_count = 0
 
     for key, value in manifest.items():
-        if "_matrix" not in key or "_slice" not in key:
-            continue
         if not isinstance(value, dict):
             continue
 
@@ -92,7 +156,8 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
         if not isinstance(base_addr_raw, str) or not isinstance(rel_path, str):
             continue
 
-        slice_id = _extract_slice_id(key)
+        base_addr = _parse_hex_addr(base_addr_raw)
+        slice_id = _resolve_slice_id(key, base_addr)
         abs_path = root_dir / rel_path
         file_bytes = _load_matrix_payload_bytes(abs_path)
         if file_bytes is None:
@@ -106,7 +171,6 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
             pad = 16 - (len(file_bytes) % 16)
             file_bytes = file_bytes + (b"\x00" * pad)
 
-        base_addr = _parse_hex_addr(base_addr_raw)
         slave, bank, _, _, _ = _decode_addr_fields(base_addr)
         # if slave != slice_id:
         #     raise ValueError(
@@ -125,27 +189,73 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
         )
 
     if not payloads:
-        raise ValueError("No matrix payload files found from manifest entries")
+        print("Warning: No payload files found from manifest entries — skipping bank data export.")
+        return []
+
     if missing_count > 0:
-        print(f"Skipped matrix entries due to missing files: {missing_count}")
+        print(f"Skipped payload entries due to missing files: {missing_count}")
 
     return payloads
 
 
-def _write_bank_file(output_path: Path, bank_data: bytes) -> None:
+def _write_bank_file(
+    output_path: Path,
+    bank_data: bytes,
+    *,
+    line_width_bits: int = 32,
+    output_format: str = "binary",
+) -> None:
+    """Write bank data as formatted words.
+
+    Args:
+        line_width_bits: 32 → one 32-bit word per line.
+                        128 → four 32-bit words per line.
+        output_format: "binary" or "hex".
+    """
+    if line_width_bits == 128:
+        _write_bank_file_128bit(output_path, bank_data, output_format=output_format)
+        return
+
     if len(bank_data) % 4 != 0:
         pad = 4 - (len(bank_data) % 4)
         bank_data = bank_data + (b"\x00" * pad)
 
     lines = []
     for i in range(0, len(bank_data), 4):
-        word = int.from_bytes(bank_data[i : i + 4], byteorder="big", signed=False)
-        lines.append(f"0x{word:08X}")
+        word = int.from_bytes(bank_data[i : i + 4], byteorder="little", signed=False)
+        lines.append(_format_u32_word(word, output_format))
 
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def export_bank_data(manifest_path: Path, output_dir: Path) -> list[Path]:
+def _write_bank_file_128bit(output_path: Path, bank_data: bytes, *, output_format: str = "binary") -> None:
+    if len(bank_data) % 16 != 0:
+        pad = 16 - (len(bank_data) % 16)
+        bank_data = bank_data + (b"\x00" * pad)
+
+    lines = []
+    for i in range(0, len(bank_data), 16):
+        chunk = bank_data[i : i + 16]
+        if output_format == "hex":
+            words = []
+            for j in range(3, -1, -1):
+                word = int.from_bytes(chunk[j * 4 : (j + 1) * 4], byteorder="little", signed=False)
+                words.append(f"0x{word:08X}")
+            lines.append(" ".join(words))
+        else:
+            line_value = int.from_bytes(chunk, byteorder="little", signed=False)
+            lines.append(f"{line_value:0128b}")
+
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def export_bank_data(
+    manifest_path: Path,
+    output_dir: Path,
+    *,
+    line_width_bits: int = 32,
+    output_format: str = "binary",
+) -> list[Path]:
     payloads = _load_payloads(manifest_path)
     grouped: dict[tuple[int, int], list[MatrixPayload]] = {}
     for payload in payloads:
@@ -177,7 +287,85 @@ def export_bank_data(manifest_path: Path, output_dir: Path) -> list[Path]:
             continue
 
         out_file = output_dir / f"slice{slice_id:02d}_Bank{bank_id:02d}_data.txt"
-        _write_bank_file(out_file, bytes(bank_image))
+        _write_bank_file(
+            out_file,
+            bytes(bank_image),
+            line_width_bits=line_width_bits,
+            output_format=output_format,
+        )
+        written_files.append(out_file)
+
+    return written_files
+
+
+def export_combined_bank_data(
+    manifest_path: Path,
+    output_dir: Path,
+    *,
+    line_width_bits: int = 32,
+    output_format: str = "binary",
+) -> list[Path]:
+    """Export per-slice combined bank data into a single file per slice.
+
+    Within each slice file, bank N data is placed at offset
+    ``N * max_bank_size``, where max_bank_size is the largest bank image
+    size for that slice (rounded up to 16 bytes).
+    """
+    payloads = _load_payloads(manifest_path)
+    grouped: dict[tuple[int, int], list[MatrixPayload]] = {}
+    for payload in payloads:
+        grouped.setdefault((payload.slice_id, payload.bank_id), []).append(payload)
+
+    # Collect per-slice per-bank images.
+    slice_bank_images: dict[int, dict[int, bytes]] = {}
+    for (slice_id, bank_id), items in sorted(grouped.items()):
+        max_end = 0
+        for item in items:
+            end = item.bank_offset_bytes + len(item.data)
+            if end > max_end:
+                max_end = end
+
+        bank_image = bytearray(max_end)
+        for item in sorted(items, key=lambda x: x.bank_offset_bytes):
+            start = item.bank_offset_bytes
+            end = start + len(item.data)
+            existing = bank_image[start:end]
+            if any(b != 0 for b in existing):
+                raise ValueError(
+                    f"Overlapping payload detected: slice={slice_id}, bank={bank_id}, key={item.source_key}"
+                )
+            bank_image[start:end] = item.data
+
+        slice_bank_images.setdefault(slice_id, {})[bank_id] = bytes(bank_image)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written_files: list[Path] = []
+    BANK_COUNT = 4
+
+    for slice_id in sorted(slice_bank_images.keys()):
+        banks = slice_bank_images[slice_id]
+        # Determine stride as max bank image size across all banks for this slice.
+        max_bank_size = max((len(data) for data in banks.values()), default=0)
+        if max_bank_size == 0:
+            continue
+        # Align stride to 16 bytes so each bank starts at a clean 128-bit boundary.
+        stride = ((max_bank_size + 15) // 16) * 16
+
+        combined_size = BANK_COUNT * stride
+        combined = bytearray(combined_size)
+
+        for bank_id in range(BANK_COUNT):
+            data = banks.get(bank_id, b"")
+            start = bank_id * stride
+            combined[start : start + len(data)] = data
+
+        out_file = output_dir / f"slice{slice_id:02d}_data.txt"
+        _write_bank_file(
+            out_file,
+            bytes(combined),
+            line_width_bits=line_width_bits,
+            output_format=output_format,
+        )
         written_files.append(out_file)
 
     return written_files
@@ -198,6 +386,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output directory for bank files (default: <manifest_dir>/Bank_data)",
     )
+    parser.add_argument(
+        "--combined",
+        action="store_true",
+        default=False,
+        help="Export combined slice files (one file per slice) instead of separate per-bank files.",
+    )
+    parser.add_argument(
+        "--line-width",
+        type=int,
+        choices=[32, 128],
+        default=32,
+        help="Output line width in bits: 32 (one word per line, default) or 128 (four words per line).",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["binary", "hex"],
+        default="hex",
+        help="Output word format: binary (default) or hex.",
+    )
     return parser
 
 
@@ -205,12 +412,25 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest).resolve()
+    manifest_path = _resolve_manifest_path(args.manifest)
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-    out_dir = Path(args.out_dir).resolve() if args.out_dir else (manifest_path.parent / "Bank_data")
-    written = export_bank_data(manifest_path=manifest_path, output_dir=out_dir)
+    out_dir = _resolve_output_path(args.out_dir, prefer_existing_parent=True) if args.out_dir else (manifest_path.parent / "Bank_data")
+    if args.combined:
+        written = export_combined_bank_data(
+            manifest_path=manifest_path,
+            output_dir=out_dir,
+            line_width_bits=args.line_width,
+            output_format=args.output_format,
+        )
+    else:
+        written = export_bank_data(
+            manifest_path=manifest_path,
+            output_dir=out_dir,
+            line_width_bits=args.line_width,
+            output_format=args.output_format,
+        )
 
     print(f"Manifest: {manifest_path}")
     print(f"Output dir: {out_dir}")

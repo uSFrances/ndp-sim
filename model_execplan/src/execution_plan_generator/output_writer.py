@@ -24,6 +24,7 @@ def write_emulator_bundle(
     address_plan: AddressPlan,
     output_prefix: str | Path,
     emulator_suffix: str | None = None,
+    skip_missing_data: bool = False,
 ) -> list[Path]:
     prefix = Path(output_prefix)
     output_dir = prefix if prefix.suffix == "" else prefix.parent / prefix.stem
@@ -37,6 +38,7 @@ def write_emulator_bundle(
     repo_root = project_root.parent
     op_json_root = repo_root / "jsons"
     written_paths: list[Path] = []
+    skipped_ops: list[str] = []
 
     for op in execution_input.operators:
         op_dir = emulator_dir / op.op_id
@@ -46,6 +48,9 @@ def write_emulator_bundle(
 
         source_json = op_json_root / f"{op.op_type}.json"
         if not source_json.is_file():
+            if skip_missing_data:
+                skipped_ops.append(f"{op.op_id} ({op.op_type}): missing JSON template {source_json}")
+                continue
             raise FileNotFoundError(
                 f"Missing operator JSON template for emulator export: {source_json}"
             )
@@ -55,6 +60,27 @@ def write_emulator_bundle(
             operator=op,
             address_plan=address_plan,
         )
+
+        # Check all slices for missing data before writing anything for this op.
+        if skip_missing_data:
+            op_missing = False
+            for slice_id in op.enabled_slice_ids():
+                slice_dir_name = f"slice{slice_id:02d}"
+                install_slice_dir = output_dir / "install" / op.op_id / slice_dir_name
+                for input_name in op.inputs.keys():
+                    if input_name == "B'":
+                        continue
+                    data_file = install_slice_dir / f"matrix_{input_name}_linearized_128bit.bin"
+                    if not data_file.is_file():
+                        skipped_ops.append(
+                            f"{op.op_id} ({op.op_type}): missing data file {data_file}"
+                        )
+                        op_missing = True
+                        break
+                if op_missing:
+                    break
+            if op_missing:
+                continue
 
         for slice_id in op.enabled_slice_ids():
             slice_dir_name = f"slice{slice_id:02d}"
@@ -83,6 +109,11 @@ def write_emulator_bundle(
             data_path = emulator_slice_dir / "dram_data.bin"
             data_path.write_bytes(b"".join(data_parts))
             written_paths.append(data_path)
+
+    if skipped_ops:
+        print(f"\n[emulator] Skipped {len(skipped_ops)} operator(s) due to missing data:")
+        for msg in skipped_ops:
+            print(f"  - {msg}")
 
     return written_paths
 
