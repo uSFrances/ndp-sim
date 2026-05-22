@@ -7,6 +7,7 @@
     "num_hidden_layers": 1,
     "sequence_length": 32,
     "slice_per_head": 4,
-    "target_op": "gemm"
+    "used_slices": 28,
+    "target_op": "all"
 }
 

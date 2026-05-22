@@ -71,7 +71,7 @@ ALIAS_TO_FILE = {
 
     "remote_sum_fp16MN_fp32MN": "prefill_remote_sum_4slice_fp16MN_fp32MN.json",
 
-    "silu": "prefill_silu_fp32MN_fp16MN.json"
+    "silu": "prefill_silu_fp16MN_fp32MN.json"
 }
 
 
@@ -139,6 +139,7 @@ def merge_templates(oplist: list[str]) -> dict:
     merged_ops = []
     op_idx = 0
     used_slices = 0
+    op_mapping = {}
 
     # 1. 读取 params (config.json)
     params = {}
@@ -156,7 +157,6 @@ def merge_templates(oplist: list[str]) -> dict:
         current_file_new_ops = []
 
         # 第一遍：先生成当前文件所有算子的全局新 ID
-        # 这一步必须先完成，因为内部引用 (如 op2 调 op1) 需要 local_id_map
         for op in operators:
             new_op = copy.deepcopy(op)
             old_id = new_op["id"]
@@ -166,6 +166,9 @@ def merge_templates(oplist: list[str]) -> dict:
             local_id_map[old_id] = new_id
             new_op["id"] = new_id
             current_file_new_ops.append(new_op)
+            
+            # 新增：记录当前全局 op 属于哪个原始模板的哪个旧 id
+            op_mapping[new_id] = f"{op_name}::{old_id}"
 
         # 第二遍：重写引用 (此时 merged_ops 包含了之前所有文件的算子)
         for op in current_file_new_ops:
@@ -178,7 +181,7 @@ def merge_templates(oplist: list[str]) -> dict:
         "params": params,
         "used_slices": used_slices,
         "operators": merged_ops,
-    }
+    }, op_mapping
 
 def main():
     parser = argparse.ArgumentParser()
@@ -195,13 +198,18 @@ def main():
     )
     args = parser.parse_args()
 
-    result = merge_templates(args.ops)
+    result, op_mapping = merge_templates(args.ops)
     out_path = Path(args.output)
+    
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-
     print(f"已生成: {out_path}")
 
+    # 新增：保存 op 到模板文件来源的映射列表
+    mapping_out_path = out_path.with_name(out_path.stem + "_mapping.json")
+    with mapping_out_path.open("w", encoding="utf-8") as f:
+        json.dump(op_mapping, f, ensure_ascii=False, indent=2)
+    print(f"已生成映射: {mapping_out_path}")
 
 if __name__ == "__main__":
     main()
