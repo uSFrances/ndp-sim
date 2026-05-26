@@ -308,7 +308,9 @@ def _apply_control_update_to_operator_json(
         ns_key = f"neighbor_stream{nse_idx}"
         ns_node = n2n.get(ns_key)
         if isinstance(ns_node, dict):
-            ns_node[suffix] = value
+            # mem_loop in JSON is one greater than the register field value.
+            json_value = value + 1 if suffix == "mem_loop" else value
+            ns_node[suffix] = json_value
         return
 
     if instance.startswith("special_array") and config_path == "special_array.outport.mode":
@@ -751,6 +753,8 @@ def write_install_manifest(
                 "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.txt",
             }
 
+    # Deduplicate config entries: operators of the same type share one payload.
+    seen_config_types: set[str] = set()
     for op in execution_input.operators:
         template = templates.get(op.op_id)
         if template is None:
@@ -758,6 +762,12 @@ def write_install_manifest(
         config_len = int(template.config_length or 0)
         if config_len <= 0:
             continue
+        if op.op_type in seen_config_types:
+            # Reuse the already-emitted config entry.
+            payload[f"{op.op_id}_config"] = payload[f"{op.op_type}_config"]
+            continue
+        seen_config_types.add(op.op_type)
+
         config_base_addr = address_plan.operator_config_base_addresses.get(op.op_id)
         if config_base_addr is None:
             raise ValueError(
@@ -777,7 +787,8 @@ def write_install_manifest(
             "base_addr": _format_hex32(config_base_addr),
             "path": cfg_path,
         }
-        # Keep config address visible with the same flat naming style as matrix entries.
+        # Emit one canonical entry keyed by op_type, then alias per-operator.
+        payload[f"{op.op_type}_config"] = cfg_item
         payload[f"{op.op_id}_config"] = cfg_item
 
         sfu_type = template.config_sfu_type
@@ -909,9 +920,12 @@ def _resolve_config_bitstream_source(op_type: str, template: OperatorTemplate) -
             if candidate.is_file():
                 return candidate
 
-    # 2) Fall back to any 128b bitstream binary in operator folder.
+    # 2) Fall back to any 128b bitstream file in operator folder.
     if op_cfg_dir.is_dir():
-        matched = sorted(op_cfg_dir.glob("*bitstream_128b.txt"))
+        matched = sorted(
+            list(op_cfg_dir.glob("*bitstream_128b.txt"))
+            + list(op_cfg_dir.glob("*bitstream_128b.bin"))
+        )
         if len(matched) == 1:
             return matched[0]
         if len(matched) > 1:

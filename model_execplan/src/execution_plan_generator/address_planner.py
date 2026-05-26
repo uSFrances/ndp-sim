@@ -130,7 +130,25 @@ class AddressPlanner:
             col=0,
             subword=0,
         )
+        # De-duplicate: operators of the same type share one config payload.
+        seen_config_types: dict[str, int] = {}
+        seen_sfu_types: dict[str, int] = {}
         for op in execution_input.operators:
+            if op.op_type in seen_config_types:
+                # Reuse the already-allocated address for this operator type.
+                base_addr = seen_config_types[op.op_type]
+                operator_config_base_addresses[op.op_id] = base_addr
+                operator_config_lengths[op.op_id] = operator_config_lengths.get(
+                    op.op_id, config_lengths_by_op.get(op.op_id, 0) or 0
+                )
+                # SFU also shared when already allocated.
+                if op.op_type in seen_sfu_types:
+                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[op.op_type]
+                    operator_sfu_config_lengths[op.op_id] = operator_sfu_config_lengths.get(
+                        op.op_id, sfu_config_lengths_by_op.get(op.op_id, 0) or 0
+                    )
+                continue
+
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
                 raise AddressPlanningError(
@@ -142,6 +160,7 @@ class AddressPlanner:
             else:
                 base_address = config_cursor_addr
                 operator_config_base_addresses[op.op_id] = base_address
+                seen_config_types[op.op_type] = base_address
                 # Keep metadata value as original 64-bit row count.
                 operator_config_lengths[op.op_id] = config_length_64b
 
@@ -157,6 +176,7 @@ class AddressPlanner:
             if sfu_config_length_64b > 0:
                 sfu_base_address = config_cursor_addr
                 operator_sfu_config_base_addresses[op.op_id] = sfu_base_address
+                seen_sfu_types[op.op_type] = sfu_base_address
                 operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
 
                 sfu_config_bytes = sfu_config_length_64b * 8
