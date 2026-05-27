@@ -705,18 +705,20 @@ padding		chunk_size	chunk
         * `B'` 复用 `B` 地址。
         * 输出 `D` 紧跟在所有输入之后。
     * 导出的 `base_addr` 使用十六进制字符串格式（如 `0x0`、`0x1000`）。
-* 已完成算子配置目录自动补齐：
-    * 运行 `model_execplan/main.py` 时，会按输入 JSON 中出现的算子类型检查 `model_execplan/config/<op_type>/`。
-    * 若缺少 `parsed_bitstream.txt` 或 `*bitstream_64b.bin/*bitstream_128b.bin`，会自动调用 `bitstream/main.py` 生成。
-    * 若目录已完整，默认跳过，不重复生成。
-* 已完成强制重生成开关：
-    * `-reop` / `--regenerate-operator-configs` 默认关闭（`False`）。
-    * 显式传入该参数时，强制重建所有算子配置目录。
-* 已完成子进程日志与编码兼容性处理：
-    * 自动生成算子配置时，子进程输出默认不直接打印到控制台。
-    * 子进程失败时会附带 `stderr` 片段到异常信息，便于定位问题。
-    * 输出解码按 UTF-8 处理并带替换策略，避免 Windows 下 `gbk` 解码异常导致线程报错。
-* 已完成 `max` 示例输入更新：当前示例按“仅输入 A，输出 D”组织。
+* 已完成算子配置目录自动生成（每次运行必然执行）：
+    * 流程中 `_regenerate_bitstreams` 会根据地址规划与控制寄存器更新，对每个算子类型：
+        1. 加载 `jsons/<op_type>.json` 模板
+        2. 写入控制寄存器与 stream base_addr 更新值
+        3. 调用 `bitstream/main.py --visualize-placement` 重新生成码流
+        4. 将所有输出（128b/64b 二进制码流、parsed 码流、mapping_review.json、patched JSON）保存到 `model_execplan/config/<op_type>/`
+    * 新码流已包含控制寄存器更新值，指令生成时以此为基线，大量相同值的 Write_Reg 被跳过，大幅减少指令数。
+    * 支持 config 文件夹被删除后自动重建，无额外参数。
+* 已完成同类型算子 config / SFU 地址去重：
+    * 同一 `op_type` 出现多次时，地址规划只分配一份 config 地址空间，后续实例复用。
+    * `sca_cfg.json` 中同类型算子共享同一配置条目，`cfg_pkg/` 中只保留一份码流文件。
+    * SFU 配置同理去重。
+* 已完成同寄存器多字段合并：当两个控制字段映射到同一寄存器地址时，合并为一条 Write_Reg 指令，解释中显示两个字段信息。
+* 已完成指令数大幅优化：通过码流重生成 + 基线对比 + 同寄存器合并，典型场景指令数减少 75%+（如 896→223）。
 
 ### 待完成工作
 * 更多算子模板信息仍需补充到统一基础信息文件中，目前主要围绕示例算子完成联调。
@@ -729,25 +731,15 @@ padding		chunk_size	chunk
 * 当模板中没有原始配置码流时，脚本无法判断寄存器是否来自已启用 chunk，此时不会执行“未启用寄存器”校验。
 * 当前 README 中后续章节仍保留了较多设计说明和示例表格，其中有些内容是设计目标，不完全等同于当前实现状态；如需严格对齐代码行为，请优先参考本节“当前实现状态”。
 
-### 运行示例
+## 运行示例
+
+输出固定到 `model_execplan/output/<json文件名>/`。
 
 ```bash
 python main.py examples/sample_gemm_local_execution_input.json
 ```
 
-说明：默认仅在缺少算子配置文件时自动调用 `bitstream/main.py` 进行补齐，不会强制重生成已存在的算子目录。
-
-强制重生成所有算子配置目录：
-
-```bash
-python main.py examples/sample_gemm_local_execution_input.json -reop
-```
-
-等价长参数：
-
-```bash
-python main.py examples/sample_gemm_local_execution_input.json --regenerate-operator-configs
-```
+每次运行都会自动重新生成所有算子配置码流到 `model_execplan/config/<op_type>/`，无需额外参数。
 
 启用 bank 数据导出：
 

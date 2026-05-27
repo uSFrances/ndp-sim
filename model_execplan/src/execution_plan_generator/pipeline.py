@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -146,78 +144,38 @@ class ExecutionPlanPipeline:
             op_dir = op_config_root / op.op_type
             op_dir.mkdir(parents=True, exist_ok=True)
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmp_json = Path(tmpdir) / f"{op.op_type}.json"
-                tmp_json.write_text(
-                    json.dumps(op_payload, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
+            # Write patched JSON alongside the regenerated outputs.
+            patched_json = op_dir / f"{op.op_type}.json"
+            patched_json.write_text(
+                json.dumps(op_payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            # Run bitstream tool directly into op_dir — no temp dir, no manual copy.
+            cmd = [
+                sys.executable,
+                bitstream_script,
+                "--visualize-placement",
+                "-c", str(patched_json),
+                "-o", str(op_dir),
+                "-q",
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(repo_root),
+                env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+            )
+            if result.returncode != 0:
+                print(
+                    f"[pipeline] bitstream regeneration failed for "
+                    f"{op.op_type} (rc={result.returncode}):\n"
+                    f"  stdout: {result.stdout.strip()}\n"
+                    f"  stderr: {result.stderr.strip()}"
                 )
-                tmp_out = Path(tmpdir) / "output"
-
-                cmd = [
-                    sys.executable,
-                    bitstream_script,
-                    "--visualize-placement",
-                    "-c", str(tmp_json),
-                    "-o", str(tmp_out),
-                    "--no-dump-detailed",
-                    "-q",
-                ]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    cwd=str(repo_root),
-                    env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
-                )
-                if result.returncode != 0:
-                    print(
-                        f"[pipeline] bitstream regeneration failed for "
-                        f"{op.op_type} (rc={result.returncode}):\n"
-                        f"  stdout: {result.stdout.strip()}\n"
-                        f"  stderr: {result.stderr.strip()}"
-                    )
-                    continue
-
-                # --- Persist ALL outputs into model_execplan/config/<op_type>/ ---
-
-                # 128-bit binary bitstream.
-                config_stem = source_json.stem
-                new_128 = tmp_out / f"{config_stem}_bitstream_128b.bin"
-                if not new_128.is_file():
-                    new_128 = tmp_out / "modules_dump_128b.bin"
-                if new_128.is_file():
-                    _copy_file_content(new_128, op_dir / f"{op.op_type}_bitstream_128b.bin")
-
-                # 64-bit binary bitstream.
-                new_64 = tmp_out / f"{config_stem}_bitstream_64b.bin"
-                if not new_64.is_file():
-                    new_64 = tmp_out / "modules_dump_64b.bin"
-                if new_64.is_file():
-                    _copy_file_content(new_64, op_dir / f"{op.op_type}_bitstream_64b.bin")
-
-                # Parsed bitstream.
-                parsed_src = tmp_out / "parsed_bitstream.txt"
-                if parsed_src.is_file():
-                    _copy_file_content(parsed_src, op_dir / "parsed_bitstream.txt")
-
-                # Patched JSON.
-                patched_json_dst = op_dir / f"{op.op_type}.json"
-                patched_json_dst.write_text(
-                    json.dumps(op_payload, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-
-                # Mapping review (physical assignment).
-                mapping_src = tmp_out / "mapping_review.json"
-                if mapping_src.is_file():
-                    _copy_file_content(mapping_src, op_dir / "mapping_review.json")
-
-                # Also copy any remaining output files (e.g. detailed dump if present).
-                for src_file in tmp_out.iterdir():
-                    if src_file.is_file() and not (op_dir / src_file.name).exists():
-                        _copy_file_content(src_file, op_dir / src_file.name)
+                continue
 
             # Clear the mapping cache for this op_type so the instruction
             # generator reloads from the regenerated mapping_review.json.
@@ -293,17 +251,6 @@ def _load_json_object(path: Path) -> dict[str, object]:
     if not isinstance(data, dict):
         raise ValueError(f"JSON root must be an object: {path}")
     return data
-
-
-def _copy_file_content(src: Path, dst: Path) -> None:
-    """Copy *src* to *dst*, overwriting if it exists."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        try:
-            dst.unlink()
-        except PermissionError:
-            pass
-    shutil.copyfile(str(src), str(dst))
 
 
 def _count_non_empty_lines(file_path: Path) -> int:

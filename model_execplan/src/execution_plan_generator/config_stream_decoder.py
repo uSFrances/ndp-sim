@@ -48,7 +48,7 @@ DEFAULT_MODULE_SPECS = {
     "se_wr_mse": ModuleChunkSpec("se_wr_mse", "wr_stream", 62, 8, 0),
     "se_nse": ModuleChunkSpec("se_nse", "se_nse", 8, 1),
     "buffer_manager_cluster": ModuleChunkSpec(
-        "buffer_manager_cluster", "buffer_manager_cluster", 21, 1
+        "buffer_manager_cluster", "buffer_manager_cluster", 26, 1
     ),
     "special_array": ModuleChunkSpec("special_array", "special_array", 32, 1),
     "ga_inport_group": ModuleChunkSpec("ga_inport_group", "ga_inport_group", 20, 1),
