@@ -1,0 +1,2 @@
+index,stage_name,kind,op_name,op_type,latency_cycles,hardware_measured_cycles,speedup_vs_baseline,bytes_read,bytes_written,total_bytes,work_ops,arithmetic_intensity,roofline_cycles,roofline_compute_bound_cycles,roofline_bandwidth_bound_cycles,estimated_latency_cycles,lower_bound_cycles,compute_bound_cycles,memory_access_bound_cycles,ag_issue_bound_cycles,ring_transfer_bound_cycles,latency_to_lower_bound_ratio
+0,op0,op,op0,prefill_mul_fp32MN_fp32M_fp32MN,1276.0,1240.0,1.0,4224,4096,8320,1024.0,0.12307692307692308,260.0,64.0,260.0,1276.0,1276.0,64,1276.0,256.0,,1.0

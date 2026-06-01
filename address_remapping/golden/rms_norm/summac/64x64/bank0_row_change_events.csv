@@ -1,0 +1,24 @@
+event_index,event_time_ns,event_cycle,cause,reason,close_addr_hex,close_rw,close_row_dec,close_col_dec,previous_time_ns,previous_cycle,next_time_ns,next_cycle,next_rw,next_row_dec,next_col_dec,gap_prev_to_close_ns,gap_prev_to_close_cycles,gap_close_to_next_ns,gap_close_to_next_cycles,row_jump,rw_switched
+1,209717000,167,NORMAL_DATA,Closed R row 0 and next request continues with the same R direction on row 1.,0x3e,R,0,62,209714000,165,209719000,169,R,1,1,3000,2,2000,2,1,False
+2,209912000,323,NORMAL_DATA,Closed R row 1 and next request continues with the same R direction on row 2.,0x7e,R,1,62,209909000,321,209914000,325,R,2,1,3000,2,2000,2,1,False
+3,210107000,479,RW_SWITCH,Closed R row 2 and next request switches to W row 16.,0xbe,R,2,62,210104000,477,210109000,481,W,16,1,3000,2,2000,2,14,True
+4,210147000,511,RW_SWITCH,Closed W row 16 and next request switches to R row 3.,0x400,W,16,0,210124000,493,210149000,513,R,3,1,23000,18,2000,2,-13,True
+5,210359000,681,NORMAL_DATA,Closed R row 3 and next request continues with the same R direction on row 4.,0xfe,R,3,62,210357000,679,210362000,683,R,4,1,2000,2,3000,2,1,False
+6,210554000,837,RW_SWITCH,Closed R row 4 and next request switches to W row 16.,0x13e,R,4,62,210552000,835,210557000,839,W,16,3,2000,2,3000,2,12,True
+7,210594000,869,RW_SWITCH,Closed W row 16 and next request switches to R row 5.,0x402,W,16,2,210572000,851,210597000,871,R,5,1,22000,18,3000,2,-11,True
+8,210807000,1039,NORMAL_DATA,Closed R row 5 and next request continues with the same R direction on row 6.,0x17e,R,5,62,210804000,1037,210809000,1041,R,6,1,3000,2,2000,2,1,False
+9,211002000,1195,RW_SWITCH,Closed R row 6 and next request switches to W row 16.,0x1be,R,6,62,210999000,1193,211004000,1197,W,16,5,3000,2,2000,2,10,True
+10,211042000,1227,RW_SWITCH,Closed W row 16 and next request switches to R row 7.,0x404,W,16,4,211019000,1209,211044000,1229,R,7,1,23000,18,2000,2,-9,True
+11,211254000,1397,NORMAL_DATA,Closed R row 7 and next request continues with the same R direction on row 8.,0x1fe,R,7,62,211252000,1395,211257000,1399,R,8,1,2000,2,3000,2,1,False
+12,211449000,1553,RW_SWITCH,Closed R row 8 and next request switches to W row 16.,0x23e,R,8,62,211447000,1551,211452000,1555,W,16,7,2000,2,3000,2,8,True
+13,211489000,1585,RW_SWITCH,Closed W row 16 and next request switches to R row 9.,0x406,W,16,6,211467000,1567,211492000,1587,R,9,1,22000,18,3000,2,-7,True
+14,211702000,1755,NORMAL_DATA,Closed R row 9 and next request continues with the same R direction on row 10.,0x27e,R,9,62,211699000,1753,211704000,1757,R,10,1,3000,2,2000,2,1,False
+15,211897000,1911,RW_SWITCH,Closed R row 10 and next request switches to W row 16.,0x2be,R,10,62,211894000,1909,211899000,1913,W,16,9,3000,2,2000,2,6,True
+16,211937000,1943,RW_SWITCH,Closed W row 16 and next request switches to R row 11.,0x408,W,16,8,211914000,1925,211939000,1945,R,11,1,23000,18,2000,2,-5,True
+17,212149000,2113,NORMAL_DATA,Closed R row 11 and next request continues with the same R direction on row 12.,0x2fe,R,11,62,212147000,2111,212152000,2115,R,12,1,2000,2,3000,2,1,False
+18,212344000,2269,RW_SWITCH,Closed R row 12 and next request switches to W row 16.,0x33e,R,12,62,212342000,2267,212347000,2271,W,16,11,2000,2,3000,2,4,True
+19,212384000,2301,RW_SWITCH,Closed W row 16 and next request switches to R row 13.,0x40a,W,16,10,212362000,2283,212387000,2303,R,13,1,22000,18,3000,2,-3,True
+20,212597000,2471,NORMAL_DATA,Closed R row 13 and next request continues with the same R direction on row 14.,0x37e,R,13,62,212594000,2469,212599000,2473,R,14,1,3000,2,2000,2,1,False
+21,212792000,2627,RW_SWITCH,Closed R row 14 and next request switches to W row 16.,0x3be,R,14,62,212789000,2625,212794000,2629,W,16,13,3000,2,2000,2,2,True
+22,212832000,2659,RW_SWITCH,Closed W row 16 and next request switches to R row 15.,0x40c,W,16,12,212809000,2641,212834000,2661,R,15,1,23000,18,2000,2,-1,True
+23,213094000,0,SLICE_END_CLOSE,Close request is the last row-close that belongs to this slice.,0x3fe,R,15,62,213042000,2827,,,,,,52000,,,,,False

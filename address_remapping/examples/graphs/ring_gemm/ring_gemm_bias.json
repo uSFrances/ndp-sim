@@ -1,8 +1,8 @@
 {
   "shape_bindings": {
-    "M": 64,
+    "M": 32,
     "N": 128,
-    "K": 16
+    "K": 1024
   },
   "params": {
     "slices_per_cluster": 4,
@@ -39,7 +39,7 @@
           }
         }
       },
-      "base_addr": 8192
+      "base_addr": 8388608
     },
     "bias_vec_fp32": {
       "dtype": "fp32",
@@ -48,13 +48,13 @@
       },
       "partition": {
         "N": {
-          "follow": "inA:N"
+          "follow": "inB:N"
         }
       },
       "base_addr": 1056768
     },
     "gemm_out_fp16": {
-      "base_addr": 16384
+      "base_addr": 25165824
     },
     "bias_out_fp32": {
       "base_addr": 1064960
@@ -63,5 +63,5 @@
   "model": [
     "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)"
   ],
-  "hardware_measured": 1024
+  "hardware_measured": 9005
 }

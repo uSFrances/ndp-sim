@@ -71,7 +71,9 @@ def build_roofline_summary(
     general_peak = float(derived["general_peak_ops_per_cycle"])
     gemm_peak = float(derived["gemm_peak_ops_per_cycle"])
 
-    op_breakdown = list(dict(performance_payload["modes"])[mode]["op_breakdown"])
+    mode_payload = dict(performance_payload["modes"])[mode]
+    mode_total_latency = float(mode_payload["total_latency_cycles"])
+    op_breakdown = list(mode_payload["op_breakdown"])
     operators: List[Dict[str, object]] = []
     for op in op_breakdown:
         if str(op.get("kind")) != "op":
@@ -87,6 +89,10 @@ def build_roofline_summary(
         roofline_limit = min(peak_compute, bandwidth * intensity_value)
         achieved_perf = work_ops / latency
         analytical_bandwidth = float(op["total_bytes"]) / latency if latency > 0.0 else None
+        roofline_compute_utilization = (roofline_limit / peak_compute) if peak_compute > 0.0 else None
+        roofline_bandwidth_utilization = (
+            roofline_limit / (bandwidth * intensity_value) if bandwidth > 0.0 and intensity_value > 0.0 else None
+        )
         measured_perf = (
             work_ops / float(hardware_measured_cycles)
             if hardware_measured_cycles is not None and float(hardware_measured_cycles) > 0.0
@@ -111,11 +117,15 @@ def build_roofline_summary(
                 "op_type": str(op["op_type"]),
                 "arithmetic_intensity_ops_per_byte": intensity_value,
                 "roofline_limit_ops_per_cycle": roofline_limit,
+                "roofline_limit_bound": "compute" if peak_compute <= (bandwidth * intensity_value) else "bandwidth",
+                "roofline_compute_utilization": roofline_compute_utilization,
+                "roofline_bandwidth_utilization": roofline_bandwidth_utilization,
                 "achieved_ops_per_cycle": achieved_perf,
                 "hardware_measured_cycles": float(hardware_measured_cycles) if hardware_measured_cycles is not None else None,
                 "measured_ops_per_cycle": measured_perf,
                 "peak_compute_ops_per_cycle": peak_compute,
                 "latency_cycles": latency,
+                "latency_share_of_total": (latency / mode_total_latency) if mode_total_latency > 0.0 else None,
                 "work_ops": work_ops,
                 "total_bytes": int(op["total_bytes"]),
                 "analytical_bandwidth_bytes_per_cycle": analytical_bandwidth,
@@ -140,6 +150,7 @@ def build_roofline_summary(
     return {
         "graph_name": graph_name,
         "mode": mode,
+        "mode_total_latency_cycles": mode_total_latency,
         "hardware": {
             "peak_memory_bandwidth_bytes_per_cycle": bandwidth,
             "general_peak_ops_per_cycle": general_peak,
@@ -255,6 +266,7 @@ def render_roofline_svg(summary: Mapping[str, object]) -> str:
     )
 
     placed_labels: List[Tuple[float, float, float, float]] = []
+    labeled_groups: Dict[Tuple[object, ...], int] = {}
     for op in operators:
         intensity = float(op["arithmetic_intensity_ops_per_byte"])
         roof = float(op["roofline_limit_ops_per_cycle"])
@@ -279,10 +291,19 @@ def render_roofline_svg(summary: Mapping[str, object]) -> str:
             )
             # Measured utilization labels should attach to the measured marker.
             label_anchor_y = measured_y
+        label_group_key = _label_group_key(op)
+        label_count = labeled_groups.get(label_group_key, 0) + 1
+        labeled_groups[label_group_key] = label_count
+        if label_count > 1:
+            continue
+
+        duplicate_count = _count_label_group_members(operators, label_group_key)
         label_text = _short_label(str(op["op_type"]), str(op["op_name"]))
         utilization_suffix = _operator_utilization_suffix(op)
         if utilization_suffix:
             label_text = f"{label_text} {utilization_suffix}"
+        if duplicate_count > 1:
+            label_text = f"{label_text} x{duplicate_count}"
         approx_width = max(42.0, float(len(label_text) * 6.8))
         label_x, label_y, anchor, placed_labels = _place_label(
             x=x,
@@ -450,6 +471,23 @@ def _short_label(op_type: str, op_name: str) -> str:
                 body = body[: -len(suffix)]
         return body
     return op_name
+
+
+def _label_group_key(op: Mapping[str, object]) -> Tuple[object, ...]:
+    return (
+        _short_label(str(op["op_type"]), str(op["op_name"])),
+        int(op["work_ops"]),
+        int(op["total_bytes"]),
+        round(float(op["arithmetic_intensity_ops_per_byte"]), 6),
+        round(float(op["roofline_limit_ops_per_cycle"]), 6),
+        round(float(op["achieved_ops_per_cycle"]), 6),
+        round(float(op["measured_ops_per_cycle"]), 6) if op.get("measured_ops_per_cycle") is not None else None,
+        _operator_utilization_suffix(op),
+    )
+
+
+def _count_label_group_members(operators: Sequence[Mapping[str, object]], key: Tuple[object, ...]) -> int:
+    return sum(1 for op in operators if _label_group_key(op) == key)
 
 
 def _place_label(

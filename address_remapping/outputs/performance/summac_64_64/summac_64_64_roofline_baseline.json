@@ -1,0 +1,39 @@
+{
+  "graph_name": "summac_64_64_withbaseaddr",
+  "mode": "baseline",
+  "hardware": {
+    "peak_memory_bandwidth_bytes_per_cycle": 32.0,
+    "general_peak_ops_per_cycle": 16.0,
+    "gemm_peak_ops_per_cycle": 256.0,
+    "general_ridge_point_ops_per_byte": 0.5,
+    "gemm_ridge_point_ops_per_byte": 8.0
+  },
+  "operators": [
+    {
+      "op_name": "op0",
+      "op_type": "prefill_summac",
+      "arithmetic_intensity_ops_per_byte": 0.2423076923076923,
+      "roofline_limit_ops_per_cycle": 7.753846153846154,
+      "achieved_ops_per_cycle": 1.5874015748031496,
+      "hardware_measured_cycles": 2868.0,
+      "measured_ops_per_cycle": 1.405857740585774,
+      "peak_compute_ops_per_cycle": 16.0,
+      "latency_cycles": 2540.0,
+      "work_ops": 4032.0,
+      "total_bytes": 16640,
+      "analytical_bandwidth_bytes_per_cycle": 6.551181102362205,
+      "measured_bandwidth_bytes_per_cycle": 5.801952580195258,
+      "analytical_bandwidth_utilization": 0.2047244094488189,
+      "measured_bandwidth_utilization": 0.18131101813110181,
+      "analytical_efficiency": 0.2047244094488189,
+      "measured_efficiency": 0.1813110181311018,
+      "measured_vs_analytical_ratio": 0.8856345885634588,
+      "utilization": {
+        "analytical_compute": "20.47%",
+        "measured_compute": "18.13%",
+        "analytical_bandwidth": "20.47%",
+        "measured_bandwidth": "18.13%"
+      }
+    }
+  ]
+}

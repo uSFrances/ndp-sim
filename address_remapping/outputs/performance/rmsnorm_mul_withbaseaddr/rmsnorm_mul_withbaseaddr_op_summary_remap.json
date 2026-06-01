@@ -1,0 +1,27 @@
+[
+  {
+    "index": 0,
+    "stage_name": "op0",
+    "kind": "op",
+    "op_name": "op0",
+    "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
+    "latency_cycles": 1276.0,
+    "hardware_measured_cycles": 1240.0,
+    "speedup_vs_baseline": 1.0,
+    "bytes_read": 4224,
+    "bytes_written": 4096,
+    "total_bytes": 8320,
+    "work_ops": 1024.0,
+    "arithmetic_intensity": 0.12307692307692308,
+    "roofline_cycles": 260.0,
+    "roofline_compute_bound_cycles": 64.0,
+    "roofline_bandwidth_bound_cycles": 260.0,
+    "estimated_latency_cycles": 1276.0,
+    "lower_bound_cycles": 1276.0,
+    "compute_bound_cycles": 64,
+    "memory_access_bound_cycles": 1276.0,
+    "ag_issue_bound_cycles": 256.0,
+    "ring_transfer_bound_cycles": null,
+    "latency_to_lower_bound_ratio": 1.0
+  }
+]

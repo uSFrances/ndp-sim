@@ -81,10 +81,11 @@ def v_add_rowmajor_mn_fp16_layout(dtype: str) -> LayoutSpec:
         dtype,
         {"M": "M", "N": "N"},
         [
-            {"name": "M", "parent_axis": "M", "extent": "M", "kind": "outer"},
-            {"name": "N", "parent_axis": "N", "extent": "N", "kind": "outer"},
+            {"name": "N_outer8", "parent_axis": "N", "extent": "N//8", "kind": "outer"},
+            {"name": "m", "parent_axis": "M", "extent": "M", "kind": "outer"},
+            {"name": "n8", "parent_axis": "N", "extent": 8, "kind": "tile"},
         ],
-        ["M", "N"],
+        ["N_outer8", "m", "n8"],
     )
 
 
@@ -418,24 +419,24 @@ def _same_shape_resolver(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, s
     return dict(first)
 
 
-def _mn_n_resolver(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+def _n_mn_resolver(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     in_a = input_shapes["inA"]
     in_b = input_shapes["inB"]
-    if set(in_a.keys()) != {"M", "N"}:
-        raise ValueError(f"Expected inA to have axes M,N, got {in_a}.")
-    if set(in_b.keys()) != {"N"}:
-        raise ValueError(f"Expected inB to have axis N, got {in_b}.")
-    return dict(in_a)
+    if set(in_a.keys()) != {"N"}:
+        raise ValueError(f"Expected inA to have axis N, got {in_a}.")
+    if set(in_b.keys()) != {"M", "N"}:
+        raise ValueError(f"Expected inB to have axes M,N, got {in_b}.")
+    return dict(in_b)
 
 
 def _mn_m_resolver(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     in_a = input_shapes["inA"]
     in_b = input_shapes["inB"]
-    if set(in_a.keys()) != {"M", "N"}:
-        raise ValueError(f"Expected inA to have axes M,N, got {in_a}.")
-    if set(in_b.keys()) != {"M"}:
-        raise ValueError(f"Expected inB to have axis M, got {in_b}.")
-    return dict(in_a)
+    if set(in_a.keys()) == {"M", "N"} and set(in_b.keys()) == {"M"}:
+        return dict(in_a)
+    if set(in_b.keys()) == {"M", "N"} and set(in_a.keys()) == {"M"}:
+        return dict(in_b)
+    raise ValueError(f"Expected one input to have axes M,N and the other to have axis M, got {input_shapes}.")
 
 
 def _mn_reduce_to_m(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
@@ -532,23 +533,12 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
 
     _register(
         registry,
-        "prefill_remote_sum_fp32_fp32_fp32",
-        {"inA": _port("fp32", vector_m_fp32_layout), "inB": _port("fp32", vector_m_fp32_layout)},
-        {"out": _port("fp32", vector_m_fp32_layout)},
-        ("inA", "inB"),
+        "prefill_mul_fp32MN_fp32N_fp16MN",
+        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp32", elementwise_mn_layout)},
+        {"out": _port("fp16", elementwise_mn_layout)},
+        ("inB", "inA"),
         ("out",),
-        _same_shape_resolver,
-        aliases=("prefill_remote_sum__fp32_fp32_fp32", "remote_sum__fp32_fp32_fp32"),
-    )
-    _register(
-        registry,
-        "prefill_mul_MN_N_fp32_fp32_fp16",
-        {"inA": _port("fp32", prefill_mul_mn_n_in_fp32_layout), "inB": _port("fp32", vector_n_fp32_layout)},
-        {"out": _port("fp16", prefill_mul_mn_n_out_fp16_layout)},
-        ("inA", "inB"),
-        ("out",),
-        _mn_n_resolver,
-        aliases=("prefill_mul_MN_N__fp32_fp32_fp16", "mul_MN_N__fp32_fp32_fp16"),
+        _n_mn_resolver,
     )
     _register(
         registry,
@@ -558,7 +548,15 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
         ("inA", "inB"),
         ("out",),
         _gemm_mk_kn_to_mn_shape,
-        aliases=("gemm_local__fp16_fp16_fp16", "gemm_local"),
+    )
+    _register(
+        registry,
+        "gemm_local_qkt_fp16_fp16_fp32",
+        {"inA": _port("fp16", ring_gemm_a_fp16_layout), "inB": _port("fp16", ring_gemm_b_fp16_layout)},
+        {"out": _port("fp32", ring_gemm_out_fp16_layout)},
+        ("inA", "inB"),
+        ("out",),
+        _gemm_mk_kn_to_mn_shape,
     )
     _register(
         registry,
@@ -568,7 +566,6 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
         ("inA", "inB"),
         ("out",),
         _gemm_mk_kn_to_mn_shape,
-        aliases=("ring_gemm__fp16_fp16_fp16", "ring_gemm"),
     )
     _register(
         registry,
@@ -578,47 +575,24 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
         ("inA",),
         ("out",),
         _qkt_kt_view_resolver,
-        aliases=("prefill_qkt_kt_view__fp16_fp16", "qkt_kt_view"),
     )
     _register(
         registry,
-        "prefill_sv_v_view_fp16_fp16",
-        {"inA": _port("fp16", bias_in_fp16_layout)},
-        {"out": _port("fp16", sv_v_view_fp16_layout)},
-        ("inA",),
+        "prefill_add_fp16MN_fp32N_fp32MN",
+        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp16", elementwise_mn_layout)},
+        {"out": _port("fp32", elementwise_mn_layout)},
+        ("inB", "inA"),
         ("out",),
-        _sv_v_view_resolver,
-        aliases=("prefill_sv_v_view__fp16_fp16", "sv_v_view"),
+        _n_mn_resolver,
     )
     _register(
         registry,
-        "prefill_add_MN_N_fp16_fp32_fp32",
-        {"inA": _port("fp16", bias_in_fp16_layout), "inB": _port("fp32", vector_n_fp32_layout)},
-        {"out": _port("fp32", bias_out_fp32_layout)},
-        ("inA", "inB"),
-        ("out",),
-        _mn_n_resolver,
-        aliases=("prefill_add_MN_N__fp16_fp32_fp32", "add_MN_N__fp16_fp32_fp32", "bias"),
-    )
-    _register(
-        registry,
-        "prefill_add_MN_N_fp16_fp32_fp16",
-        {"inA": _port("fp16", bias_in_fp16_layout), "inB": _port("fp32", vector_n_fp32_layout)},
-        {"out": _port("fp16", bias_in_fp16_layout)},
-        ("inA", "inB"),
-        ("out",),
-        _mn_n_resolver,
-        aliases=("prefill_add_MN_N__fp16_fp32_fp16", "add_MN_N__fp16_fp32_fp16"),
-    )
-    _register(
-        registry,
-        "prefill_add_V_MN_N_fp16_fp32_fp16",
-        {"inA": _port("fp16", v_add_rowmajor_mn_fp16_layout), "inB": _port("fp32", vector_n_fp32_layout)},
+        "prefill_add_V_fp16MN_fp32N_fp16MN",
+        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp16", v_add_rowmajor_mn_fp16_layout)},
         {"out": _port("fp16", v_add_rowmajor_mn_fp16_layout)},
-        ("inA", "inB"),
+        ("inB", "inA"),
         ("out",),
-        _mn_n_resolver,
-        aliases=("prefill_add_V_MN_N__fp16_fp32_fp16", "add_V_MN_N__fp16_fp32_fp16"),
+        _n_mn_resolver,
     )
     _register(
         registry,
@@ -649,23 +623,21 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
     )
     _register(
         registry,
-        "prefill_sum_SFU_fp32_fp32",
-        {"inA": _port("fp32", rowmajor_fp32_layout)},
+        "prefill_sum_rec_fp32MN_fp32MN",
+        {"inA": _port("fp32", reduction_mn_fp32_layout)},
         {"out": _port("fp32", vector_m_fp32_layout)},
         ("inA",),
         ("out",),
         _mn_reduce_to_m,
-        aliases=("prefill_sum_SFU__fp32_fp32", "sum_SFU__fp32_fp32"),
     )
     _register(
         registry,
-        "prefill_mul_MN_MN_fp16_fp32_fp16",
-        {"inA": _port("fp16", rowmajor_fp16_layout), "inB": _port("fp32", rowmajor_fp32_layout)},
+        "prefill_mul_fp32MN_fp16MN_fp16MN",
+        {"inA": _port("fp32", rowmajor_fp32_layout), "inB": _port("fp16", rowmajor_fp16_layout)},
         {"out": _port("fp16", rowmajor_fp16_layout)},
         ("inA", "inB"),
         ("out",),
         _same_shape_resolver,
-        aliases=("prefill_mul_MN_MN__fp16_fp32_fp16", "mul_MN_MN__fp16_fp32_fp16"),
     )
 
     _register(
@@ -706,30 +678,12 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
     )
     _register(
         registry,
-        "prefill_mul_fp32MN_fp16MN_fp16MN",
-        {"inA": _port("fp32", elementwise_mn_layout), "inB": _port("fp16", elementwise_mn_layout)},
-        {"out": _port("fp16", elementwise_mn_layout)},
-        ("inA", "inB"),
-        ("out",),
-        _same_shape_resolver,
-    )
-    _register(
-        registry,
         "prefill_silu_fp16MN_fp32MN",
         {"inA": _port("fp16", prefill_silu_in_fp16_layout)},
         {"out": _port("fp32", prefill_silu_out_fp32_layout)},
         ("inA",),
         ("out",),
         _single_input_same_resolver(("M", "N")),
-    )
-    _register(
-        registry,
-        "prefill_sum_rec",
-        {"inA": _port("fp32", reduction_mn_fp32_layout)},
-        {"out": _port("fp32", reduction_out_m_fp32_layout)},
-        ("inA",),
-        ("out",),
-        _reduce_resolver(("M", "N"), ("M",)),
     )
     _register(
         registry,
@@ -778,23 +732,12 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
     )
     _register(
         registry,
-        "avgpool_fp32_fp32",
-        {"inA": _port("fp32", reduction_in_cwh_fp32_layout)},
-        {"out": _port("fp32", reduction_out_c_fp32_layout)},
+        "prefill_remote_sum_fp32MN_fp32MN_2d",
+        {"inA": _port("fp32", reduction_mn_fp32_layout)},
+        {"out": _port("fp32", reduction_mn_fp32_layout)},
         ("inA",),
         ("out",),
-        _reduce_resolver(("C", "H", "W"), ("C",)),
-        aliases=("avgpool__fp32_fp32", "avgpool"),
-    )
-    _register(
-        registry,
-        "maxpool_uint8_uint8",
-        {"inA": _port("uint8", reduction_in_cwh_uint8_layout)},
-        {"out": _port("uint8", reduction_out_c_uint8_layout)},
-        ("inA",),
-        ("out",),
-        _reduce_resolver(("C", "H", "W"), ("C",)),
-        aliases=("maxpool__uint8_uint8", "maxpool"),
+        _single_input_same_resolver(("M", "N")),
     )
 
     return registry
