@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List
@@ -107,16 +108,33 @@ def solve_graph(graph_spec: Dict[str, object], hw_cfg: HardwareSpec = None) -> L
             edge=edge,
             ops=ops,
         )
+        consumer_axis_aliases_override = _edge_consumer_axis_aliases_override(edge)
+        consumer_layout = _edge_consumer_layout_override(
+            consumer_spec.layout,
+            consumer_axis_aliases_override,
+        )
 
-        shape_bindings = _shape_bindings_for_layouts(tensor_spec, producer_layout, consumer_spec.layout)
-        _validate_tensor_shape(tensor_spec, producer_layout, consumer_spec.layout, shape_bindings)
+        shape_bindings = _shape_bindings_for_layouts(
+            tensor_spec,
+            producer_layout,
+            consumer_layout,
+        )
+        _validate_tensor_shape(
+            tensor_spec,
+            producer_layout,
+            consumer_layout,
+            shape_bindings,
+        )
         producer_axis_aliases = _axis_aliases_for_layout(tensor_spec, producer_layout)
-        consumer_axis_aliases = _axis_aliases_for_layout(tensor_spec, consumer_spec.layout)
+        consumer_axis_aliases = _axis_aliases_for_layout(
+            tensor_spec,
+            consumer_layout,
+        )
         results.append(
             _apply_graph_level_write_reg_annotations(
                 solve_edge(
                     producer_layout=producer_layout,
-                    consumer_layout=consumer_spec.layout,
+                    consumer_layout=consumer_layout,
                     shape_bindings=shape_bindings,
                     memory_dtype=tensor_spec.dtype,
                     hw_cfg=hardware,
@@ -146,7 +164,7 @@ def _graph_level_producer_layout_override(
     if not (
         tensor_name == "v_proj_fp16"
         and producer_spec.op_type == "ring_gemm_fp16_fp16_fp16"
-        and consumer_spec.op_type == "prefill_add_V_MN_N_fp16_fp32_fp16"
+        and consumer_spec.op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
     ):
         return producer_layout
     return _reorder_layout_linear_order(producer_layout, "n8", "m8")
@@ -204,7 +222,7 @@ def _is_v_row_writeback_edge(edge: Dict[str, object], ops: Dict[str, OpSpec]) ->
     return (
         tensor_name == "v_proj_fp16"
         and ops[producer].op_type == "ring_gemm_fp16_fp16_fp16"
-        and ops[consumer].op_type == "prefill_add_V_MN_N_fp16_fp32_fp16"
+        and ops[consumer].op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
     )
 
 
@@ -234,9 +252,16 @@ def _validate_tensor_shape(
     producer_layout: LayoutSpec,
     consumer_layout: LayoutSpec,
     shape_bindings: Dict[str, int],
+    consumer_axis_aliases_override: Dict[str, str] | None = None,
 ) -> None:
     _validate_layout_compatibility(tensor_spec, producer_layout, "producer", shape_bindings)
-    _validate_layout_compatibility(tensor_spec, consumer_layout, "consumer", shape_bindings)
+    _validate_layout_compatibility(
+        tensor_spec,
+        consumer_layout,
+        "consumer",
+        shape_bindings,
+        axis_aliases_override=consumer_axis_aliases_override,
+    )
     if set(tensor_spec.resolved_shape) != set(tensor_spec.shape):
         raise RuntimeError(
             f"Tensor '{tensor_spec.name}' resolved shape axes {tensor_spec.resolved_shape} do not match symbolic axes {tensor_spec.shape}."
@@ -248,6 +273,7 @@ def _validate_layout_compatibility(
     layout: LayoutSpec,
     role: str,
     shape_bindings: Dict[str, int],
+    axis_aliases_override: Dict[str, str] | None = None,
 ) -> None:
     tensor_axes = list(tensor_spec.shape.keys())
     layout_axes = list(layout.logical_shape.keys())
@@ -255,7 +281,8 @@ def _validate_layout_compatibility(
         raise RuntimeError(
             f"Tensor '{tensor_spec.name}' rank {len(tensor_axes)} does not match {role} layout rank {len(layout_axes)}."
         )
-    tensor_extents = [tensor_spec.resolved_shape[axis] for axis in tensor_axes]
+    axis_pairs = _compatible_axis_pairs(tensor_axes, layout_axes, axis_aliases_override=axis_aliases_override)
+    tensor_extents = [tensor_spec.resolved_shape[tensor_axis] for tensor_axis, _layout_axis in axis_pairs]
     layout_extents = [shape_bindings[axis] for axis in layout_axes]
     if tensor_extents != layout_extents:
         raise RuntimeError(
@@ -267,14 +294,22 @@ def _shape_bindings_for_layouts(
     tensor_spec: TensorSpec,
     producer_layout: LayoutSpec,
     consumer_layout: LayoutSpec,
+    consumer_axis_aliases_override: Dict[str, str] | None = None,
 ) -> Dict[str, int]:
     bindings = dict(tensor_spec.resolved_shape)
     tensor_axes = list(tensor_spec.shape.keys())
-    for layout in (producer_layout, consumer_layout):
+    for layout, axis_aliases_override in (
+        (producer_layout, None),
+        (consumer_layout, consumer_axis_aliases_override),
+    ):
         layout_axes = list(layout.logical_shape.keys())
         if len(layout_axes) != len(tensor_axes):
             continue
-        axis_pairs = _compatible_axis_pairs(tensor_axes, layout_axes)
+        axis_pairs = _compatible_axis_pairs(
+            tensor_axes,
+            layout_axes,
+            axis_aliases_override=axis_aliases_override,
+        )
         for tensor_axis, layout_axis in axis_pairs:
             value = tensor_spec.resolved_shape[tensor_axis]
             existing = bindings.get(layout_axis)
@@ -286,19 +321,86 @@ def _shape_bindings_for_layouts(
     return bindings
 
 
-def _axis_aliases_for_layout(tensor_spec: TensorSpec, layout: LayoutSpec) -> Dict[str, str]:
+def _axis_aliases_for_layout(
+    tensor_spec: TensorSpec,
+    layout: LayoutSpec,
+    axis_aliases_override: Dict[str, str] | None = None,
+) -> Dict[str, str]:
     tensor_axes = list(tensor_spec.shape.keys())
     layout_axes = list(layout.logical_shape.keys())
     if len(tensor_axes) != len(layout_axes):
         return {}
     return {
         layout_axis: tensor_axis
-        for tensor_axis, layout_axis in _compatible_axis_pairs(tensor_axes, layout_axes)
+        for tensor_axis, layout_axis in _compatible_axis_pairs(
+            tensor_axes,
+            layout_axes,
+            axis_aliases_override=axis_aliases_override,
+        )
     }
 
 
-def _compatible_axis_pairs(tensor_axes: List[str], layout_axes: List[str]) -> List[tuple[str, str]]:
+def _compatible_axis_pairs(
+    tensor_axes: List[str],
+    layout_axes: List[str],
+    axis_aliases_override: Dict[str, str] | None = None,
+) -> List[tuple[str, str]]:
+    if axis_aliases_override:
+        pairs: List[tuple[str, str]] = []
+        for layout_axis in layout_axes:
+            tensor_axis = axis_aliases_override.get(layout_axis)
+            if tensor_axis is None:
+                raise RuntimeError(
+                    f"Missing explicit axis alias for layout axis '{layout_axis}'."
+                )
+            pairs.append((tensor_axis, layout_axis))
+        return pairs
+    if set(tensor_axes) == set(layout_axes):
+        return [(layout_axis, layout_axis) for layout_axis in layout_axes]
     return list(zip(tensor_axes, layout_axes))
+
+
+def _edge_consumer_axis_aliases_override(edge: Dict[str, object]) -> Dict[str, str] | None:
+    raw = edge.get("consumer_axis_aliases_override")
+    if not isinstance(raw, dict):
+        return None
+    return {str(layout_axis): str(tensor_axis) for layout_axis, tensor_axis in raw.items()}
+
+
+def _edge_consumer_layout_override(
+    consumer_layout: LayoutSpec,
+    consumer_axis_aliases_override: Dict[str, str] | None,
+) -> LayoutSpec:
+    if not consumer_axis_aliases_override:
+        return consumer_layout
+    axis_name_map = dict(consumer_axis_aliases_override)
+    renamed_logical_shape = {
+        axis_name_map.get(axis, axis): _rename_axis_expr(extent, axis_name_map)
+        for axis, extent in consumer_layout.logical_shape.items()
+    }
+    renamed_factors = tuple(
+        replace(
+            factor,
+            parent_axis=axis_name_map.get(factor.parent_axis, factor.parent_axis),
+            extent_expr=_rename_axis_expr(factor.extent_expr, axis_name_map),
+        )
+        for factor in consumer_layout.factors
+    )
+    return LayoutSpec(
+        dtype=consumer_layout.dtype,
+        logical_shape=renamed_logical_shape,
+        factors=renamed_factors,
+        linear_order=consumer_layout.linear_order,
+    )
+
+
+def _rename_axis_expr(expr: object, axis_name_map: Dict[str, str]) -> object:
+    if not isinstance(expr, str):
+        return expr
+    renamed = expr
+    for old_axis, new_axis in axis_name_map.items():
+        renamed = re.sub(rf"\b{re.escape(old_axis)}\b", new_axis, renamed)
+    return renamed
 
 
 

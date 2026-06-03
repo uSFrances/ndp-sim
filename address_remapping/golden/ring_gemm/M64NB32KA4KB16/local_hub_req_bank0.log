@@ -1,0 +1,39 @@
+# Hub Local Request Monitor - Slice[0] Bank[0]
+# Format: Time(ns) | ReqCh | ReqAddrFullHex | ReqRW(1=Write,0=Read) | HasValidReadReq | HandshakeType | ArbValidMask | ReqRwMask
+# HandshakeType: NON_WRITE_REQ / WRITE_NO_VALID_READ / WRITE_WITH_VALID_READ
+# ========================================
+[13329000] INFO: slice start (cycle=0)
+    13354000 |     1 | 0x1 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13369000 |     1 | 0x3 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13392000 |     0 | 0x0 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13394000 |     1 | 0x5 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13397000 |     0 | 0x2 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13399000 |     1 | 0x7 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13402000 |     0 | 0x4 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13404000 |     1 | 0x9 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13407000 |     0 | 0x6 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13409000 |     1 | 0xb |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13412000 |     0 | 0x8 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13414000 |     1 | 0xd |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13417000 |     0 | 0xa |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13419000 |     1 | 0xf |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13422000 |     0 | 0xc |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13424000 |     1 | 0x11 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13427000 |     0 | 0xe |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13429000 |     1 | 0x13 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13432000 |     0 | 0x10 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13434000 |     1 | 0x15 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13437000 |     0 | 0x12 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13439000 |     1 | 0x17 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13442000 |     0 | 0x14 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13444000 |     1 | 0x19 |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13447000 |     0 | 0x16 |                0 |               1 | NON_WRITE_REQ | 0b0000000001 | 0b1100000000
+    13449000 |     0 | 0x18 |                0 |               1 | NON_WRITE_REQ | 0b0000000001 | 0b1100000000
+    13489000 |     1 | 0x1b |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13492000 |     0 | 0x1a |                0 |               1 | NON_WRITE_REQ | 0b0000000001 | 0b1100000000
+    13502000 |     0 | 0x1c |                0 |               1 | NON_WRITE_REQ | 0b0000000001 | 0b1100000000
+    13504000 |     1 | 0x1d |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13507000 |     0 | 0x1e |                0 |               1 | NON_WRITE_REQ | 0b0000000011 | 0b1100000000
+    13509000 |     1 | 0x1f |                0 |               1 | NON_WRITE_REQ | 0b0000000010 | 0b1100000000
+[14354000] INFO: slice completed (cycle=819)
+# Total handshakes: 32

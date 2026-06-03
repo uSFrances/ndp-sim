@@ -92,27 +92,30 @@ class SolverTests(unittest.TestCase):
 
     def test_registry_contains_documented_ops(self):
         registry = build_default_registry()
-        self.assertIn("prefill_add_MN_N_fp16_fp32_fp16", registry)
-        self.assertIn("prefill_add_V_MN_N_fp16_fp32_fp16", registry)
+        self.assertIn("gemm_local_fp16_fp16_fp16", registry)
+        self.assertIn("ring_gemm_fp16_fp16_fp16", registry)
+        self.assertIn("prefill_add_fp16MN_fp32N_fp32MN", registry)
+        self.assertIn("prefill_add_V_fp16MN_fp32N_fp16MN", registry)
         self.assertIn("prefill_qkt_kt_view_fp16_fp16", registry)
         self.assertIn("prefill_mul_fp32MN_fp32M_fp32MN", registry)
         self.assertIn("prefill_mul_fp32MN_fp32M_fp16MN", registry)
         self.assertIn("prefill_mul_fp32MN_fp32MN_fp32MN", registry)
-        self.assertIn("prefill_add_fp32MN_fp32MN_fp32MN", registry)
+        self.assertIn("prefill_mul_fp32MN_fp32N_fp16MN", registry)
+        self.assertIn("prefill_mul_fp32MN_fp16MN_fp16MN", registry)
+        self.assertIn("prefill_add_fp32MN_fp16MN_fp32MN", registry)
+        self.assertIn("prefill_add_fp32MN_fp32MN_fp16MN", registry)
         self.assertIn("prefill_silu_fp16MN_fp32MN", registry)
         self.assertIn("prefill_sub_SFU_fp32MN_fp32MN_fp32MN", registry)
         self.assertIn("prefill_summac", registry)
-        self.assertIn("prefill_sum_rec", registry)
-        self.assertIn("prefill_sum_rec", registry)
+        self.assertIn("prefill_sum_rec_fp32MN_fp32MN", registry)
         self.assertIn("prefill_remote_sum_fp16MN_fp32MN", registry)
         self.assertIn("prefill_remote_sum_Mfp32_Mfp32", registry)
-        self.assertIn("avgpool_fp32_fp32", registry)
-        self.assertIn("maxpool_uint8_uint8", registry)
         self.assertNotIn("quant_from_buffer_int32MN_uint8MN", registry)
         self.assertNotIn("add_dequant_uint8CWH_uint8CWH_fp32CWH", registry)
         self.assertNotIn("prefill_sum_mac_fp32_fp32", registry)
         self.assertNotIn("prefill_sum_rec_fp32_fp32", registry)
         self.assertNotIn("prefill_remote_sum_fp32_fp32", registry)
+        self.assertNotIn("prefill_remote_sum_fp32_fp32_fp32", registry)
         self.assertNotIn("prefill_remote_sum_fp16_fp32", registry)
         self.assertNotIn("prefill_mul_MN_M_fp32_fp32_fp32", registry)
         self.assertNotIn("prefill_mul_MN_M_fp32_fp32_fp16", registry)
@@ -121,6 +124,11 @@ class SolverTests(unittest.TestCase):
         self.assertNotIn("prefill_add_MN_MN_fp32_fp16_fp32", registry)
         self.assertNotIn("prefill_add_MN_MN_fp32_fp32_fp16", registry)
         self.assertNotIn("prefill_silu_fp16_fp32", registry)
+        self.assertNotIn("prefill_add_MN_N_fp16_fp32_fp16", registry)
+        self.assertNotIn("prefill_sum_rec", registry)
+        self.assertNotIn("prefill_silu_fp32MN_fp16MN", registry)
+        self.assertNotIn("avgpool_fp32_fp32", registry)
+        self.assertNotIn("maxpool_uint8_uint8", registry)
 
     def test_expand_model_spec_builds_local_views(self):
         spec = {
@@ -140,12 +148,12 @@ class SolverTests(unittest.TestCase):
                 "bias_vec_fp32": {
                     "dtype": "fp32",
                     "shape": {"N": "hidden_size"},
-                    "partition": {"N": {"follow": "inA:N"}},
+                    "partition": {"N": {"follow": "inB:N"}},
                 },
             },
             "model": [
                 "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)",
-                "bias_out_fp32 = prefill_add_MN_N_fp16_fp32_fp32(gemm_out_fp16, bias_vec_fp32)",
+                "bias_out_fp32 = prefill_add_fp16MN_fp32N_fp32MN(gemm_out_fp16, bias_vec_fp32)",
             ],
         }
         expanded = expand_model_spec(spec)
@@ -153,7 +161,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(ring_inputs["inA"]["resolved_shape"], {"M": 128, "K": 224})
         self.assertEqual(ring_inputs["inB"]["resolved_shape"], {"K": 896, "N": 32})
         self.assertEqual(expanded["tensors"]["gemm_out_fp16"]["resolved_shape"], {"M": 128, "N": 32})
-        self.assertEqual(expanded["ops"]["prefill_add_MN_N_fp16_fp32_fp32_1"]["inputs"]["inB"]["resolved_shape"], {"N": 32})
+        self.assertEqual(expanded["ops"]["prefill_add_fp16MN_fp32N_fp32MN_1"]["inputs"]["inA"]["resolved_shape"], {"N": 32})
 
     def test_expand_model_spec_global_scope(self):
         spec = {
@@ -192,7 +200,7 @@ class SolverTests(unittest.TestCase):
             "model": [
                 "mul_out_fp32 = prefill_mul_fp32MN_fp32M_fp32MN(x_fp32, vec_fp32)",
                 "mul_out_fp16 = prefill_mul_fp32MN_fp32M_fp16MN(x_fp32, vec_fp32)",
-                "sum_out_fp32 = prefill_sum_rec(x_fp32)"
+                "sum_out_fp32 = prefill_sum_rec_fp32MN_fp32MN(x_fp32)",
             ],
         }
         expanded = expand_model_spec(spec)
@@ -200,16 +208,17 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(expanded["tensors"]["mul_out_fp16"]["shape"], {"M": "M", "N": "N"})
         self.assertEqual(expanded["tensors"]["sum_out_fp32"]["shape"], {"M": "M"})
 
-    def test_expand_prefill_fp32mn_fp32mn_fp32mn_ops(self):
+    def test_expand_prefill_whitelist_elementwise_ops(self):
         spec = {
             "shape_bindings": {"M": 128, "N": 128},
             "tensors": {
                 "x_fp32": {"dtype": "fp32", "shape": {"M": "M", "N": "N"}},
                 "y_fp32": {"dtype": "fp32", "shape": {"M": "M", "N": "N"}},
+                "z_fp16": {"dtype": "fp16", "shape": {"M": "M", "N": "N"}},
             },
             "model": [
                 "mul_out_fp32 = prefill_mul_fp32MN_fp32MN_fp32MN(x_fp32, y_fp32)",
-                "add_out_fp32 = prefill_add_fp32MN_fp32MN_fp32MN(x_fp32, y_fp32)",
+                "add_out_fp32 = prefill_add_fp32MN_fp16MN_fp32MN(x_fp32, z_fp16)",
             ],
         }
         expanded = expand_model_spec(spec)
@@ -265,21 +274,21 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(sub_sfu.input_ports["inB"].memory_dtype, "fp32")
         self.assertEqual(sub_sfu.output_ports["out"].memory_dtype, "fp32")
 
-        add_fp16 = registry["prefill_add_MN_N_fp16_fp32_fp16"]
-        self.assertEqual(add_fp16.input_ports["inA"].memory_dtype, "fp16")
-        self.assertEqual(add_fp16.input_ports["inB"].memory_dtype, "fp32")
-        self.assertEqual(add_fp16.output_ports["out"].memory_dtype, "fp16")
-        self.assertEqual(
-            add_fp16.output_ports["out"].build()["layout"],
-            add_fp16.input_ports["inA"].build()["layout"],
-        )
-        add_v_fp16 = registry["prefill_add_V_MN_N_fp16_fp32_fp16"]
-        self.assertEqual(add_v_fp16.input_ports["inA"].memory_dtype, "fp16")
-        self.assertEqual(add_v_fp16.input_ports["inB"].memory_dtype, "fp32")
+        add_fp32 = registry["prefill_add_fp16MN_fp32N_fp32MN"]
+        self.assertEqual(add_fp32.input_ports["inA"].memory_dtype, "fp32")
+        self.assertEqual(add_fp32.input_ports["inB"].memory_dtype, "fp16")
+        self.assertEqual(add_fp32.output_ports["out"].memory_dtype, "fp32")
+        add_v_fp16 = registry["prefill_add_V_fp16MN_fp32N_fp16MN"]
+        self.assertEqual(add_v_fp16.input_ports["inA"].memory_dtype, "fp32")
+        self.assertEqual(add_v_fp16.input_ports["inB"].memory_dtype, "fp16")
         self.assertEqual(add_v_fp16.output_ports["out"].memory_dtype, "fp16")
         self.assertEqual(
             add_v_fp16.output_ports["out"].build()["layout"],
-            add_v_fp16.input_ports["inA"].build()["layout"],
+            add_v_fp16.input_ports["inB"].build()["layout"],
+        )
+        self.assertEqual(
+            list(add_v_fp16.output_ports["out"].build()["layout"].linear_order),
+            ["N_outer8", "m", "n8"],
         )
 
         silu = registry["prefill_silu_fp16MN_fp32MN"]
@@ -307,7 +316,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(sub_sfu.input_ports["inB"].memory_dtype, "fp32")
         self.assertEqual(sub_sfu.output_ports["out"].memory_dtype, "fp32")
 
-        mul_mn_n = registry["prefill_mul_MN_N_fp32_fp32_fp16"]
+        mul_mn_n = registry["prefill_mul_fp32MN_fp32N_fp16MN"]
         self.assertEqual(mul_mn_n.input_ports["inA"].memory_dtype, "fp32")
         self.assertEqual(mul_mn_n.input_ports["inB"].memory_dtype, "fp32")
         self.assertEqual(mul_mn_n.output_ports["out"].memory_dtype, "fp16")
@@ -321,17 +330,22 @@ class SolverTests(unittest.TestCase):
             {"M": "M", "N": "N"},
         )
         in_a_layout = mul_mn_n.input_ports["inA"].build()["layout"]
+        in_b_layout = mul_mn_n.input_ports["inB"].build()["layout"]
         out_layout = mul_mn_n.output_ports["out"].build()["layout"]
         self.assertEqual(
             list(in_a_layout.logical_shape.keys()),
+            ["N"],
+        )
+        self.assertEqual(
+            list(in_b_layout.logical_shape.keys()),
             ["M", "N"],
         )
         self.assertEqual(
-            [factor.name for factor in in_a_layout.factors],
+            [factor.name for factor in in_b_layout.factors],
             ["N_outer4", "n4", "M_outer32", "m4", "m8"],
         )
         self.assertEqual(
-            [factor.extent_expr for factor in in_a_layout.factors],
+            [factor.extent_expr for factor in in_b_layout.factors],
             ["N//4", 4, "M//32", 4, 8],
         )
         self.assertEqual(
@@ -373,7 +387,7 @@ class SolverTests(unittest.TestCase):
     def test_flexible_refinement_supports_split_factorization(self):
         registry = build_default_registry()
         producer = registry["prefill_mul_fp32MN_fp32M_fp32MN"].output_ports["out"].build()["layout"]
-        consumer = registry["prefill_mul_MN_N_fp32_fp32_fp16"].input_ports["inA"].build()["layout"]
+        consumer = registry["prefill_mul_fp32MN_fp32N_fp16MN"].input_ports["inB"].build()["layout"]
         result = solve_edge(
             producer,
             consumer,
@@ -385,7 +399,7 @@ class SolverTests(unittest.TestCase):
 
     def test_write_reg_relayout_supports_gemm_input(self):
         registry = build_default_registry()
-        producer = registry["prefill_mul_MN_N_fp32_fp32_fp16"].output_ports["out"].build()["layout"]
+        producer = registry["prefill_mul_fp32MN_fp32N_fp16MN"].output_ports["out"].build()["layout"]
         consumer = registry["ring_gemm_fp16_fp16_fp16"].input_ports["inA"].build()["layout"]
         result = solve_edge(
             producer,
@@ -407,7 +421,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(result.consumer_bound_layout["dtype"], "fp16")
         self.assertEqual(
             result.producer_bound_layout["ordered_factors"][0],
-            {"name": "N_outer4", "parent_axis": "N", "extent": 8, "kind": "outer", "bits": 3},
+            {"name": "M_outer8", "parent_axis": "M", "extent": 16, "kind": "outer", "bits": 4},
         )
         self.assertEqual(
             result.consumer_bound_layout["ordered_factors"][0],
@@ -423,7 +437,7 @@ class SolverTests(unittest.TestCase):
         )
         self.assertEqual(
             result.producer_visible_outer_bits,
-            ["M:bit4", "M:bit5", "M:bit6", "M:bit7", "N:bit1", "N:bit2", "N:bit3", "N:bit4", "N:bit5"],
+            ["N:bit1", "N:bit2", "N:bit3", "N:bit4", "N:bit5", "M:bit4", "M:bit5", "M:bit6", "M:bit7"],
         )
         self.assertEqual(
             result.consumer_visible_outer_bits,
@@ -561,7 +575,7 @@ class SolverTests(unittest.TestCase):
             },
             "model": [
                 "post_gemm_fp16 = gemm_local_fp16_fp16_fp16(x_fp16, w_fp16)",
-                "out_fp32 = prefill_add_MN_N_fp16_fp32_fp32(post_gemm_fp16, bias_fp32)",
+                "out_fp32 = prefill_add_fp16MN_fp32N_fp32MN(post_gemm_fp16, bias_fp32)",
             ],
         }
         results = solve_graph(graph, self.hw)
@@ -659,7 +673,7 @@ class SolverTests(unittest.TestCase):
             result
             for result in results
             if result.tensor_name == "v_proj_fp16"
-            and result.consumer.startswith("prefill_add_V_MN_N_fp16_fp32_fp16_")
+            and result.consumer.startswith("prefill_add_V_fp16MN_fp32N_fp16MN_")
         )
         self.assertEqual(v_proj_edge.status, "ok")
         self.assertTrue(v_proj_edge.write_reg_required)
@@ -687,12 +701,12 @@ class SolverTests(unittest.TestCase):
                 "bias_vec_fp32": {
                     "dtype": "fp32",
                     "shape": {"N": "hidden_size"},
-                    "partition": {"N": {"follow": "inA:N"}},
+                    "partition": {"N": {"follow": "inB:N"}},
                 },
             },
             "model": [
                 "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)",
-                "v_out_fp16 = prefill_add_MN_N_fp16_fp32_fp16(gemm_out_fp16, bias_vec_fp32)",
+                "v_out_fp16 = prefill_add_V_fp16MN_fp32N_fp16MN(gemm_out_fp16, bias_vec_fp32)",
             ],
         }
         expanded = expand_model_spec(spec)
@@ -718,12 +732,12 @@ class SolverTests(unittest.TestCase):
                 "bias_vec_fp32": {
                     "dtype": "fp32",
                     "shape": {"N": "hidden_size"},
-                    "partition": {"N": {"follow": "inA:N"}},
+                    "partition": {"N": {"follow": "inB:N"}},
                 },
             },
             "model": [
                 "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)",
-                "v_out_fp16 = prefill_add_V_MN_N_fp16_fp32_fp16(gemm_out_fp16, bias_vec_fp32)",
+                "v_out_fp16 = prefill_add_V_fp16MN_fp32N_fp16MN(gemm_out_fp16, bias_vec_fp32)",
             ],
         }
         expanded = expand_model_spec(spec)
@@ -817,18 +831,18 @@ class SolverTests(unittest.TestCase):
                 "bias_vec_fp32": {
                     "dtype": "fp32",
                     "shape": {"N": "hidden_size"},
-                    "partition": {"N": {"follow": "inA:N"}},
+                    "partition": {"N": {"follow": "inB:N"}},
                 },
             },
             "model": [
                 "gemm_out_fp16 = ring_gemm_fp16_fp16_fp16(a_fp16, b_fp16, ring_scope=cluster)",
-                "bias_out_fp32 = prefill_add_MN_N_fp16_fp32_fp32(gemm_out_fp16, bias_vec_fp32)",
+                "bias_out_fp32 = prefill_add_fp16MN_fp32N_fp32MN(gemm_out_fp16, bias_vec_fp32)",
             ],
         }
         results = solve_graph(graph, self.hw)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].producer, "ring_gemm_fp16_fp16_fp16_0")
-        self.assertEqual(results[0].consumer, "prefill_add_MN_N_fp16_fp32_fp32_1")
+        self.assertEqual(results[0].consumer, "prefill_add_fp16MN_fp32N_fp32MN_1")
         self.assertEqual(results[0].tensor_name, "gemm_out_fp16")
         self.assertEqual(results[0].status, "ok")
         self.assertEqual(results[0].permutation[:11], [3, 4, 7, 8, 0, 1, 2, 5, 6, 9, 10])
@@ -854,7 +868,7 @@ class SolverTests(unittest.TestCase):
 
     def test_identical_mn_layout_does_not_trigger_write_reg(self):
         registry = build_default_registry()
-        producer = registry["prefill_add_fp32MN_fp32MN_fp32MN"].output_ports["out"].layout_builder("fp32")
+        producer = registry["prefill_mul_fp32MN_fp32MN_fp32MN"].output_ports["out"].layout_builder("fp32")
         consumer = registry["prefill_max"].input_ports["inA"].layout_builder("fp32")
         result = solve_edge(
             producer,
@@ -872,7 +886,7 @@ class SolverTests(unittest.TestCase):
         self.assertIsNone(result.write_reg_hint)
 
     def test_build_expanded_graph_from_external_rmsnorm(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         expanded = build_expanded_graph_from_external_rmsnorm(payload)
 
         self.assertEqual(set(expanded["ops"]), {"op0", "op1", "op2", "op3"})
@@ -887,6 +901,207 @@ class SolverTests(unittest.TestCase):
             [(edge["producer"], edge["consumer"], edge["consumer_port"]) for edge in expanded["edges"]],
             [("op0", "op1", "inA"), ("op1", "op2", "inA"), ("op2", "op3", "inB")],
         )
+
+    def test_normalize_graph_spec_maps_execplan_mn_axes_using_middle_dim_as_m(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "B": {"shape": [1, 64, 32], "source": {"type": "external"}},
+                        "A": {"shape": [1, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 32]},
+                }
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+
+        op0 = expanded["ops"]["op0"]
+        self.assertEqual(op0["inputs"]["inA"]["resolved_shape"], {"N": 32})
+        self.assertEqual(op0["inputs"]["inB"]["resolved_shape"], {"M": 64, "N": 32})
+        self.assertEqual(expanded["tensors"]["op0__out"]["resolved_shape"], {"M": 64, "N": 32})
+
+    def test_n_mn_resolver_requires_vector_then_matrix_ports(self):
+        registry = build_default_registry()
+        op = registry["prefill_mul_fp32MN_fp32N_fp16MN"]
+        output_shape = op.shape_resolver(
+            {
+                "inA": {"N": "N"},
+                "inB": {"M": "M", "N": "N"},
+            }
+        )
+        self.assertEqual(output_shape, {"M": "M", "N": "N"})
+
+    def test_normalize_graph_spec_maps_ring_gemm_execplan_axes(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 64, 1], "source": {"type": "external"}},
+                        "B": {"shape": [896, 1, 128], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 128]},
+                }
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+
+        op0 = expanded["ops"]["op0"]
+        self.assertEqual(op0["inputs"]["inA"]["resolved_shape"], {"M": 64, "K": 32})
+        self.assertEqual(op0["inputs"]["inB"]["resolved_shape"], {"K": 896, "N": 128})
+        self.assertEqual(expanded["tensors"]["op0__out"]["resolved_shape"], {"M": 64, "N": 128})
+
+    def test_normalize_graph_spec_maps_local_gemm_execplan_axes(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_local",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [64, 1, 32], "source": {"type": "external"}},
+                        "B": {"shape": [1, 48, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 48]},
+                }
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+
+        op0 = expanded["ops"]["op0"]
+        self.assertEqual(op0["inputs"]["inA"]["resolved_shape"], {"M": 64, "K": 32})
+        self.assertEqual(op0["inputs"]["inB"]["resolved_shape"], {"K": 32, "N": 48})
+        self.assertEqual(expanded["tensors"]["op0__out"]["resolved_shape"], {"M": 64, "N": 48})
+
+    def test_normalize_graph_spec_supports_explicit_axis_view_for_local_gemm_rhs(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_add_fp32MN_fp32MN_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [1, 32, 16], "source": {"type": "external"}},
+                        "B": {"shape": [1, 32, 16], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 32, 16]},
+                },
+                {
+                    "id": "op1",
+                    "type": "prefill_gemm_local",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [8, 1, 16], "source": {"type": "external"}},
+                        "B": {
+                            "shape": [1, 32, 16],
+                            "source": "op0",
+                            "axis_view": {
+                                "producer_to_consumer": {
+                                    "M": "N",
+                                    "N": "K",
+                                }
+                            },
+                        },
+                    },
+                    "output": {"shape": [1, 8, 32]},
+                },
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+
+        op1 = expanded["ops"]["op1"]
+        self.assertEqual(op1["inputs"]["inB"]["resolved_shape"], {"K": 16, "N": 32})
+        edge = next(edge for edge in expanded["edges"] if edge["producer"] == "op0" and edge["consumer"] == "op1")
+        self.assertEqual(edge["consumer_axis_aliases_override"], {"N": "M", "K": "N"})
+
+        results = solve_graph(expanded, self.hw)
+        result = next(result for edge, result in zip(expanded["edges"], results) if edge["producer"] == "op0" and edge["consumer"] == "op1")
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.shape_bindings["M"], 32)
+        self.assertEqual(result.shape_bindings["N"], 16)
+
+    def test_normalize_graph_spec_preserves_axis_aliases_for_ffn_gate_path(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op31",
+                    "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "B": {"shape": [1, 64, 32], "source": {"type": "external"}},
+                        "A": {"shape": [1, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 32]},
+                },
+                {
+                    "id": "op32",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 64, 1], "source": "op31"},
+                        "B": {"shape": [896, 1, 128], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 128]},
+                },
+                {
+                    "id": "op33",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 64, 1], "source": "op31"},
+                        "B": {"shape": [896, 1, 128], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 128]},
+                },
+                {
+                    "id": "op34",
+                    "type": "prefill_silu_fp16MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [1, 64, 128], "source": "op32"},
+                    },
+                    "output": {"shape": [1, 64, 128]},
+                },
+                {
+                    "id": "op35",
+                    "type": "prefill_mul_fp32MN_fp16MN_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [1, 64, 128], "source": "op34"},
+                        "B": {"shape": [1, 64, 128], "source": "op33"},
+                    },
+                    "output": {"shape": [1, 64, 128]},
+                },
+                {
+                    "id": "op36",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [128, 64, 1], "source": "op35"},
+                        "B": {"shape": [3584, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 64, 32]},
+                },
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+
+        self.assertEqual(expanded["tensors"]["op31__out"]["resolved_shape"], {"M": 64, "N": 32})
+        self.assertEqual(expanded["tensors"]["op32__out"]["resolved_shape"], {"M": 64, "N": 128})
+        self.assertEqual(expanded["tensors"]["op35__out"]["resolved_shape"], {"M": 64, "K": 128})
+        self.assertEqual(expanded["ops"]["op36"]["inputs"]["inA"]["resolved_shape"], {"M": 64, "K": 128})
+        self.assertEqual(expanded["ops"]["op36"]["inputs"]["inB"]["resolved_shape"], {"K": 3584, "N": 32})
 
     def test_fill_external_rmsnorm_remapping_keeps_external_and_identity_edges_empty(self):
         payload = {
@@ -943,13 +1158,15 @@ class SolverTests(unittest.TestCase):
                     continue
                 internal_port = {"A": "inA", "B": "inB"}[external_port]
                 result = by_key[(source, op_id, internal_port)]
+                self.assertIsNone(input_data.get("remapping"))
+                producer_output = next(op for op in filled["operators"] if op["id"] == source)["output"]
                 if result.permutation == default_permutation:
-                    self.assertIsNone(input_data.get("remapping"))
+                    self.assertIsNone(producer_output.get("remapping"))
                 else:
-                    self.assertEqual(input_data.get("remapping"), result.permutation)
+                    self.assertEqual(producer_output.get("remapping"), result.permutation)
 
     def test_fill_external_rmsnorm_remapping_real_rmsnorm_succeeds(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
         self.assertIsNone(filled["operators"][0]["inputs"]["A"].get("remapping"))
         self.assertNotIn("writereg", filled["operators"][0]["inputs"]["A"])
@@ -961,9 +1178,13 @@ class SolverTests(unittest.TestCase):
         self.assertNotIn("writereg", filled["operators"][3]["inputs"]["A"])
         self.assertIsNone(filled["operators"][3]["inputs"]["B"].get("remapping"))
         self.assertNotIn("writereg", filled["operators"][3]["inputs"]["B"])
+        self.assertIsNone(filled["operators"][0]["output"].get("remapping"))
+        self.assertIsNone(filled["operators"][1]["output"].get("remapping"))
+        self.assertIsNone(filled["operators"][2]["output"].get("remapping"))
+        self.assertIsNone(filled["operators"][3]["output"].get("remapping"))
 
     def test_normalize_graph_spec_preserves_rmsnorm_base_addrs_and_source_tensors(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
         expanded = normalize_graph_spec(payload, require_base_addrs=True)
 
         self.assertEqual(expanded["tensors"]["op0__out"]["base_addr"], 0x800)
@@ -977,19 +1198,19 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(expanded["ops"]["op3"]["inputs"]["inB"]["source_tensor"], "op2__out")
 
     def test_normalize_graph_spec_rejects_missing_base_addr_for_performance(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         with self.assertRaisesRegex(RmsNormBridgeError, "must define 'base_addr'"):
             normalize_graph_spec(payload, require_base_addrs=True)
 
     def test_normalize_graph_spec_rejects_mismatched_connected_base_addr(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
         payload["operators"][1]["inputs"]["A"]["base_addr"] = "0x00000820"
 
         with self.assertRaisesRegex(RmsNormBridgeError, "base_addr mismatch"):
             normalize_graph_spec(payload, require_base_addrs=True)
 
     def test_analyze_graph_performance_accepts_external_rmsnorm_with_base_addrs(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json").read_text(encoding="utf-8-sig"))
         hardware, perf_cfg = load_performance_config("examples/configs/performance_config.json")
 
         report = analyze_graph_performance(payload, hardware, perf_cfg)
@@ -1000,7 +1221,7 @@ class SolverTests(unittest.TestCase):
         self.assertIn(report["overview"]["best_mode_by_estimated_latency"], report["modes"])
 
     def test_fill_external_rmsnorm_remapping_writes_non_default_permutation(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         mocked_results = [
             mock.Mock(
                 spec=EdgeSolveResult,
@@ -1047,14 +1268,15 @@ class SolverTests(unittest.TestCase):
             filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
 
         self.assertIsNone(filled["operators"][0]["inputs"]["A"].get("remapping"))
-        self.assertEqual(filled["operators"][2]["inputs"]["A"]["remapping"], [1, 0] + list(range(2, self.hw.remap_bits)))
+        self.assertIsNone(filled["operators"][2]["inputs"]["A"].get("remapping"))
         self.assertIsNone(filled["operators"][1]["inputs"]["A"].get("remapping"))
         self.assertIsNone(filled["operators"][3]["inputs"]["A"].get("remapping"))
         self.assertIsNone(filled["operators"][3]["inputs"]["B"].get("remapping"))
+        self.assertEqual(filled["operators"][1]["output"]["remapping"], [1, 0] + list(range(2, self.hw.remap_bits)))
         self.assertNotIn("writereg", filled["operators"][2]["inputs"]["A"])
 
     def test_fill_external_rmsnorm_remapping_writes_writereg_object(self):
-        payload = json.loads(Path("examples/graphs/rmsnorm.json").read_text(encoding="utf-8-sig"))
+        payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         mocked_results = [
             mock.Mock(
                 spec=EdgeSolveResult,
@@ -1107,6 +1329,205 @@ class SolverTests(unittest.TestCase):
         )
         self.assertNotIn("writereg", filled["operators"][2]["inputs"]["A"])
         self.assertNotIn("writereg", filled["operators"][3]["inputs"]["B"])
+
+    def test_fill_external_rmsnorm_remapping_writes_add_v_vector_writereg_on_producer_output(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_mac_SFU_fp32MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {"A": {"shape": [1, 1, 32], "source": {"type": "external"}}},
+                    "output": {"shape": [1, 1, 32]},
+                },
+                {
+                    "id": "op1",
+                    "type": "prefill_add_V_fp16MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [1, 1, 32], "source": "op0"},
+                        "B": {"shape": [1, 32, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+        mocked_results = [
+            mock.Mock(
+                spec=EdgeSolveResult,
+                producer="op0",
+                consumer="op1",
+                consumer_port="inA",
+                tensor_name="op0__out",
+                status="ok",
+                permutation=list(range(self.hw.remap_bits)),
+                write_reg_required=True,
+                write_reg_hint="reorder(m8)->(n8)",
+                reason=None,
+                reason_code=None,
+            ),
+        ]
+
+        with mock.patch("address_remapping.rmsnorm_bridge.solve_graph", return_value=mocked_results):
+            filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
+
+        self.assertNotIn("writereg", filled["operators"][1]["inputs"]["A"])
+        self.assertEqual(
+            filled["operators"][0]["output"]["writereg"],
+            {"required": True, "hint": "reorder(m8)->(n8)"},
+        )
+
+    def test_fill_external_rmsnorm_remapping_writes_gemm_input_write_reg_hint_field(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "B": {"shape": [1, 32, 32], "source": {"type": "external"}},
+                        "A": {"shape": [1, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+                {
+                    "id": "op1",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [32, 32, 1],
+                            "source": "op0",
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                        "B": {
+                            "shape": [896, 1, 32],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+        mocked_results = [
+            mock.Mock(
+                spec=EdgeSolveResult,
+                producer="op0",
+                consumer="op1",
+                consumer_port="inA",
+                tensor_name="op0__out",
+                status="ok",
+                permutation=list(range(self.hw.remap_bits)),
+                write_reg_required=True,
+                write_reg_hint="reorder(m8,n2)->(n2,m8)",
+                reason=None,
+                reason_code=None,
+            ),
+        ]
+
+        with mock.patch("address_remapping.rmsnorm_bridge.solve_graph", return_value=mocked_results):
+            filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
+
+        self.assertEqual(
+            filled["operators"][1]["inputs"]["A"]["write_reg_hint"],
+            "reorder(m8,n2)->(n2,m8)",
+        )
+        self.assertEqual(
+            filled["operators"][1]["inputs"]["B"]["write_reg_hint"],
+            "reorder(n8,k2)->(k2,n8)",
+        )
+        self.assertNotIn("writereg", filled["operators"][1]["inputs"]["A"])
+
+    def test_fill_external_rmsnorm_remapping_writes_fixed_ring_gemm_b_hint_for_external_weight(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [32, 32, 1],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                        "B": {
+                            "shape": [896, 1, 32],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+
+        with mock.patch("address_remapping.rmsnorm_bridge.solve_graph", return_value=[]):
+            filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
+
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["B"]["write_reg_hint"],
+            "reorder(n8,k2)->(k2,n8)",
+        )
+
+    def test_fill_external_rmsnorm_remapping_writes_add_v_matrix_hint_on_producer_output(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 32, 1], "source": {"type": "external"}, "dtype": "fp16", "write_reg_hint": None},
+                        "B": {"shape": [896, 1, 32], "source": {"type": "external"}, "dtype": "fp16", "write_reg_hint": None},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+                {
+                    "id": "op1",
+                    "type": "prefill_add_V_fp16MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "B": {"shape": [1, 32, 32], "source": "op0"},
+                        "A": {"shape": [1, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+        mocked_results = [
+            mock.Mock(
+                spec=EdgeSolveResult,
+                producer="op0",
+                consumer="op1",
+                consumer_port="inB",
+                tensor_name="op0__out",
+                status="ok",
+                permutation=list(range(self.hw.remap_bits)),
+                write_reg_required=True,
+                write_reg_hint="reorder(m8)->(n8)",
+                reason=None,
+                reason_code=None,
+            ),
+        ]
+
+        with mock.patch("address_remapping.rmsnorm_bridge.solve_graph", return_value=mocked_results):
+            filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
+
+        self.assertNotIn("writereg", filled["operators"][1]["inputs"]["B"])
+        self.assertEqual(
+            filled["operators"][0]["output"]["write_reg_hint"],
+            "reorder(m8)->(n8)",
+        )
 
     def test_cli_outputs_json(self):
         graph_path = Path("examples/graphs/ring_gemm_bias.json").resolve()
@@ -1237,7 +1658,7 @@ class SolverTests(unittest.TestCase):
         )
 
     def test_performance_cli_accepts_external_rmsnorm_with_base_addrs(self):
-        graph_path = Path("examples/graphs/rmsnorm_withbaseaddr.json").resolve()
+        graph_path = Path("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json").resolve()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path("src").resolve())
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1323,7 +1744,7 @@ class SolverTests(unittest.TestCase):
     def test_build_roofline_summary_includes_hardware_measured_point(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/rmsnorm_withbaseaddr.json"),
+            load_graph_file("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1388,7 +1809,7 @@ class SolverTests(unittest.TestCase):
             self.assertIn("analytical_efficiency", gemm)
 
     def test_plot_roofline_svg_contains_hardware_measured_legend_and_summary(self):
-        graph_path = Path("examples/graphs/rmsnorm_withbaseaddr.json").resolve()
+        graph_path = Path("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json").resolve()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path("src").resolve())
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1425,7 +1846,7 @@ class SolverTests(unittest.TestCase):
     def test_write_performance_outputs_adds_display_units(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/rmsnorm_withbaseaddr.json"),
+            load_graph_file("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1518,7 +1939,7 @@ class SolverTests(unittest.TestCase):
     def test_rmsnorm_summac_work_exceeds_output_elements(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/rmsnorm_withbaseaddr.json"),
+            load_graph_file("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1530,7 +1951,7 @@ class SolverTests(unittest.TestCase):
     def test_rmsnorm_summac_writeback_fits_buffer(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/rmsnorm_withbaseaddr.json"),
+            load_graph_file("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1545,7 +1966,7 @@ class SolverTests(unittest.TestCase):
     def test_rmsnorm_mul_writeback_forces_buffer_drains(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/rmsnorm_withbaseaddr.json"),
+            load_graph_file("examples/graphs/rms_norm/rmsnorm_withbaseaddr.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,

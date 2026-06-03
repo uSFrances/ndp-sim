@@ -12,6 +12,7 @@ from .rmsnorm_bridge import (
     fill_external_remapping_file,
     fill_external_remapping_with_results,
     fill_external_rmsnorm_remapping_file,
+    normalize_graph_spec,
 )
 from .solver import solve_edge
 from .validation import emit_trace_artifacts, run_validation, write_validation_outputs
@@ -175,7 +176,7 @@ def main() -> None:
         print(_render_json(load_graph_file(str(output_path))))
         return
 
-    results = solve_graph(load_graph_file(args.path), hardware)
+    results = solve_graph(normalize_graph_spec(load_graph_file(args.path)), hardware)
     rendered = _render_json([result.to_dict() for result in results])
     print(rendered)
     _write_output_file(args.path, args.output, rendered)
