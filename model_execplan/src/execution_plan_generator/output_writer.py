@@ -322,6 +322,24 @@ def _apply_control_update_to_operator_json(
             outport["mode"] = "row" if value == 1 else "col"
         return
 
+    if instance.startswith("buffer_manager_cluster") and config_path.startswith("buffer_config.buffer."):
+        cluster_idx = _parse_instance_index(instance, prefix="buffer_manager_cluster")
+        if cluster_idx is None:
+            return
+        # config_path = "buffer_config.buffer.<field_name>"
+        parts = config_path.split(".")
+        if len(parts) < 3:
+            return
+        field_name = parts[-1]  # e.g. "buffer_nbr_cnt"
+        buffer_config = payload.get("buffer_config")
+        if not isinstance(buffer_config, dict):
+            return
+        buffer_key = f"buffer{cluster_idx}"
+        buffer_node = buffer_config.get(buffer_key)
+        if isinstance(buffer_node, dict):
+            buffer_node[field_name] = value
+        return
+
     if instance.startswith("rd_stream") or instance.startswith("wr_stream"):
         if config_path == "stream_engine.stream.dim_stride":
             stream_engine = payload.get("stream_engine")
@@ -356,6 +374,17 @@ def _apply_control_update_to_operator_json(
             stream_node = stream_engine.get(stream_key)
             if isinstance(stream_node, dict):
                 stream_node["buf_spatial_stride"] = _decode_packed_buf_spatial_stride(value)
+            return
+        if config_path == "stream_engine.stream.address_remapping":
+            stream_engine = payload.get("stream_engine")
+            if not isinstance(stream_engine, dict):
+                return
+            stream_key = _resolve_stream_key_for_instance(stream_engine, instance)
+            if stream_key is None:
+                return
+            stream_node = stream_engine.get(stream_key)
+            if isinstance(stream_node, dict):
+                stream_node["address_remapping"] = _decode_packed_address_remapping(value)
             return
         return
 
@@ -482,6 +511,14 @@ def _decode_packed_buf_spatial_stride(packed: int) -> list[int]:
     """Decode 16 entries (5 bits each) from an 80-bit packed integer."""
     entries: list[int] = []
     for i in range(16):
+        entries.append((packed >> (i * 5)) & 0x1F)
+    return entries
+
+
+def _decode_packed_address_remapping(packed: int) -> list[int]:
+    """Decode 26 entries (5 bits each) from a 130-bit packed integer."""
+    entries: list[int] = []
+    for i in range(26):
         entries.append((packed >> (i * 5)) & 0x1F)
     return entries
 

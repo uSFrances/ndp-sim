@@ -13,6 +13,8 @@
         * 每个算子单独维护，用于更灵活的 slice 分配
     * 输入A / 输入B / 输入B' / 输入C
         * tensor形状 `[K, M, N]`
+```json
+
         "used_slices": "0b1111111111111111111111111111",
         "operators": [
             {
@@ -81,6 +83,8 @@
                     "remapping": null
                 }
             }
+        ]
+```
   每类算子需要修改的寄存器不同，由于每个算子配置文件中包含一个初始size该size每个算子不同需要单独作为可以修改的常量进行储存，需要对初始size与json中读取到的目标size进行比较后再决定是否修改控制寄存器，若相同则不需要相关的修改控制寄存器指令
   * 要点，由于修改时会同时修改32位寄存器，但是往往修改寄存器时仅需修改个别位数，所以需要提前获知原有其他无关位数的原始值，避免对无关寄存器进行修改。
     * 当前实现已支持按 tensor 的 `remapping` 自动下发 `stream_engine.stream.address_remapping`（26 x 5bit 打包）。
@@ -719,6 +723,12 @@ padding		chunk_size	chunk
     * SFU 配置同理去重。
 * 已完成同寄存器多字段合并：当两个控制字段映射到同一寄存器地址时，合并为一条 Write_Reg 指令，解释中显示两个字段信息。
 * 已完成指令数大幅优化：通过码流重生成 + 基线对比 + 同寄存器合并，典型场景指令数减少 75%+（如 896→223）。
+* 已完成 `address_remapping` JSON 自动注入：
+    * 执行计划 JSON 中每个算子的输入/输出 `remapping` 列表（26 项 [0,25]）在算子 JSON 重生成时自动写入对应 stream 的 `address_remapping` 字段（替换原有的 `null`）。
+    * 通过 `_decode_packed_address_remapping` 将 130-bit 打包整数解回列表，由 `_apply_control_update_to_operator_json` 按 stream 实例定位写入。
+* 已完成 `buffer_config` 控制字段 JSON 注入：
+    * `buffer_manager_cluster<N>.buffer_config.buffer.<field_name>` 格式的控制寄存器更新（如 `buffer_nbr_cnt`）在算子 JSON 重生成时自动写入 `buffer_config.buffer<N>` 节点。
+    * 已修复 `buffer_nbr_cnt` 默认值问题：`BufferConfig.__init__` 中将初始值设为 `None`，使得 lambda 默认 `x if x is not None else 27` 在字段缺失时正确回落为 27。
 
 ### 待完成工作
 * 更多算子模板信息仍需补充到统一基础信息文件中，目前主要围绕示例算子完成联调。

@@ -944,6 +944,12 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         "se_nse0.n2n.mem_loop":b_k//a_k - 1 if a_k is not None and b_k is not None and a_k != 0 else 0,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
         "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
     }
 
 
@@ -970,8 +976,10 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         })
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
+    a_base_addr = _resolve_input_base_addr(operator, address_plan, "A")
+    if a_base_addr is not None:
+        updates["rd_stream1.stream_engine.stream.base_addr"] = parse_base_addr(a_base_addr + 16777216)
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(a_base_addr + 16777280)
     return updates
 
 def _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates(
@@ -1072,6 +1080,58 @@ def _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates(
     }
 
 
+def _compute_prefill_gemm_local_qkt_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for gemm_local_qkt control register logic."""
+
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    input_b_prime = operator.inputs.get("B'")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
+    (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+
+    updates: dict[str, int] = {
+        "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_n // 32 if a_n is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_k // 4 if a_k is not None else 0,
+        "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
+        "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
+        "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n) if a_n is not None else 0,
+    }
+
+    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
+        updates.update({
+            "iga_col_lc0.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc0.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream0.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+    if _has_hint(input_b, "reorder(m8,n2)->(n2,m8)") or _has_hint(input_b, "reorder(n8,m2)->(m2,n8)"):
+        updates.update({
+            "iga_col_lc1.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc1.buffer_loop_configs.COL_LC.stride": 2,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+            "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+    address_plan = template.address_plan
+    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+    if b_base_addr is not None:
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
+
+    return updates
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -1100,8 +1160,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_add_fp32MN_fp32MN_fp32MN": _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_mul_fp32MN_fp32MN_fp32MN": _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_add_V_fp16MN_fp32N_fp16MN": _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates,
-
-
+    "prefill_gemm_local_qkt": _compute_prefill_gemm_local_qkt_control_register_updates,
 }
 
 
