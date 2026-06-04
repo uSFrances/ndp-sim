@@ -158,6 +158,8 @@ def _resolve_op_hardware_measured(
     for key in candidates:
         if key in raw:
             value = raw[key]
+            if value is None:
+                return None
             if not isinstance(value, (int, float)):
                 raise ModelSpecError(f"hardware_measured['{key}'] must be numeric.")
             return float(value)

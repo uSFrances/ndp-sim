@@ -1,6 +1,6 @@
 Frontend:
   impl: LoadStoreTrace
-  path: /cluster/home/liudy/SACA/address_remapping/outputs/tests/test_validation_output_ramulator_remap.trace
+  path: H:/dev/projects/ndp-sim/address_remapping/outputs/tests/test_validation_output_ramulator_remap.trace
   clock_ratio: 1
 
   Translation:

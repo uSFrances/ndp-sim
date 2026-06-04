@@ -78,6 +78,7 @@
           32
         ],
         "remapping": null,
+        "type": "rope_slice_xor2",
         "base_addr": "0x00005000"
       }
     },

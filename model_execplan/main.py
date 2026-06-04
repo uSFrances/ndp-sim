@@ -2,25 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
-import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 # Keep source layout simple without requiring package installation.
 PROJECT_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PROJECT_ROOT.parent
 SRC_DIR = PROJECT_ROOT / "src"
-OP_CONFIG_ROOT = PROJECT_ROOT / "config"
 OP_JSON_ROOT = REPO_ROOT / "jsons"
-BITSTREAM_MAIN = REPO_ROOT / "bitstream" / "main.py"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from execution_plan_generator.json_loader import execution_plan_to_dict
-from execution_plan_generator.bank_data_exporter import export_bank_data
+from execution_plan_generator.bank_data_exporter import export_bank_data, export_combined_bank_data
 from execution_plan_generator.output_writer import (
     write_input_with_baseaddr,
     write_emulator_bundle,
@@ -29,156 +23,6 @@ from execution_plan_generator.output_writer import (
     write_instruction_op_outputs,
 )
 from execution_plan_generator.pipeline import ExecutionPlanPipeline
-
-
-@dataclass(frozen=True)
-class GeneratedConfigRecord:
-    op_type: str
-    op_dir: Path
-    backup_dir: Path | None
-
-
-def _collect_operator_types(json_file: Path) -> list[str]:
-    with json_file.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
-
-    operators = payload.get("operators")
-    if not isinstance(operators, list):
-        raise ValueError("Input JSON must contain an 'operators' list.")
-
-    op_types: list[str] = []
-    seen: set[str] = set()
-    for idx, item in enumerate(operators):
-        if not isinstance(item, dict):
-            raise ValueError(f"operators[{idx}] must be an object.")
-        op_type = item.get("type")
-        if not isinstance(op_type, str) or not op_type:
-            raise ValueError(f"operators[{idx}].type must be a non-empty string.")
-        if op_type not in seen:
-            seen.add(op_type)
-            op_types.append(op_type)
-    return op_types
-
-
-def _has_required_operator_config_files(op_dir: Path) -> bool:
-    if not op_dir.is_dir():
-        return False
-    has_parsed = (op_dir / "parsed_bitstream.txt").is_file()
-    has_bitstream = bool(list(op_dir.glob("*bitstream_64b.bin")) or list(op_dir.glob("*bitstream_128b.bin")))
-    return has_parsed and has_bitstream
-
-
-def _backup_operator_dir(op_dir: Path) -> Path | None:
-    if not op_dir.exists():
-        return None
-    backup_dir = op_dir.parent / f".{op_dir.name}.autogen_backup"
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
-    shutil.copytree(op_dir, backup_dir)
-    return backup_dir
-
-
-def _rollback_generated_configs(records: list[GeneratedConfigRecord]) -> None:
-    for record in records:
-        if record.op_dir.exists():
-            shutil.rmtree(record.op_dir)
-        if record.backup_dir is not None and record.backup_dir.exists():
-            shutil.copytree(record.backup_dir, record.op_dir)
-
-
-def _cleanup_config_backups(records: list[GeneratedConfigRecord]) -> None:
-    for record in records:
-        if record.backup_dir is not None and record.backup_dir.exists():
-            shutil.rmtree(record.backup_dir)
-
-
-def _decode_subprocess_output(raw: bytes | None) -> str:
-    if not raw:
-        return ""
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("utf-8", errors="replace")
-
-
-def ensure_operator_configs(json_file: Path, force_regenerate: bool = False) -> list[GeneratedConfigRecord]:
-    if not BITSTREAM_MAIN.is_file():
-        raise FileNotFoundError(f"bitstream entry not found: {BITSTREAM_MAIN}")
-
-    op_types = _collect_operator_types(json_file)
-    generated_records: list[GeneratedConfigRecord] = []
-    generated: list[str] = []
-    skipped: list[str] = []
-    missing_json_templates: list[Path] = []
-
-    for op_type in op_types:
-        op_dir = OP_CONFIG_ROOT / op_type
-        needs_generation = force_regenerate or (not _has_required_operator_config_files(op_dir))
-        if not needs_generation:
-            skipped.append(op_type)
-            continue
-
-        op_json = OP_JSON_ROOT / f"{op_type}.json"
-        if not op_json.is_file():
-            missing_json_templates.append(op_json)
-            continue
-
-        backup_dir = _backup_operator_dir(op_dir)
-        if op_dir.exists():
-            shutil.rmtree(op_dir)
-        op_dir.mkdir(parents=True, exist_ok=True)
-
-        cmd = [
-            sys.executable,
-            str(BITSTREAM_MAIN),
-            "--visualize-placement",
-            "-c",
-            str(op_json),
-            "-o",
-            str(op_dir),
-        ]
-        print(f"[op-config] generating: {op_type}")
-        try:
-            child_env = os.environ.copy()
-            child_env.setdefault("PYTHONUTF8", "1")
-            child_env.setdefault("PYTHONIOENCODING", "utf-8")
-            subprocess.run(
-                cmd,
-                cwd=REPO_ROOT,
-                check=True,
-                env=child_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except subprocess.CalledProcessError as exc:
-            if op_dir.exists():
-                shutil.rmtree(op_dir)
-            if backup_dir is not None and backup_dir.exists():
-                shutil.copytree(backup_dir, op_dir)
-            stderr_tail = _decode_subprocess_output(exc.stderr).strip()
-            if len(stderr_tail) > 1200:
-                stderr_tail = stderr_tail[-1200:]
-            raise RuntimeError(
-                f"Failed to generate config for operator '{op_type}' with command: {' '.join(cmd)}"
-                + (f"\n[subprocess stderr]\n{stderr_tail}" if stderr_tail else "")
-            ) from exc
-        generated_records.append(
-            GeneratedConfigRecord(op_type=op_type, op_dir=op_dir, backup_dir=backup_dir)
-        )
-        generated.append(op_type)
-
-    if missing_json_templates:
-        missing = "\n".join(str(p) for p in missing_json_templates)
-        raise FileNotFoundError(
-            "Missing operator JSON template file(s) under jsons directory:\n"
-            f"{missing}"
-        )
-
-    print(
-        "[op-config] done: "
-        f"generated={len(generated)}, skipped={len(skipped)}, force_regenerate={force_regenerate}"
-    )
-    return generated_records
 
 
 def parse_args() -> argparse.Namespace:
@@ -193,16 +37,31 @@ def parse_args() -> argparse.Namespace:
         help="Optional output path for normalized parsed JSON",
     )
     parser.add_argument(
-        "--output-prefix",
-        type=Path,
-        default=None,
-        help="Optional output prefix for instruction stream files",
-    )
-    parser.add_argument(
         "-b",
         "--export-bank-data",
         action="store_true",
         help="Export per-slice per-bank data files to <output_prefix>/Bank_data",
+    )
+    parser.add_argument(
+        "-bc",
+        "--bank-combined",
+        action="store_true",
+        default=False,
+        help="Combine all banks into a single file per slice (only with --export-bank-data)",
+    )
+    parser.add_argument(
+        "-lw",
+        "--bank-line-width",
+        type=int,
+        choices=[32, 128],
+        default=32,
+        help="Bank data output line width in bits: 32 or 128 (only with --export-bank-data, default: 32)",
+    )
+    parser.add_argument(
+        "--bank-output-format",
+        choices=["binary", "hex"],
+        default="binary",
+        help="Bank data output format: binary or hex (default: binary)",
     )
     parser.add_argument(
         "-e",
@@ -210,53 +69,43 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Export emulator inputs to <output_prefix>/emulator",
     )
-    parser.add_argument(
-        "-reop","--regenerate-operator-configs",
-        action="store_true",
-        default=False,
-        help=(
-            "Enable force regeneration of operator config folders under model_execplan/config "
-            "using bitstream/main.py, even if they already exist"
-        ),
-    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
 
-    generated_records = ensure_operator_configs(
-        json_file=args.json_file,
-        force_regenerate=args.regenerate_operator_configs,
-    )
-
+    output_prefix = PROJECT_ROOT / "output" / args.json_file.stem
     pipeline = ExecutionPlanPipeline()
-    try:
-        result = pipeline.build_from_json(args.json_file)
-    except Exception:
-        _rollback_generated_configs(generated_records)
-        _cleanup_config_backups(generated_records)
-        raise
-    _cleanup_config_backups(generated_records)
+    result = pipeline.build_from_json(args.json_file)
 
     print(f"Parsed operators: {len(result.execution_input.operators)}")
-    print(
-        f"Default slices mask: {result.execution_input.used_slices:028b} "
-        f"(count={result.execution_input.used_slice_count()})"
-    )
     for op in result.execution_input.operators:
         input_names = ",".join(op.inputs.keys())
+        sfu_note = ""
+        template = result.templates.get(op.op_id)
+        if template is not None and template.config_sfu_type:
+            sfu_note = f", sfu={template.config_sfu_type}"
         print(
             f"  - {op.op_id} ({op.op_type}), inputs=[{input_names}], output_shape={op.output.shape}, "
-            f"used_slices={op.used_slices:028b} (count={op.used_slice_count()})"
+            f"used_slices={op.used_slices:028b} (count={op.used_slice_count()}){sfu_note}"
         )
-        template = result.templates.get(op.op_id)
-        if template is not None:
-            print(
-                f"    template: initial_size={template.initial_size}, target_size={template.target_size}, "
-                f"update_control={template.should_update_control_registers}, "
-                f"decoded_regs={len(template.original_register_values)}"
-            )
+
+    # Show config / SFU reuse across operators of the same type.
+    type_ops: dict[str, list[str]] = {}
+    for op in result.execution_input.operators:
+        type_ops.setdefault(op.op_type, []).append(op.op_id)
+    for op_type, op_ids in type_ops.items():
+        if len(op_ids) <= 1:
+            continue
+        cfg_addr = result.address_plan.operator_config_base_addresses.get(op_ids[0])
+        sfu_addr = result.address_plan.operator_sfu_config_base_addresses.get(op_ids[0])
+        extra = []
+        if cfg_addr is not None:
+            extra.append(f"config=0x{cfg_addr:08X}")
+        if sfu_addr is not None:
+            extra.append(f"sfu=0x{sfu_addr:08X}")
+        print(f"    [{op_type}] shared by {', '.join(op_ids)}  ({', '.join(extra)})")
 
     print(f"Address assignments: {len(result.address_plan.assignments)}")
     for tensor_name, assignment in result.address_plan.assignments.items():
@@ -273,9 +122,6 @@ def main() -> int:
     for idx, cmd in enumerate(result.artifact.commands[:8]):
         print(f"  cmd[{idx}] = 0x{cmd:016X}")
 
-    output_prefix = args.output_prefix
-    if output_prefix is None:
-        output_prefix = PROJECT_ROOT / "output" / args.json_file.stem
     hex_path, explanation_path = write_instruction_outputs(result.artifact, output_prefix)
     op_explanation_paths = write_instruction_op_outputs(result.artifact, output_prefix)
     manifest_path = write_install_manifest(
@@ -293,10 +139,10 @@ def main() -> int:
     )
     print(f"Instruction stream written to: {hex_path}")
     print(f"Instruction explanation written to: {explanation_path}")
-    if op_explanation_paths:
-        print("Per-op instruction-only outputs written to:")
-        for path in op_explanation_paths:
-            print(f"  {path}")
+    # if op_explanation_paths:
+    #     print("Per-op instruction-only outputs written to:")
+    #     for path in op_explanation_paths:
+    #         print(f"  {path}")
     print(f"Install manifest written to: {manifest_path}")
     print(f"Input with baseaddr written to: {with_baseaddr_path}")
 
@@ -306,15 +152,22 @@ def main() -> int:
             address_plan=result.address_plan,
             output_prefix=output_prefix,
             emulator_suffix=args.json_file.stem,
+            skip_missing_data=True,
         )
         print(f"Emulator bundle written to: {output_prefix / f'emulator_{args.json_file.stem}'} ({len(emulator_paths)} files)")
 
     if args.export_bank_data:
         bank_data_dir = output_prefix / "Bank_data"
-        bank_files = export_bank_data(manifest_path=manifest_path, output_dir=bank_data_dir)
+        export_fn = export_combined_bank_data if args.bank_combined else export_bank_data
+        bank_files = export_fn(
+            manifest_path=manifest_path,
+            output_dir=bank_data_dir,
+            line_width_bits=args.bank_line_width,
+            output_format=args.bank_output_format,
+        )
         print(
             f"Bank_data exported to: {bank_data_dir} "
-            f"(files={len(bank_files)})"
+            f"(files={len(bank_files)}, combined={args.bank_combined})"
         )
 
     if args.dump_normalized_json is not None:

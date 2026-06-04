@@ -13,6 +13,8 @@
         * 每个算子单独维护，用于更灵活的 slice 分配
     * 输入A / 输入B / 输入B' / 输入C
         * tensor形状 `[K, M, N]`
+```json
+
         "used_slices": "0b1111111111111111111111111111",
         "operators": [
             {
@@ -81,6 +83,8 @@
                     "remapping": null
                 }
             }
+        ]
+```
   每类算子需要修改的寄存器不同，由于每个算子配置文件中包含一个初始size该size每个算子不同需要单独作为可以修改的常量进行储存，需要对初始size与json中读取到的目标size进行比较后再决定是否修改控制寄存器，若相同则不需要相关的修改控制寄存器指令
   * 要点，由于修改时会同时修改32位寄存器，但是往往修改寄存器时仅需修改个别位数，所以需要提前获知原有其他无关位数的原始值，避免对无关寄存器进行修改。
     * 当前实现已支持按 tensor 的 `remapping` 自动下发 `stream_engine.stream.address_remapping`（26 x 5bit 打包）。
@@ -705,18 +709,26 @@ padding		chunk_size	chunk
         * `B'` 复用 `B` 地址。
         * 输出 `D` 紧跟在所有输入之后。
     * 导出的 `base_addr` 使用十六进制字符串格式（如 `0x0`、`0x1000`）。
-* 已完成算子配置目录自动补齐：
-    * 运行 `model_execplan/main.py` 时，会按输入 JSON 中出现的算子类型检查 `model_execplan/config/<op_type>/`。
-    * 若缺少 `parsed_bitstream.txt` 或 `*bitstream_64b.bin/*bitstream_128b.bin`，会自动调用 `bitstream/main.py` 生成。
-    * 若目录已完整，默认跳过，不重复生成。
-* 已完成强制重生成开关：
-    * `-reop` / `--regenerate-operator-configs` 默认关闭（`False`）。
-    * 显式传入该参数时，强制重建所有算子配置目录。
-* 已完成子进程日志与编码兼容性处理：
-    * 自动生成算子配置时，子进程输出默认不直接打印到控制台。
-    * 子进程失败时会附带 `stderr` 片段到异常信息，便于定位问题。
-    * 输出解码按 UTF-8 处理并带替换策略，避免 Windows 下 `gbk` 解码异常导致线程报错。
-* 已完成 `max` 示例输入更新：当前示例按“仅输入 A，输出 D”组织。
+* 已完成算子配置目录自动生成（每次运行必然执行）：
+    * 流程中 `_regenerate_bitstreams` 会根据地址规划与控制寄存器更新，对每个算子类型：
+        1. 加载 `jsons/<op_type>.json` 模板
+        2. 写入控制寄存器与 stream base_addr 更新值
+        3. 调用 `bitstream/main.py --visualize-placement` 重新生成码流
+        4. 将所有输出（128b/64b 二进制码流、parsed 码流、mapping_review.json、patched JSON）保存到 `model_execplan/config/<op_type>/`
+    * 新码流已包含控制寄存器更新值，指令生成时以此为基线，大量相同值的 Write_Reg 被跳过，大幅减少指令数。
+    * 支持 config 文件夹被删除后自动重建，无额外参数。
+* 已完成同类型算子 config / SFU 地址去重：
+    * 同一 `op_type` 出现多次时，地址规划只分配一份 config 地址空间，后续实例复用。
+    * `sca_cfg.json` 中同类型算子共享同一配置条目，`cfg_pkg/` 中只保留一份码流文件。
+    * SFU 配置同理去重。
+* 已完成同寄存器多字段合并：当两个控制字段映射到同一寄存器地址时，合并为一条 Write_Reg 指令，解释中显示两个字段信息。
+* 已完成指令数大幅优化：通过码流重生成 + 基线对比 + 同寄存器合并，典型场景指令数减少 75%+（如 896→223）。
+* 已完成 `address_remapping` JSON 自动注入：
+    * 执行计划 JSON 中每个算子的输入/输出 `remapping` 列表（26 项 [0,25]）在算子 JSON 重生成时自动写入对应 stream 的 `address_remapping` 字段（替换原有的 `null`）。
+    * 通过 `_decode_packed_address_remapping` 将 130-bit 打包整数解回列表，由 `_apply_control_update_to_operator_json` 按 stream 实例定位写入。
+* 已完成 `buffer_config` 控制字段 JSON 注入：
+    * `buffer_manager_cluster<N>.buffer_config.buffer.<field_name>` 格式的控制寄存器更新（如 `buffer_nbr_cnt`）在算子 JSON 重生成时自动写入 `buffer_config.buffer<N>` 节点。
+    * 已修复 `buffer_nbr_cnt` 默认值问题：`BufferConfig.__init__` 中将初始值设为 `None`，使得 lambda 默认 `x if x is not None else 27` 在字段缺失时正确回落为 27。
 
 ### 待完成工作
 * 更多算子模板信息仍需补充到统一基础信息文件中，目前主要围绕示例算子完成联调。
@@ -729,25 +741,15 @@ padding		chunk_size	chunk
 * 当模板中没有原始配置码流时，脚本无法判断寄存器是否来自已启用 chunk，此时不会执行“未启用寄存器”校验。
 * 当前 README 中后续章节仍保留了较多设计说明和示例表格，其中有些内容是设计目标，不完全等同于当前实现状态；如需严格对齐代码行为，请优先参考本节“当前实现状态”。
 
-### 运行示例
+## 运行示例
+
+输出固定到 `model_execplan/output/<json文件名>/`。
 
 ```bash
 python main.py examples/sample_gemm_local_execution_input.json
 ```
 
-说明：默认仅在缺少算子配置文件时自动调用 `bitstream/main.py` 进行补齐，不会强制重生成已存在的算子目录。
-
-强制重生成所有算子配置目录：
-
-```bash
-python main.py examples/sample_gemm_local_execution_input.json -reop
-```
-
-等价长参数：
-
-```bash
-python main.py examples/sample_gemm_local_execution_input.json --regenerate-operator-configs
-```
+每次运行都会自动重新生成所有算子配置码流到 `model_execplan/config/<op_type>/`，无需额外参数。
 
 启用 bank 数据导出：
 
@@ -908,7 +910,31 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 
 ### 八、Bank_data 导出
 * 新增 CLI 开关：`-b` / `--export-bank-data`。
-* 启用后从 `sca_cfg.json` 读取矩阵数据项并导出到 `<output_prefix>/Bank_data/`。
+* 启用后从 `sca_cfg.json` 读取带 `base_addr` / `path` 的数据项并导出到 `<output_prefix>/Bank_data/`，包括 `ExecutionPlan` 和 `cfg_pkg` 中的 bitstream 文件。
 * 导出文件按 `(slice, bank)` 组织，命名为 `sliceXX_BankXX_data.txt`。
-* 输出格式为每行 32bit 大端 hex；bank 内地址从 0 开始连续展开。
+* 默认输出为二进制；可用 `--bank-output-format hex` 切换为 hex。
+* 可配合 `-lw` / `--bank-line-width` 选择每行 32bit 或 128bit。
 * 按 128bit 地址分配粒度填充空洞为 0；无数据 bank 不生成文件。
+* 新增整合模式（`--combined`）：
+    * 每个 slice 的 4 个 bank 数据合并为一个文件 `sliceXX_data.txt`。
+    * bank N 数据起始于偏移 `N × stride`（stride 为该 slice 最大 bank 数据量，对齐到 16 字节）。
+    * 可通过 `-bc` / `--bank-combined` 配合 `-b` 在 pipeline 中启用。
+
+### Bank_data 独立 CLI 调用
+
+```bash
+# 分 bank 导出（默认）
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --combined
+
+# 指定输出目录
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --out-dir ./my_bank_data
+
+# hex 输出
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --output-format hex
+
+# 整合模式（每 slice 一个文件）
+python -m execution_plan_generator.bank_data_exporter model_execplan/output/gemm_local/sca_cfg.json --combined
+
+# pipeline 中启用整合模式
+python main.py example.json -b -bc
+```

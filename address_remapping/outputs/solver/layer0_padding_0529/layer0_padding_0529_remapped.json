@@ -1,0 +1,1911 @@
+{
+  "params": {
+    "hidden_size": 896,
+    "intermediate_size": 1792,
+    "num_attention_heads": 7,
+    "num_key_value_heads": 1,
+    "head_dim": 128,
+    "num_hidden_layers": 1,
+    "sequence_length": 32,
+    "slice_per_head": 4,
+    "used_slices": 28,
+    "kv_padding": 256,
+    "target_op": "all"
+  },
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op1",
+      "type": "prefill_remote_sum_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op0",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op2",
+      "type": "prefill_mac_SFU_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size",
+            1,
+            "sequence_length"
+          ],
+          "source": "op1",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op3",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "source": {
+            "type": "external"
+          },
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op2",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ]
+      }
+    },
+    {
+      "id": "op4",
+      "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op3"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op5",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op4",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op6",
+      "type": "prefill_add_fp16MN_fp32N_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op5"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op7",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op6"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op8",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op6"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op9",
+      "type": "prefill_add_fp32MN_fp32MN_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "source": "op7",
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "source": "op8",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op10",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "kv_padding"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op11",
+      "type": "prefill_remote_sum_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "type": "slice_div4",
+          "source": "op10",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op12",
+      "type": "prefill_mac_SFU_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size",
+            1,
+            "sequence_length"
+          ],
+          "source": "op11",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op13",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "kv_padding"
+          ],
+          "source": {
+            "type": "external"
+          },
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op12",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "kv_padding"
+        ]
+      }
+    },
+    {
+      "id": "op14",
+      "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "kv_padding"
+          ],
+          "remapping": null,
+          "source": "op13"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "kv_padding"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "kv_padding"
+        ],
+        "remapping": [
+          0,
+          8,
+          9,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op15",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "kv_padding",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op14",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op16",
+      "type": "prefill_add_fp16MN_fp32N_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op15"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op17",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op16"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op18",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op16"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op19",
+      "type": "prefill_add_fp32MN_fp32MN_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "source": "op17",
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "source": "op18",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op20",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "kv_padding",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op14",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": [
+          3,
+          4,
+          5,
+          0,
+          1,
+          2,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ],
+        "write_reg_hint": "reorder(m8)->(n8)"
+      }
+    },
+    {
+      "id": "op21",
+      "type": "prefill_add_V_fp16MN_fp32N_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op20"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "num_key_value_heads*head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "num_key_value_heads*head_dim//slice_per_head"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op22",
+      "type": "prefill_gemm_local_qkt",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "sequence_length",
+            1,
+            "head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op9",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "head_dim//slice_per_head"
+          ],
+          "remapping": null,
+          "source": "op19",
+          "axis_view": {
+            "producer_to_consumer": {
+              "M": "N",
+              "N": "K"
+            },
+            "kind": "transpose"
+          },
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "sequence_length"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          3,
+          6,
+          7,
+          4,
+          5,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op23",
+      "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "remapping": null,
+          "source": "op22"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "sequence_length"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op24",
+      "type": "prefill_add_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "remapping": null,
+          "source": "op23"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "sequence_length"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op25",
+      "type": "prefill_max_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "source": "op24",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op26",
+      "type": "prefill_sub_SFU_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "source": "op24",
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op25",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op27",
+      "type": "prefill_sum_rec_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "source": "op26",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op28",
+      "type": "prefill_mul_fp32MN_fp32M_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "sequence_length"
+          ],
+          "source": "op26",
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op27",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "sequence_length"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op29",
+      "type": "prefill_gemm_local",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "sequence_length",
+            1,
+            "sequence_length"
+          ],
+          "remapping": null,
+          "source": "op28",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            1,
+            "head_dim//slice_per_head",
+            "sequence_length"
+          ],
+          "remapping": null,
+          "source": "op21",
+          "write_reg_hint": "reorder(n8,m2)->(m2,n8)"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "head_dim//slice_per_head"
+        ],
+        "remapping": [
+          0,
+          3,
+          4,
+          1,
+          2,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op30",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op29",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op31",
+      "type": "prefill_add_fp32MN_fp16MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op30"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op32",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op31"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op33",
+      "type": "prefill_remote_sum_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op32",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op34",
+      "type": "prefill_mac_SFU_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size",
+            1,
+            "sequence_length"
+          ],
+          "source": "op33",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          "sequence_length"
+        ]
+      }
+    },
+    {
+      "id": "op35",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "source": "op31",
+          "remapping": null
+        },
+        "B": {
+          "shape": [
+            1,
+            1,
+            "sequence_length"
+          ],
+          "source": "op34",
+          "remapping": null
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ]
+      }
+    },
+    {
+      "id": "op36",
+      "type": "prefill_mul_fp32MN_fp32N_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op35"
+        },
+        "A": {
+          "shape": [
+            1,
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          5,
+          6,
+          1,
+          2,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op37",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op36",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "intermediate_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          7,
+          3,
+          4,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op38",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op36",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,n2)->(n2,m8)"
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "intermediate_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op39",
+      "type": "prefill_silu_fp16MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op37"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "intermediate_size//used_slices"
+        ],
+        "remapping": null
+      }
+    },
+    {
+      "id": "op40",
+      "type": "prefill_mul_fp32MN_fp16MN_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op39"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "intermediate_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op37"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "intermediate_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          6,
+          7,
+          1,
+          2,
+          3,
+          4,
+          5,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op41",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "intermediate_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": null,
+          "source": "op40",
+          "dtype": "fp16",
+          "write_reg_hint": "reorder(m8,k2)->(k2,m8)"
+        },
+        "B": {
+          "shape": [
+            "intermediate_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "write_reg_hint": "reorder(n8,k2)->(k2,n8)",
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "intermediate_size",
+            1,
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          3,
+          4,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      }
+    },
+    {
+      "id": "op42",
+      "type": "prefill_add_fp32MN_fp16MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op31"
+        },
+        "B": {
+          "shape": [
+            1,
+            "sequence_length",
+            "hidden_size//used_slices"
+          ],
+          "remapping": null,
+          "source": "op41"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "hidden_size//used_slices"
+        ],
+        "remapping": null
+      }
+    }
+  ]
+}

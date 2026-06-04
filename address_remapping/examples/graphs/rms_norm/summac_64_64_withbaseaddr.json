@@ -1,0 +1,34 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "hardware_measured": 2868,
+      "inputs": {
+        "A": {
+          "shape": [
+            1,
+            64,
+            64
+          ],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x00000000"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          64
+        ],
+        "remapping": null,
+        "base_addr": "0x00004000"
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ class BufferConfig(BaseConfigModule):
     FIELD_MAP = [
         ("dst_port", 1),  # buf_wr_src_id in hardware: 0=SpecArray, 1=GeneArray
         ("buf_full_last_index", 4), 
+        ("buffer_nbr_cnt", 5,lambda x: x if x is not None else 27),  # Number of neighbors to fetch for NBR mode, valid when dst_port=1
         ("nbr_enable", 1),  # buf_wr_src_id in hardware: 0=disabled, 1=enabled
         ("buffer_life_time", 4, lambda x : x-1),
         ("mode", 1),
@@ -22,6 +23,7 @@ class BufferConfig(BaseConfigModule):
         super().__init__()
         self.idx = idx  # buffer index
         self.enable = 1  # Track enable separately for empty check
+        self.values["buffer_nbr_cnt"] = None  # Use None to trigger the lambda default
 
     def from_json(self, cfg: dict):
         cfg = cfg.get("buffer_config", cfg)

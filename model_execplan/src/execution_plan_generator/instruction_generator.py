@@ -175,6 +175,9 @@ class InstructionGenerator:
                     address_plan=address_plan,
                     apply_instance_mapping=True,
                 )
+                # Start from template values (already recomputed with the
+                # current mapping) and let dynamic updates override.
+                control_register_values = dict(template.control_register_values)
                 control_register_values.update(dynamic_control_values)
             template = replace(template, control_register_values=control_register_values)
             config_len = int(template.config_length or 0)
@@ -391,7 +394,18 @@ class InstructionGenerator:
             if not template.should_update_control_registers:
                 skipped_control_ops += 1
             else:
+                # Track running register values so that when two config fields
+                # target the same register address, the second field sees the
+                # first field's modification instead of the original value.
+                running_values: dict[int, int] = dict(template.original_register_values)
+                # Track the last emitted (slice_id, reg_addr) for merging.
+                prev_slice_id: int | None = None
+                prev_reg_addr: int | None = None
                 for reg_name, reg_value in control_register_values.items():
+                    # Stream base_addr fields are already emitted by the unified
+                    # base-address loop above; skip them here to avoid duplicates.
+                    if self._is_base_addr_field_key(reg_name):
+                        continue
                     resolved_reg_name = self._resolve_control_register_field_key(reg_name)
                     if resolved_reg_name is None:
                         unresolved_control_names.add(reg_name)
@@ -399,14 +413,16 @@ class InstructionGenerator:
                     if not isinstance(reg_value, int):
                         unresolved_control_names.add(reg_name)
                         continue
+                    # Use running_values so multi-field writes to the same
+                    # register accumulate correctly.
                     effective_original_values = self._build_effective_original_values_for_field(
                         field_key=resolved_reg_name,
-                        original_register_values=template.original_register_values,
+                        original_register_values=running_values,
                     )
                     reg_writes = self._expand_field_to_register_writes(
                         resolved_reg_name,
                         reg_value,
-                        effective_original_values,
+                        running_values,
                     )
                     field_original_value = self._extract_field_value_from_original(
                         field_key=resolved_reg_name,
@@ -429,27 +445,55 @@ class InstructionGenerator:
                             if original_value == write_value:
                                 skipped_unchanged_write_count += 1
                                 continue
-                            commands.append(
-                                WriteRegEncoder.encode(
+                            # Merge with previous command when same (slice, addr).
+                            if (
+                                prev_slice_id == slice_id
+                                and prev_reg_addr == reg_addr
+                                and commands
+                                and command_explanations
+                            ):
+                                # Update the already-emitted Write_Reg command value.
+                                commands[-1] = WriteRegEncoder.encode(
                                     write_value=write_value,
                                     write_addr=reg_addr,
                                     slice_id=slice_id,
                                 )
-                            )
-                            command_explanations.append(
-                                f"Write_Reg control field for operator {op.op_id}, register_field={resolved_reg_name}, "
-                                f"slice_bin={slice_id:05b}, reg_addr_bin={reg_addr:014b}, "
-                                f"original_value_bin={original_value:032b}, "
-                                f"write_value_bin={write_value:032b}, "
-                                f"field_value_original_bin={field_original_value:032b}, "
-                                f"field_value_write_bin={reg_value:032b}, "
-                                f"original_value_hex=0x{original_value:08X}, "
-                                f"write_value_hex=0x{write_value:08X}, "
-                                f"field_value_original_hex=0x{field_original_value:08X}, "
-                                f"field_value_write_hex=0x{reg_value:08X}"
-                            )
-                            write_reg_count += 1
-                            control_write_count += 1
+                                # Extend the previous explanation with this field.
+                                prev_expl = command_explanations[-1]
+                                field_info = (
+                                    f", register_field2={resolved_reg_name}, "
+                                    f"field_value2_original_bin={field_original_value:032b}, "
+                                    f"field_value2_write_bin={reg_value:032b}, "
+                                    f"field_value2_original_hex=0x{field_original_value:08X}, "
+                                    f"field_value2_write_hex=0x{reg_value:08X}"
+                                )
+                                command_explanations[-1] = prev_expl + field_info
+                            else:
+                                commands.append(
+                                    WriteRegEncoder.encode(
+                                        write_value=write_value,
+                                        write_addr=reg_addr,
+                                        slice_id=slice_id,
+                                    )
+                                )
+                                command_explanations.append(
+                                    f"Write_Reg control field for operator {op.op_id}, register_field={resolved_reg_name}, "
+                                    f"slice_bin={slice_id:05b}, reg_addr_bin={reg_addr:014b}, "
+                                    f"original_value_bin={original_value:032b}, "
+                                    f"write_value_bin={write_value:032b}, "
+                                    f"field_value_original_bin={field_original_value:032b}, "
+                                    f"field_value_write_bin={reg_value:032b}, "
+                                    f"original_value_hex=0x{original_value:08X}, "
+                                    f"write_value_hex=0x{write_value:08X}, "
+                                    f"field_value_original_hex=0x{field_original_value:08X}, "
+                                    f"field_value_write_hex=0x{reg_value:08X}"
+                                )
+                                write_reg_count += 1
+                                control_write_count += 1
+                            # Advance running values for the next field.
+                            running_values[reg_addr] = write_value
+                            prev_slice_id = slice_id
+                            prev_reg_addr = reg_addr
 
             start_comp_cmd = StartCompEncoder.encode(slice_mask)
             commands.append(start_comp_cmd)

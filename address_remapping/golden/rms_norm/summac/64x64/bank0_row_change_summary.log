@@ -1,0 +1,84 @@
+# Row change analysis for rms_norm/summac bank0_frame.log
+# BankLog: H:\dev\projects\ndp-sim\address_remapping\golden\rms_norm\summac\64x64\bank0_frame.log
+# SliceStartTime(ns): 209507000
+# RequestCountInSlice: 1062
+# DerivedRowChangeCount: 23
+# NormalDataRowChangeCount: 8
+# RwSwitchRowChangeCount: 14
+# SliceEndCloseCount: 1
+# LoggedRowChangeInfoCount: 23
+# LoggedRowChangeInfoLastTotal: 23
+#
+# Cause legend:
+#   NORMAL_DATA = same RW direction before and after the close request.
+#   RW_SWITCH   = RW direction flips after the close request.
+#   SLICE_END_CLOSE = close request has no following request inside this slice.
+#
+# TransitionSequence: R->R | R->R | R->W | W->R | R->R | R->W | W->R | R->R | R->W | W->R | R->R | R->W | W->R | R->R | R->W | W->R | R->R | R->W | W->R | R->R | R->W | W->R | R->END
+#
+# Burst segments (contiguous same-RW requests):
+#   payload_bytes assumes each request carries 128-bit = 16 B payload.
+#   For fp32, 256 B = one 64-element tensor row and 32 B = eight fp32 outputs.
+#
+#   SEG[01] R: rows=[0, 1, 2], cols=1..62, payload=3072B, transfers=192, close_repeats=3, tensor_rows=12.00, fp32=768 (carried-in close from previous slice)
+#   SEG[02] W: rows=[16], cols=1..0, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[03] R: rows=[3, 4], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[04] W: rows=[16], cols=3..2, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[05] R: rows=[5, 6], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[06] W: rows=[16], cols=5..4, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[07] R: rows=[7, 8], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[08] W: rows=[16], cols=7..6, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[09] R: rows=[9, 10], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[10] W: rows=[16], cols=9..8, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[11] R: rows=[11, 12], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[12] W: rows=[16], cols=11..10, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[13] R: rows=[13, 14], cols=1..62, payload=2048B, transfers=128, close_repeats=2, tensor_rows=8.00, fp32=512
+#   SEG[14] W: rows=[16], cols=13..12, payload=32B, transfers=2, close_repeats=1, tensor_rows=0.12, fp32=8
+#   SEG[15] R: rows=[15], cols=1..62, payload=1024B, transfers=64, close_repeats=1, tensor_rows=4.00, fp32=256
+#
+[01] time=209717000 ns, cycle=167, cause=NORMAL_DATA, close=R row=0 col=62 addr=0x3e, next_rw=R next_row=1 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=1
+      reason: Closed R row 0 and next request continues with the same R direction on row 1.
+[02] time=209912000 ns, cycle=323, cause=NORMAL_DATA, close=R row=1 col=62 addr=0x7e, next_rw=R next_row=2 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=1
+      reason: Closed R row 1 and next request continues with the same R direction on row 2.
+[03] time=210107000 ns, cycle=479, cause=RW_SWITCH, close=R row=2 col=62 addr=0xbe, next_rw=W next_row=16 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=14
+      reason: Closed R row 2 and next request switches to W row 16.
+[04] time=210147000 ns, cycle=511, cause=RW_SWITCH, close=W row=16 col=0 addr=0x400, next_rw=R next_row=3 gap(prev->close)=23000ns/18cy, gap(close->next)=2000ns/2cy, row_jump=-13
+      reason: Closed W row 16 and next request switches to R row 3.
+[05] time=210359000 ns, cycle=681, cause=NORMAL_DATA, close=R row=3 col=62 addr=0xfe, next_rw=R next_row=4 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=1
+      reason: Closed R row 3 and next request continues with the same R direction on row 4.
+[06] time=210554000 ns, cycle=837, cause=RW_SWITCH, close=R row=4 col=62 addr=0x13e, next_rw=W next_row=16 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=12
+      reason: Closed R row 4 and next request switches to W row 16.
+[07] time=210594000 ns, cycle=869, cause=RW_SWITCH, close=W row=16 col=2 addr=0x402, next_rw=R next_row=5 gap(prev->close)=22000ns/18cy, gap(close->next)=3000ns/2cy, row_jump=-11
+      reason: Closed W row 16 and next request switches to R row 5.
+[08] time=210807000 ns, cycle=1039, cause=NORMAL_DATA, close=R row=5 col=62 addr=0x17e, next_rw=R next_row=6 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=1
+      reason: Closed R row 5 and next request continues with the same R direction on row 6.
+[09] time=211002000 ns, cycle=1195, cause=RW_SWITCH, close=R row=6 col=62 addr=0x1be, next_rw=W next_row=16 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=10
+      reason: Closed R row 6 and next request switches to W row 16.
+[10] time=211042000 ns, cycle=1227, cause=RW_SWITCH, close=W row=16 col=4 addr=0x404, next_rw=R next_row=7 gap(prev->close)=23000ns/18cy, gap(close->next)=2000ns/2cy, row_jump=-9
+      reason: Closed W row 16 and next request switches to R row 7.
+[11] time=211254000 ns, cycle=1397, cause=NORMAL_DATA, close=R row=7 col=62 addr=0x1fe, next_rw=R next_row=8 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=1
+      reason: Closed R row 7 and next request continues with the same R direction on row 8.
+[12] time=211449000 ns, cycle=1553, cause=RW_SWITCH, close=R row=8 col=62 addr=0x23e, next_rw=W next_row=16 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=8
+      reason: Closed R row 8 and next request switches to W row 16.
+[13] time=211489000 ns, cycle=1585, cause=RW_SWITCH, close=W row=16 col=6 addr=0x406, next_rw=R next_row=9 gap(prev->close)=22000ns/18cy, gap(close->next)=3000ns/2cy, row_jump=-7
+      reason: Closed W row 16 and next request switches to R row 9.
+[14] time=211702000 ns, cycle=1755, cause=NORMAL_DATA, close=R row=9 col=62 addr=0x27e, next_rw=R next_row=10 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=1
+      reason: Closed R row 9 and next request continues with the same R direction on row 10.
+[15] time=211897000 ns, cycle=1911, cause=RW_SWITCH, close=R row=10 col=62 addr=0x2be, next_rw=W next_row=16 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=6
+      reason: Closed R row 10 and next request switches to W row 16.
+[16] time=211937000 ns, cycle=1943, cause=RW_SWITCH, close=W row=16 col=8 addr=0x408, next_rw=R next_row=11 gap(prev->close)=23000ns/18cy, gap(close->next)=2000ns/2cy, row_jump=-5
+      reason: Closed W row 16 and next request switches to R row 11.
+[17] time=212149000 ns, cycle=2113, cause=NORMAL_DATA, close=R row=11 col=62 addr=0x2fe, next_rw=R next_row=12 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=1
+      reason: Closed R row 11 and next request continues with the same R direction on row 12.
+[18] time=212344000 ns, cycle=2269, cause=RW_SWITCH, close=R row=12 col=62 addr=0x33e, next_rw=W next_row=16 gap(prev->close)=2000ns/2cy, gap(close->next)=3000ns/2cy, row_jump=4
+      reason: Closed R row 12 and next request switches to W row 16.
+[19] time=212384000 ns, cycle=2301, cause=RW_SWITCH, close=W row=16 col=10 addr=0x40a, next_rw=R next_row=13 gap(prev->close)=22000ns/18cy, gap(close->next)=3000ns/2cy, row_jump=-3
+      reason: Closed W row 16 and next request switches to R row 13.
+[20] time=212597000 ns, cycle=2471, cause=NORMAL_DATA, close=R row=13 col=62 addr=0x37e, next_rw=R next_row=14 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=1
+      reason: Closed R row 13 and next request continues with the same R direction on row 14.
+[21] time=212792000 ns, cycle=2627, cause=RW_SWITCH, close=R row=14 col=62 addr=0x3be, next_rw=W next_row=16 gap(prev->close)=3000ns/2cy, gap(close->next)=2000ns/2cy, row_jump=2
+      reason: Closed R row 14 and next request switches to W row 16.
+[22] time=212832000 ns, cycle=2659, cause=RW_SWITCH, close=W row=16 col=12 addr=0x40c, next_rw=R next_row=15 gap(prev->close)=23000ns/18cy, gap(close->next)=2000ns/2cy, row_jump=-1
+      reason: Closed W row 16 and next request switches to R row 15.
+[23] time=213094000 ns, cycle=0, cause=SLICE_END_CLOSE, close=R row=15 col=62 addr=0x3fe, next_rw=- next_row=- gap(prev->close)=52000ns/-cy, gap(close->next)=-ns/-cy, row_jump=-
+      reason: Close request is the last row-close that belongs to this slice.

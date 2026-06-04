@@ -88,6 +88,8 @@ class _TimedPhysicalRequest:
     request: PhysicalRequest
     release_cycle: float
     group_key: str
+    eligible_cycle: float = 0.0
+    required_read_counts: Tuple[Tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -369,6 +371,15 @@ def _analyze_mode(
                 float(op["analytical_model"]["memory_access_bound_cycles"]) for op in op_reports
             ),
             "ag_issue_bound_cycles": sum(float(op["analytical_model"]["ag_issue_bound_cycles"]) for op in op_reports),
+            "ring_ready_bound_cycles": sum(
+                float(op["analytical_model"].get("ring_ready_bound_cycles", 0.0)) for op in op_reports
+            ),
+            "pure_ring_transfer_bound_cycles": sum(
+                float(op["analytical_model"].get("pure_ring_transfer_bound_cycles", 0.0)) for op in op_reports
+            ),
+            "pure_ring_transfer_total_cycles": sum(
+                float(op["analytical_model"].get("pure_ring_transfer_total_cycles", 0.0)) for op in op_reports
+            ),
             "ring_transfer_bound_cycles": sum(
                 float(op["analytical_model"].get("ring_transfer_bound_cycles", 0.0)) for op in op_reports
             ),
@@ -507,6 +518,8 @@ def _analyze_op(
         write_requests=write_requests,
         hw=hw,
         perf=perf,
+        op_type=op_type,
+        op_data=op_data,
     )
     memory_timeline_cycles = float(bank_timeline["memory_timeline_cycles"])
     memory_access_bound_cycles = memory_timeline_cycles
@@ -581,9 +594,9 @@ def _analyze_ring_gemm_op(
     hw: HardwareSpec,
     perf: PerformanceConfig,
 ) -> Dict[str, object]:
-    a_streams = [stream for stream in streams if stream["role"] == "A"]
-    b_streams = [stream for stream in streams if stream["role"] == "B"]
-    write_cycles = float(write_stream["adjusted_stream_cycles"]) if write_stream is not None else 0.0
+    # The generic upstream path materializes one footprint pass per input tensor.
+    # ring_gemm refines that into execution-time load events later because the real loop nest
+    # may reload the same geometry tile multiple times.
     request_trace = [
         request
         for stream_requests in per_stream_requests
@@ -627,14 +640,17 @@ def _analyze_ring_gemm_op(
         per_a_buffer_ring_transfer_cycles
         * max(0, ring_participants - 1)
         * geometry.a_buffer_tile_count
+        * geometry.output_tile_count_n
     )
-    local_a_read_cycles = max((float(stream["adjusted_stream_cycles"]) for stream in a_streams), default=0.0)
-    a_buffer_tile_requests = _split_requests_exact(
+
+    # Recover geometry-unique template tiles from the original linear request streams.
+    # These groups answer "what does one A/B/output tile look like as a request group?".
+    a_template_tile_requests = _split_requests_exact(
         local_a_requests,
         geometry.a_buffer_tile_count,
         "ring_gemm local A buffer tiles",
     )
-    b_buffer_tile_requests = _split_requests_exact(
+    b_template_tile_requests = _split_requests_exact(
         b_requests,
         geometry.b_buffer_tile_count,
         "ring_gemm B buffer tiles",
@@ -644,9 +660,64 @@ def _analyze_ring_gemm_op(
         geometry.output_writeback_tile_count,
         "ring_gemm output writeback tiles",
     )
-    ring_bank_timeline, ring_microtile_timeline, ring_timeline_cycles, compute_pipeline_completion = _simulate_ring_microtile_timeline(
-        a_buffer_tile_requests=a_buffer_tile_requests,
-        b_buffer_tile_requests=b_buffer_tile_requests,
+    # Expand template tiles into real execution-time load events using the ring_gemm loop nest.
+    # This is where footprint requests become execution-realistic requests.
+    a_load_event_requests, b_load_event_requests = _expand_ring_gemm_load_events(
+        a_template_tile_requests=a_template_tile_requests,
+        b_template_tile_requests=b_template_tile_requests,
+        geometry=geometry,
+    )
+    current_mode = str(streams[0]["mode"]) if streams else MODE_BASELINE
+    expanded_a_requests = [request for group in a_load_event_requests for request in group]
+    expanded_b_requests = [request for group in b_load_event_requests for request in group]
+    tensor_name_a = local_a_requests[0].tensor_name if local_a_requests else "inA"
+    tensor_name_b = b_requests[0].tensor_name if b_requests else "inB"
+    edge_name_a = f"{tensor_name_a}->{op_name}:inA"
+    edge_name_b = f"{tensor_name_b}->{op_name}:inB"
+    write_edge_name = (
+        f"{write_requests[0].edge_name.rsplit(':', 1)[0]}"
+        if write_requests and ":" in write_requests[0].edge_name
+        else (write_requests[0].edge_name if write_requests else f"{op_name}:writeback")
+    )
+    a_streams = _build_stream_reports(
+        requests=expanded_a_requests,
+        ag_ids=("ag0",),
+        tensor_name=tensor_name_a,
+        edge_name=edge_name_a,
+        role="A",
+        mode=current_mode,
+        hw=hw,
+        perf=perf,
+    )
+    b_streams = _build_stream_reports(
+        requests=expanded_b_requests,
+        ag_ids=("ag1", "ag2"),
+        tensor_name=tensor_name_b,
+        edge_name=edge_name_b,
+        role="B",
+        mode=current_mode,
+        hw=hw,
+        perf=perf,
+    )
+    writeback_reports = _build_stream_reports(
+        requests=write_requests,
+        ag_ids=("ag4",),
+        tensor_name=write_requests[0].tensor_name if write_requests else f"{op_name}:out",
+        edge_name=write_edge_name,
+        role="writeback",
+        mode=current_mode,
+        hw=hw,
+        perf=perf,
+    )
+    streams = [*a_streams, *b_streams, *writeback_reports]
+    edge_breakdown = _edge_reports_from_streams(streams)
+    write_stream = writeback_reports[0] if writeback_reports else None
+    write_cycles = float(write_stream["adjusted_stream_cycles"]) if write_stream is not None else 0.0
+    local_a_read_cycles = max((float(stream["adjusted_stream_cycles"]) for stream in a_streams), default=0.0)
+
+    ring_bank_timeline, ring_microtile_timeline, ring_timeline_cycles, pure_ring_transfer_bound_cycles, pure_ring_transfer_total_cycles, compute_pipeline_completion = _simulate_ring_microtile_timeline(
+        a_load_event_requests=a_load_event_requests,
+        b_load_event_requests=b_load_event_requests,
         output_writeback_tile_requests=output_writeback_tile_requests,
         geometry=geometry,
         per_pe_micro_op_compute_cycles=per_pe_micro_op_compute_cycles,
@@ -710,6 +781,8 @@ def _analyze_ring_gemm_op(
         "output_tile_m": geometry.output_tile_m,
         "output_tile_n": geometry.output_tile_n,
         "pe_micro_ops_per_output_tile": geometry.pe_micro_ops_per_output_tile,
+        "a_load_event_count": len(a_load_event_requests),
+        "b_load_event_count": len(b_load_event_requests),
         "local_a_read_cycles": local_a_read_cycles,
         "per_tile_compute_cycles": math.ceil(per_output_tile_work_ops / max(1, peak_compute_ops)),
         "per_tile_ring_a_transfer_cycles": math.ceil(geometry.a_buffer_bytes / ring_bandwidth_bytes_per_cycle) if ring_participants > 1 and geometry.a_buffer_bytes else 0.0,
@@ -718,12 +791,18 @@ def _analyze_ring_gemm_op(
         "ping_pong_pipeline_cycles": ping_pong_pipeline_cycles,
         "ring_a_transfer_cycles": ring_a_transfer_cycles,
         "ring_bandwidth_bytes_per_cycle": ring_bandwidth_bytes_per_cycle,
+        "ring_ready_bound_cycles": ring_timeline_cycles,
+        "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
+        "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
         "true_roofline": true_roofline,
         "analytical_model": {
             "estimated_latency_cycles": latency,
             "compute_bound_cycles": compute_cycles,
             "memory_access_bound_cycles": memory_access_bound_cycles,
             "ag_issue_bound_cycles": ag_issue_bound_cycles,
+            "ring_ready_bound_cycles": ring_timeline_cycles,
+            "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
+            "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
             "ring_transfer_bound_cycles": ring_timeline_cycles,
             "lower_bound_cycles": lower_bound,
             "latency_to_lower_bound_ratio": (latency / lower_bound) if lower_bound else None,
@@ -731,7 +810,7 @@ def _analyze_ring_gemm_op(
         "ring_tile_timeline": _summarize_ring_participant_timeline(
             ring_microtile_timeline=ring_microtile_timeline,
             ring_participants=ring_participants,
-            microtile_count_per_participant=geometry.a_buffer_tile_count,
+            microtile_count_per_participant=len(a_load_event_requests),
         ),
         "ring_microtile_timeline": ring_microtile_timeline,
         "a_buffer_timeline": ring_microtile_timeline["a_buffer_timeline"],
@@ -742,11 +821,9 @@ def _analyze_ring_gemm_op(
         "ring_bank_timeline": ring_bank_timeline,
         "streams": list(streams),
         "edge_breakdown": list(edge_breakdown),
-        "address_transforms": _collect_unique_transforms_from_requests(
-            request_trace
-        ),
+        "address_transforms": _collect_unique_transforms_from_requests([*expanded_a_requests, *expanded_b_requests, *write_requests]),
         "pre_stages": list(pre_stages),
-        "request_trace": request_trace,
+        "request_trace": [*expanded_a_requests, *expanded_b_requests, *write_requests],
     }
 
 
@@ -1074,6 +1151,147 @@ def _split_requests_exact(
     ]
 
 
+def _clone_physical_request(request: PhysicalRequest, request_id: int) -> PhysicalRequest:
+    return PhysicalRequest(
+        request_id=request_id,
+        tensor_name=request.tensor_name,
+        edge_name=request.edge_name,
+        ag_id=request.ag_id,
+        role=request.role,
+        logical_addr=request.logical_addr,
+        base_addr=request.base_addr,
+        address_transform=dict(request.address_transform),
+        physical_addr=request.physical_addr,
+        slice_id=request.slice_id,
+        bank_id=request.bank_id,
+        row_id=request.row_id,
+        col_id=request.col_id,
+    )
+
+
+def _expand_ring_gemm_load_events(
+    a_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
+    b_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
+    geometry: _RingGemmExecutionGeometry,
+) -> Tuple[List[List[PhysicalRequest]], List[List[PhysicalRequest]]]:
+    a_load_event_requests: List[List[PhysicalRequest]] = []
+    b_load_event_requests: List[List[PhysicalRequest]] = []
+    next_request_id = 0
+
+    for output_tile_m_idx in range(geometry.output_tile_count_m):
+        for output_tile_n_idx in range(geometry.output_tile_count_n):
+            # A is loaded once per (M_0, N_0, KM_0) scope in the current loop nest.
+            for local_k_tile_idx in range(geometry.local_a_k_tiles_per_output_tile):
+                template_idx = output_tile_m_idx * geometry.local_a_k_tiles_per_output_tile + local_k_tile_idx
+                event_requests = [
+                    _clone_physical_request(request, next_request_id + offset)
+                    for offset, request in enumerate(a_template_tile_requests[template_idx])
+                ]
+                next_request_id += len(event_requests)
+                a_load_event_requests.append(event_requests)
+            # B is loaded once per (M_0, N_0, k_tile) scope, so B may repeat across M_0
+            # even when the underlying geometry template tile is identical.
+            for k_tile_idx in range(geometry.total_k_tiles_per_output_tile):
+                template_idx = output_tile_n_idx * geometry.total_k_tiles_per_output_tile + k_tile_idx
+                event_requests = [
+                    _clone_physical_request(request, next_request_id + offset)
+                    for offset, request in enumerate(b_template_tile_requests[template_idx])
+                ]
+                next_request_id += len(event_requests)
+                b_load_event_requests.append(event_requests)
+
+    return a_load_event_requests, b_load_event_requests
+
+
+def _group_requests_by_bank_row(requests: Sequence[PhysicalRequest]) -> List[List[PhysicalRequest]]:
+    ordered = sorted(requests, key=lambda request: request.request_id)
+    grouped: Dict[Tuple[int, int], List[PhysicalRequest]] = {}
+    first_request_id: Dict[Tuple[int, int], int] = {}
+    for request in ordered:
+        key = (request.bank_id, request.row_id)
+        if key not in grouped:
+            grouped[key] = []
+            first_request_id[key] = request.request_id
+        grouped[key].append(request)
+    return [
+        grouped[key]
+        for key in sorted(grouped, key=lambda item: first_request_id[item])
+    ]
+
+
+def _assign_frontier_thresholds(
+    write_groups: Sequence[Sequence[PhysicalRequest]],
+    *,
+    progressive_role: str,
+    progressive_total: int,
+    blocking_role: Optional[str] = None,
+    blocking_total: int = 0,
+) -> Dict[int, Tuple[Tuple[str, int], ...]]:
+    requirements_by_request_id: Dict[int, Tuple[Tuple[str, int], ...]] = {}
+    group_count = max(1, len(write_groups))
+    for group_idx, group in enumerate(write_groups):
+        requirements: List[Tuple[str, int]] = []
+        if blocking_role and blocking_total > 0:
+            requirements.append((blocking_role, blocking_total))
+        if progressive_total > 0:
+            progressive_required = math.ceil(progressive_total * (group_idx + 1) / group_count)
+            requirements.append((progressive_role, progressive_required))
+        immutable_requirements = tuple(requirements)
+        for request in group:
+            requirements_by_request_id[request.request_id] = immutable_requirements
+    return requirements_by_request_id
+
+
+def _compute_write_readiness_requirements(
+    op_type: Optional[str],
+    op_data: Optional[Mapping[str, object]],
+    read_requests: Sequence[PhysicalRequest],
+    write_requests: Sequence[PhysicalRequest],
+    hw: HardwareSpec,
+) -> Dict[int, Tuple[Tuple[str, int], ...]]:
+    if not op_type or not write_requests:
+        return {}
+
+    if "prefill_mul" in op_type:
+        a_total = sum(1 for request in read_requests if request.role == "A")
+        b_total = sum(1 for request in read_requests if request.role == "B")
+        write_groups = _group_requests_by_bank_row(write_requests)
+        return _assign_frontier_thresholds(
+            write_groups,
+            progressive_role="A",
+            progressive_total=a_total,
+            blocking_role="B",
+            blocking_total=b_total,
+        )
+
+    if "summac" in op_type:
+        output_dtype = "fp32"
+        if op_data:
+            outputs = dict(op_data.get("outputs", {}))
+            if outputs:
+                output_port_name = next(iter(outputs))
+                output_layout = outputs[output_port_name].get("layout")
+                dtype_value = getattr(output_layout, "dtype", None)
+                if dtype_value:
+                    output_dtype = str(dtype_value)
+        requests_per_output_group = max(
+            1,
+            math.ceil(hw.compute.gemm_core.rows / max(1, hw.block_elements(output_dtype))),
+        )
+        write_groups = [
+            sorted(write_requests, key=lambda request: request.request_id)[idx:idx + requests_per_output_group]
+            for idx in range(0, len(write_requests), requests_per_output_group)
+        ]
+        a_total = sum(1 for request in read_requests if request.role == "A")
+        return _assign_frontier_thresholds(
+            write_groups,
+            progressive_role="A",
+            progressive_total=a_total,
+        )
+
+    return {}
+
+
 def _bank_timeline_summary(
     bank_states: Mapping[int, _BankTimelineState],
     *,
@@ -1088,6 +1306,9 @@ def _bank_timeline_summary(
     arbiter1_wins: int = 0,
     arbiter2_wins: int = 0,
     memory_timeline_cycles: Optional[float] = None,
+    simultaneous_bank_commits: int = 0,
+    max_parallel_banks_active: int = 1,
+    read_priority_policy: str = "closed_loop_two_level_arbiter_with_write_backpressure",
 ) -> Dict[str, object]:
     phase_switch_penalty_cycles = sum(
         state.phase_switch_count * hw.row_switch_penalty_cycles for state in bank_states.values()
@@ -1101,7 +1322,7 @@ def _bank_timeline_summary(
     return {
         "write_buffer_bytes": write_buffer_bytes,
         "write_queue_depth": write_queue_depth,
-        "read_priority_policy": "closed_loop_two_level_arbiter_with_write_backpressure",
+        "read_priority_policy": read_priority_policy,
         "forced_drain_count": forced_drain_count,
         "memory_timeline_cycles": (
             memory_timeline_cycles
@@ -1123,6 +1344,8 @@ def _bank_timeline_summary(
             if (arbiter1_wins + arbiter2_wins) > 0
             else 0.0
         ),
+        "simultaneous_bank_commits": simultaneous_bank_commits,
+        "max_parallel_banks_active": max_parallel_banks_active,
         "per_bank_completion_cycles": completion_cycles,
         "per_bank_breakdown": {
             str(bank_id): {
@@ -1144,8 +1367,14 @@ def _simulate_per_bank_timeline(
     write_requests: Sequence[PhysicalRequest],
     hw: HardwareSpec,
     perf: PerformanceConfig,
+    op_type: Optional[str] = None,
+    op_data: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
-    def _build_arrival_timeline(requests: Sequence[PhysicalRequest]) -> List[_TimedPhysicalRequest]:
+    def _build_arrival_timeline(
+        requests: Sequence[PhysicalRequest],
+        *,
+        required_read_counts_by_request_id: Optional[Mapping[int, Tuple[Tuple[str, int], ...]]] = None,
+    ) -> List[_TimedPhysicalRequest]:
         issue_slots_by_ag: Dict[str, int] = defaultdict(int)
         timed: List[_TimedPhysicalRequest] = []
         for request in sorted(requests, key=lambda item: item.request_id):
@@ -1156,6 +1385,12 @@ def _simulate_per_bank_timeline(
                     request=request,
                     release_cycle=(issue_slot / max(1, hw.ag_issue_rate)),
                     group_key=f"{request.role}:{request.ag_id}",
+                    eligible_cycle=(issue_slot / max(1, hw.ag_issue_rate)),
+                    required_read_counts=(
+                        tuple(required_read_counts_by_request_id.get(request.request_id, ()))
+                        if required_read_counts_by_request_id
+                        else ()
+                    ),
                 )
             )
         timed.sort(key=lambda item: (item.release_cycle, item.request.request_id))
@@ -1217,12 +1452,23 @@ def _simulate_per_bank_timeline(
             memory_timeline_cycles=0.0,
         )
 
+    write_requirements = _compute_write_readiness_requirements(
+        op_type,
+        op_data,
+        read_requests,
+        write_requests,
+        hw,
+    )
     read_arrivals = _build_arrival_timeline(read_requests)
-    write_arrivals = _build_arrival_timeline(write_requests)
+    write_arrivals = _build_arrival_timeline(
+        write_requests,
+        required_read_counts_by_request_id=write_requirements,
+    )
     read_idx = 0
     write_idx = 0
-    slice_pending_writes: deque[PhysicalRequest] = deque()
+    slice_pending_writes: deque[_TimedPhysicalRequest] = deque()
     controller_ready_by_bank: Dict[int, deque[PhysicalRequest]] = defaultdict(deque)
+    completed_read_counts: Counter[str] = Counter()
 
     all_banks = sorted({request.bank_id for request in [*read_requests, *write_requests]})
     bank_states: Dict[int, _BankTimelineState] = {bank_id: _BankTimelineState() for bank_id in all_banks}
@@ -1235,28 +1481,33 @@ def _simulate_per_bank_timeline(
         nonlocal read_idx, write_idx, slice_blocked
         now = controller_state.now
 
-        while write_idx < len(write_arrivals) and write_arrivals[write_idx].release_cycle <= now:
-            slice_pending_writes.append(write_arrivals[write_idx].request)
+        if not slice_blocked:
+            while read_idx < len(read_arrivals) and read_arrivals[read_idx].release_cycle <= now:
+                request = read_arrivals[read_idx].request
+                controller_ready_by_bank[request.bank_id].append(request)
+                read_idx += 1
+
+        while write_idx < len(write_arrivals):
+            entry = write_arrivals[write_idx]
+            if entry.release_cycle > now or entry.eligible_cycle > now:
+                break
+            if any(completed_read_counts[role] < required for role, required in entry.required_read_counts):
+                break
+            slice_pending_writes.append(entry)
             write_idx += 1
 
         while (
             slice_pending_writes
             and controller_state.write_queue_occupancy < write_queue_depth
         ):
-            request = slice_pending_writes.popleft()
-            controller_ready_by_bank[request.bank_id].append(request)
+            entry = slice_pending_writes.popleft()
+            controller_ready_by_bank[entry.request.bank_id].append(entry.request)
             controller_state.write_queue_occupancy += 1
 
         next_slice_blocked = len(slice_pending_writes) >= slice_write_buffer_depth
         if next_slice_blocked and not slice_blocked:
             controller_state.forced_drain_count += 1
         slice_blocked = next_slice_blocked
-
-        if not slice_blocked:
-            while read_idx < len(read_arrivals) and read_arrivals[read_idx].release_cycle <= now:
-                request = read_arrivals[read_idx].request
-                controller_ready_by_bank[request.bank_id].append(request)
-                read_idx += 1
 
     while True:
         _release_due_requests()
@@ -1292,7 +1543,7 @@ def _simulate_per_bank_timeline(
         if not candidate_events:
             next_release_times: List[float] = []
             if write_idx < len(write_arrivals):
-                next_release_times.append(write_arrivals[write_idx].release_cycle)
+                next_release_times.append(max(write_arrivals[write_idx].release_cycle, write_arrivals[write_idx].eligible_cycle))
             if not slice_blocked and read_idx < len(read_arrivals):
                 next_release_times.append(read_arrivals[read_idx].release_cycle)
             if not next_release_times:
@@ -1338,6 +1589,8 @@ def _simulate_per_bank_timeline(
             controller_state.arbiter2_wins += 1
         if _request_phase(request.role) == "write":
             controller_state.write_queue_occupancy = max(0, controller_state.write_queue_occupancy - 1)
+        else:
+            completed_read_counts[request.role] += 1
 
     return _bank_timeline_summary(
         bank_states,
@@ -1358,11 +1611,32 @@ def _run_ring_bank_event_loop(
     bank_states: Mapping[int, _BankTimelineState],
     future_reads: List[_TimedPhysicalRequest],
     future_writes: List[_TimedPhysicalRequest],
-    completion_by_group: Mapping[str, float],
+    completion_by_group: Dict[str, float],
+    group_total_requests: Mapping[str, int],
+    group_completed_requests: Dict[str, int],
     pending_groups: Sequence[str],
     hw: HardwareSpec,
-    state: Mapping[str, object],
+    state: Dict[str, object],
 ) -> None:
+    def _pick_ring_bank_candidate(
+        bank_id: int,
+        read_ready_by_bank: Mapping[int, deque[_TimedPhysicalRequest]],
+        write_ready_by_bank: Mapping[int, deque[_TimedPhysicalRequest]],
+        *,
+        force_write: bool,
+    ) -> Optional[Tuple[str, _TimedPhysicalRequest]]:
+        read_queue = read_ready_by_bank.get(bank_id)
+        write_queue = write_ready_by_bank.get(bank_id)
+        read_entry = read_queue[0] if read_queue else None
+        write_entry = write_queue[0] if write_queue else None
+        if read_entry is None and write_entry is None:
+            return None
+        if force_write and write_entry is not None:
+            return ("write", write_entry)
+        if read_entry is not None:
+            return ("read", read_entry)
+        return ("write", write_entry)
+
     while True:
         if all(group_key in completion_by_group for group_key in pending_groups):
             return
@@ -1388,14 +1662,7 @@ def _run_ring_bank_event_loop(
             state["in_forced_drain"] = True
             in_forced_drain = True
 
-        target_ready_by_bank = (
-            read_ready_by_bank
-            if released_reads_exist and not in_forced_drain
-            else write_ready_by_bank
-            if released_writes_exist
-            else None
-        )
-        if target_ready_by_bank is None:
+        if not released_reads_exist and not released_writes_exist:
             next_release = min(
                 [entry.release_cycle for entry in [*future_reads, *future_writes]],
                 default=None,
@@ -1405,15 +1672,22 @@ def _run_ring_bank_event_loop(
             state["now"] = max(now, float(next_release))
             continue
 
-        candidate_events: List[Tuple[float, int, _TimedPhysicalRequest]] = []
-        for bank_id, queue in target_ready_by_bank.items():
-            if not queue:
+        candidate_events: List[Tuple[float, int, _TimedPhysicalRequest, str]] = []
+        active_bank_ids = sorted(set(read_ready_by_bank) | set(write_ready_by_bank))
+        for bank_id in active_bank_ids:
+            selected = _pick_ring_bank_candidate(
+                bank_id,
+                read_ready_by_bank,
+                write_ready_by_bank,
+                force_write=in_forced_drain,
+            )
+            if selected is None:
                 continue
-            entry = queue[0]
+            queue_name, entry = selected
             bank_state = bank_states[bank_id]
             start_cycle = max(bank_state.cycles, entry.release_cycle)
             finish_cycle = start_cycle + _bank_request_delta(bank_state, entry.request, hw)
-            candidate_events.append((finish_cycle, bank_id, entry))
+            candidate_events.append((finish_cycle, bank_id, entry, queue_name))
 
         if not candidate_events:
             state["now"] = max(
@@ -1422,32 +1696,62 @@ def _run_ring_bank_event_loop(
             )
             continue
 
-        finish_cycle, bank_id, entry = min(
+        finish_cycle, bank_id, entry, queue_name = min(
             candidate_events,
             key=lambda item: (item[0], item[1], item[2].request.request_id),
         )
-        bank_state = bank_states[bank_id]
-        bank_state.cycles = max(bank_state.cycles, entry.release_cycle)
-        target_ready_by_bank[bank_id].popleft()
-        bank_state.cycles += _apply_bank_request(bank_state, entry.request, hw)
-        completion_by_group[entry.group_key] = max(completion_by_group.get(entry.group_key, 0.0), finish_cycle)
-        if _request_phase(entry.request.role) == "write":
-            state["write_buffer_occupancy"] = max(0, int(state["write_buffer_occupancy"]) - 1)
-        state["now"] = finish_cycle
+        earliest_finish = float(finish_cycle)
+        simultaneous_events = sorted(
+            (
+                candidate_bank_id,
+                candidate_entry.request.request_id,
+                candidate_entry,
+                candidate_queue_name,
+            )
+            for candidate_finish, candidate_bank_id, candidate_entry, candidate_queue_name in candidate_events
+            if candidate_finish == earliest_finish
+        )
+        if len(simultaneous_events) > 1:
+            state["simultaneous_bank_commits"] = int(state.get("simultaneous_bank_commits", 0)) + 1
+        state["max_parallel_banks_active"] = max(
+            int(state.get("max_parallel_banks_active", 1)),
+            len(simultaneous_events),
+        )
+        # request_id is only a deterministic tie-break inside one finish-cycle batch; the
+        # main ordering still comes from release time, bank-local state, and finish cycle.
+        for bank_id, _request_id, entry, queue_name in simultaneous_events:
+            bank_state = bank_states[bank_id]
+            bank_state.cycles = max(bank_state.cycles, entry.release_cycle)
+            if queue_name == "read":
+                read_ready_by_bank[bank_id].popleft()
+            else:
+                write_ready_by_bank[bank_id].popleft()
+            bank_state.cycles += _apply_bank_request(bank_state, entry.request, hw)
+            group_completed_requests[entry.group_key] = group_completed_requests.get(entry.group_key, 0) + 1
+            # A/B/writeback groups become ready only after every request in the load/writeback
+            # event completes, not when the first request of the group returns.
+            if group_completed_requests[entry.group_key] >= group_total_requests.get(entry.group_key, 0):
+                completion_by_group[entry.group_key] = max(
+                    completion_by_group.get(entry.group_key, 0.0),
+                    earliest_finish,
+                )
+            if _request_phase(entry.request.role) == "write":
+                state["write_buffer_occupancy"] = max(0, int(state["write_buffer_occupancy"]) - 1)
+        state["now"] = earliest_finish
 
 
 def _simulate_ring_microtile_timeline(
-    a_buffer_tile_requests: Sequence[Sequence[PhysicalRequest]],
-    b_buffer_tile_requests: Sequence[Sequence[PhysicalRequest]],
+    a_load_event_requests: Sequence[Sequence[PhysicalRequest]],
+    b_load_event_requests: Sequence[Sequence[PhysicalRequest]],
     output_writeback_tile_requests: Sequence[Sequence[PhysicalRequest]],
     geometry: _RingGemmExecutionGeometry,
     per_pe_micro_op_compute_cycles: float,
     per_a_buffer_ring_transfer_cycles: float,
     hw: HardwareSpec,
-) -> Tuple[Dict[str, object], Dict[str, object], float, float]:
+) -> Tuple[Dict[str, object], Dict[str, object], float, float, float]:
     all_requests = [
-        *[request for tile_requests in a_buffer_tile_requests for request in tile_requests],
-        *[request for tile_requests in b_buffer_tile_requests for request in tile_requests],
+        *[request for tile_requests in a_load_event_requests for request in tile_requests],
+        *[request for tile_requests in b_load_event_requests for request in tile_requests],
         *[request for tile_requests in output_writeback_tile_requests for request in tile_requests],
     ]
     if not all_requests:
@@ -1460,8 +1764,10 @@ def _simulate_ring_microtile_timeline(
         )
         empty_timeline = {
             "microtile_bytes": geometry.a_buffer_bytes,
-            "microtile_count_per_participant": geometry.a_buffer_tile_count,
+            "microtile_count_per_participant": len(a_load_event_requests),
             "total_compute_microtiles": geometry.total_coarse_compute_events,
+            "a_load_event_count": len(a_load_event_requests),
+            "b_load_event_count": len(b_load_event_requests),
             "ping_pong_assignment": [],
             "local_load_ready_cycles": [],
             "ring_ready_cycles": [],
@@ -1482,7 +1788,7 @@ def _simulate_ring_microtile_timeline(
             "psum_timeline": {"tile_count": 0, "transfer_cycles_per_tile": 0.0, "tiles": []},
             "output_writeback_timeline": {"tile_count": 0, "tiles": []},
         }
-        return empty_bank_timeline, empty_timeline, 0.0, 0.0
+        return empty_bank_timeline, empty_timeline, 0.0, 0.0, 0.0
 
     bank_ids = sorted({request.bank_id for request in all_requests})
     bank_states: Dict[int, _BankTimelineState] = {bank_id: _BankTimelineState() for bank_id in bank_ids}
@@ -1496,21 +1802,23 @@ def _simulate_ring_microtile_timeline(
         "write_buffer_occupancy": 0,
         "forced_drain_count": 0,
         "in_forced_drain": False,
+        "simultaneous_bank_commits": 0,
+        "max_parallel_banks_active": 1,
     }
-    completion_by_group: Dict[str, float] = {}
-    ring_link_completion_cycles = 0.0
-    psum_transfer_cycles = math.ceil(
+    completion_by_group: Dict[str, float] = {} # 一组请求（load event）什么时候全部完成
+    group_total_requests: Dict[str, int] = {}
+    group_completed_requests: Dict[str, int] = {}
+    ring_link_completion_cycles = 0.0 # A 经 local-load + ring hop 后，对 coarse compute 的最晚可用时间
+    pure_ring_transfer_bound_cycles = 0.0 # 纯 ring hop 传播代价本身的关键路径，不包含 A local ready
+    pure_ring_transfer_total_cycles = 0.0 # 整个 GEMM 执行过程中，ring fabric 真实执行的总传播时间
+    psum_transfer_cycles = math.ceil(# 一个输出 tile 计算完成后，把 psum 搬到 write buffer / output staging 这一步，需要16cycles
         geometry.output_tile_bytes / max(1, hw.write_buffer_bytes)
     ) if geometry.output_tile_bytes else 0.0
 
     a_slot_free_cycles = {"ping": 0.0, "pong": 0.0}
     b_slot_free_cycles = {"ping": 0.0, "pong": 0.0}
     psum_slot_free_cycles = {"ping": 0.0, "pong": 0.0}
-    a_tile_ready_cycles: Dict[int, float] = {}
-    b_tile_ready_cycles: Dict[int, float] = {}
-    a_tile_last_consumer_cycles: Dict[int, float] = {}
-    b_tile_last_consumer_cycles: Dict[int, float] = {}
-    a_ring_ready_cycles_by_hop: Dict[Tuple[int, int], float] = {}
+    a_event_ready_cycles: Dict[int, float] = {} # 每个 A load event 实际什么时候读完 ready
 
     a_timeline_tiles: List[Dict[str, object]] = []
     b_timeline_tiles: List[Dict[str, object]] = []
@@ -1529,88 +1837,123 @@ def _simulate_ring_microtile_timeline(
     output_writeback_tiles: List[Dict[str, object]] = []
     pe_available_cycle = 0.0
 
-    def _ensure_a_tile_loaded(a_tile_idx: int) -> None:
-        if a_tile_idx in a_tile_ready_cycles:
+    def _ensure_a_tile_loaded(a_event_idx: int) -> None:
+        if a_event_idx in a_event_ready_cycles:
             return
-        slot_name = "ping" if a_tile_idx % 2 == 0 else "pong"
-        group_key = f"a:{a_tile_idx}"
+        slot_name = "ping" if a_event_idx % 2 == 0 else "pong"
+        group_key = f"a:{a_event_idx}"
         release_cycle = a_slot_free_cycles[slot_name]
+        if group_key not in group_total_requests:
+            group_total_requests[group_key] = len(a_load_event_requests[a_event_idx])
+            group_completed_requests[group_key] = 0
         future_reads.extend(
             _TimedPhysicalRequest(request=request, release_cycle=release_cycle, group_key=group_key)
-            for request in sorted(a_buffer_tile_requests[a_tile_idx], key=lambda request: request.request_id)
+            for request in sorted(a_load_event_requests[a_event_idx], key=lambda request: request.request_id)
         )
         _run_ring_bank_event_loop(
             bank_states,
             future_reads,
             future_writes,
             completion_by_group,
+            group_total_requests,
+            group_completed_requests,
             [group_key],
             hw,
             runtime_state,
         )
+        # A ready means the full load event has completed.
         ready_cycle = completion_by_group.get(group_key, release_cycle)
-        a_tile_ready_cycles[a_tile_idx] = ready_cycle
+        a_event_ready_cycles[a_event_idx] = ready_cycle
         a_timeline_tiles.append(
             {
-                "tile_index": a_tile_idx,
+                "tile_index": a_event_idx,
                 "buffer": slot_name,
                 "load_release_cycle": release_cycle,
                 "load_ready_cycle": ready_cycle,
             }
         )
 
-    def _ensure_b_tile_loaded(b_tile_idx: int) -> None:
-        if b_tile_idx in b_tile_ready_cycles:
-            return
-        slot_name = "ping" if b_tile_idx % 2 == 0 else "pong"
-        group_key = f"b:{b_tile_idx}"
+    def _load_b_tile(b_event_idx: int) -> Tuple[float, str]:
+        slot_name = "ping" if b_event_idx % 2 == 0 else "pong"
+        group_key = f"b:{b_event_idx}"
         release_cycle = b_slot_free_cycles[slot_name]
+        if group_key not in group_total_requests:
+            group_total_requests[group_key] = len(b_load_event_requests[b_event_idx])
+            group_completed_requests[group_key] = 0
         future_reads.extend(
             _TimedPhysicalRequest(request=request, release_cycle=release_cycle, group_key=group_key)
-            for request in sorted(b_buffer_tile_requests[b_tile_idx], key=lambda request: request.request_id)
+            for request in sorted(b_load_event_requests[b_event_idx], key=lambda request: request.request_id)
         )
         _run_ring_bank_event_loop(
             bank_states,
             future_reads,
             future_writes,
             completion_by_group,
+            group_total_requests,
+            group_completed_requests,
             [group_key],
             hw,
             runtime_state,
         )
+        # B ready means the full load event has completed.
         ready_cycle = completion_by_group.get(group_key, release_cycle)
-        b_tile_ready_cycles[b_tile_idx] = ready_cycle
         b_timeline_tiles.append(
             {
-                "tile_index": b_tile_idx,
+                "tile_index": b_event_idx,
                 "buffer": slot_name,
                 "load_release_cycle": release_cycle,
                 "load_ready_cycle": ready_cycle,
             }
         )
+        return ready_cycle, slot_name
 
-    for k_tile_idx in range(geometry.total_k_tiles_per_output_tile):
-        local_k_tile_idx = k_tile_idx // geometry.a_ring_hops_per_local_a_tile
-        ring_hop_idx = k_tile_idx % geometry.a_ring_hops_per_local_a_tile
+    for output_tile_m_idx in range(geometry.output_tile_count_m):
         for output_tile_n_idx in range(geometry.output_tile_count_n):
-            b_tile_idx = output_tile_n_idx * geometry.total_k_tiles_per_output_tile + k_tile_idx
-            _ensure_b_tile_loaded(b_tile_idx)
-            b_ready_cycle = b_tile_ready_cycles[b_tile_idx]
-            for output_tile_m_idx in range(geometry.output_tile_count_m):
-                output_tile_idx = output_tile_n_idx * geometry.output_tile_count_m + output_tile_m_idx
-                a_tile_idx = output_tile_m_idx * geometry.local_a_k_tiles_per_output_tile + local_k_tile_idx
-                _ensure_a_tile_loaded(a_tile_idx)
-                a_ready_cycle = a_tile_ready_cycles[a_tile_idx]
-                ring_ready_cycle = a_ready_cycle + ring_hop_idx * per_a_buffer_ring_transfer_cycles
-                a_ring_ready_cycles_by_hop[(a_tile_idx, ring_hop_idx)] = ring_ready_cycle
+            output_tile_idx = output_tile_n_idx * geometry.output_tile_count_m + output_tile_m_idx
+            # 第 0 个输出 tile 对应 A load events [0,1]，B load events [0..7]
+            # 第 1 个输出 tile 对应 A load events [2,3]，B load events [8..15]
+            a_event_base_idx = (
+                (output_tile_m_idx * geometry.output_tile_count_n + output_tile_n_idx)
+                * geometry.local_a_k_tiles_per_output_tile
+            )
+            b_event_base_idx = (
+                (output_tile_m_idx * geometry.output_tile_count_n + output_tile_n_idx)
+                * geometry.total_k_tiles_per_output_tile
+            )
+            # Current loop order:
+            #   for M_0:
+            #     for N_0:
+            #       preload A events for this output tile scope
+            #       for each K tile:
+            #         load one B event, then run one coarse compute event
+            for local_k_tile_idx in range(geometry.local_a_k_tiles_per_output_tile):
+                _ensure_a_tile_loaded(a_event_base_idx + local_k_tile_idx)
+
+            for k_tile_idx in range(geometry.total_k_tiles_per_output_tile):
+                local_k_tile_idx = k_tile_idx // geometry.a_ring_hops_per_local_a_tile
+                ring_hop_idx = k_tile_idx % geometry.a_ring_hops_per_local_a_tile
+                a_event_idx = a_event_base_idx + local_k_tile_idx
+                a_ready_cycle = a_event_ready_cycles[a_event_idx]
+                pure_ring_delay_cycle = ring_hop_idx * per_a_buffer_ring_transfer_cycles
+                ring_ready_cycle = a_ready_cycle + pure_ring_delay_cycle
                 ring_link_completion_cycles = max(ring_link_completion_cycles, ring_ready_cycle)
+                pure_ring_transfer_bound_cycles = max(pure_ring_transfer_bound_cycles, pure_ring_delay_cycle)
+                if ring_hop_idx > 0:
+                    pure_ring_transfer_total_cycles += per_a_buffer_ring_transfer_cycles
+                b_event_idx = b_event_base_idx + k_tile_idx
+                b_ready_cycle, b_slot_name = _load_b_tile(b_event_idx)
 
                 coarse_local_load_ready_cycles.append(a_ready_cycle)
                 coarse_ring_ready_cycles.append(ring_ready_cycle)
                 coarse_b_ready_cycles.append(b_ready_cycle)
-                coarse_ping_pong_assignment.append("ping" if a_tile_idx % 2 == 0 else "pong")
+                coarse_ping_pong_assignment.append("ping" if a_event_idx % 2 == 0 else "pong")
 
                 output_psum_slot = "ping" if output_tile_idx % 2 == 0 else "pong"
+                # One coarse event = one output tile consuming one K-slice:
+                #   A tile shape: output_tile_m x a_buffer_k
+                #   B tile shape: b_buffer_k x output_tile_n
+                # Start is limited by PE availability, ring(A), B readiness, and the psum
+                # slot if this is the first K-slice of the output tile.
                 coarse_start = max(
                     pe_available_cycle,
                     ring_ready_cycle,
@@ -1637,15 +1980,10 @@ def _simulate_ring_microtile_timeline(
                         )
                 coarse_compute_end_cycles.append(current_cycle)
                 pe_available_cycle = current_cycle
-                a_tile_last_consumer_cycles[a_tile_idx] = max(a_tile_last_consumer_cycles.get(a_tile_idx, 0.0), current_cycle)
-                b_tile_last_consumer_cycles[b_tile_idx] = max(b_tile_last_consumer_cycles.get(b_tile_idx, 0.0), current_cycle)
-
+                b_slot_free_cycles[b_slot_name] = max(b_slot_free_cycles[b_slot_name], current_cycle)
                 if ring_hop_idx == geometry.a_ring_hops_per_local_a_tile - 1:
-                    a_slot_name = "ping" if a_tile_idx % 2 == 0 else "pong"
-                    a_slot_free_cycles[a_slot_name] = max(a_slot_free_cycles[a_slot_name], a_tile_last_consumer_cycles[a_tile_idx])
-                if output_tile_m_idx == geometry.output_tile_count_m - 1:
-                    b_slot_name = "ping" if b_tile_idx % 2 == 0 else "pong"
-                    b_slot_free_cycles[b_slot_name] = max(b_slot_free_cycles[b_slot_name], b_tile_last_consumer_cycles[b_tile_idx])
+                    a_slot_name = "ping" if a_event_idx % 2 == 0 else "pong"
+                    a_slot_free_cycles[a_slot_name] = max(a_slot_free_cycles[a_slot_name], current_cycle)
 
                 if k_tile_idx == geometry.total_k_tiles_per_output_tile - 1:
                     output_tile_completion_cycles.append(current_cycle)
@@ -1662,6 +2000,9 @@ def _simulate_ring_microtile_timeline(
                     )
                     psum_slot_free_cycles[output_psum_slot] = psum_end
                     write_group_key = f"w:{output_tile_idx}"
+                    if write_group_key not in group_total_requests:
+                        group_total_requests[write_group_key] = len(output_writeback_tile_requests[output_tile_idx])
+                        group_completed_requests[write_group_key] = 0
                     future_writes.extend(
                         _TimedPhysicalRequest(request=request, release_cycle=psum_end, group_key=write_group_key)
                         for request in sorted(output_writeback_tile_requests[output_tile_idx], key=lambda request: request.request_id)
@@ -1681,6 +2022,8 @@ def _simulate_ring_microtile_timeline(
             future_reads,
             future_writes,
             completion_by_group,
+            group_total_requests,
+            group_completed_requests,
             remaining_groups,
             hw,
             runtime_state,
@@ -1690,6 +2033,8 @@ def _simulate_ring_microtile_timeline(
         future_reads,
         future_writes,
         completion_by_group,
+        group_total_requests,
+        group_completed_requests,
         [],
         hw,
         runtime_state,
@@ -1702,25 +2047,32 @@ def _simulate_ring_microtile_timeline(
         write_buffer_bytes=hw.write_buffer_bytes,
         hw=hw,
         memory_timeline_cycles=memory_timeline_cycles,
+        simultaneous_bank_commits=int(runtime_state["simultaneous_bank_commits"]),
+        max_parallel_banks_active=int(runtime_state["max_parallel_banks_active"]),
+        read_priority_policy="bank_local_read_priority_with_independent_parallel_banks",
     )
     microtile_timeline = {
         "microtile_bytes": geometry.a_buffer_bytes,
-        "microtile_count_per_participant": geometry.a_buffer_tile_count,
+        "microtile_count_per_participant": len(a_load_event_requests),
         "total_compute_microtiles": geometry.total_coarse_compute_events,
+        "a_load_event_count": len(a_load_event_requests),
+        "b_load_event_count": len(b_load_event_requests),
         "ping_pong_assignment": coarse_ping_pong_assignment,
         "local_load_ready_cycles": coarse_local_load_ready_cycles,
         "ring_ready_cycles": coarse_ring_ready_cycles,
+        "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
+        "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
         "b_ready_cycles": coarse_b_ready_cycles,
         "compute_start_cycles": coarse_compute_start_cycles,
         "compute_end_cycles": coarse_compute_end_cycles,
         "final_write_release_cycle": max((tile["release_cycle"] for tile in output_writeback_tiles), default=0.0),
         "a_buffer_timeline": {
-            "tile_count": geometry.a_buffer_tile_count,
+            "tile_count": len(a_load_event_requests),
             "tile_bytes": geometry.a_buffer_bytes,
             "tiles": a_timeline_tiles,
         },
         "b_buffer_timeline": {
-            "tile_count": geometry.b_buffer_tile_count,
+            "tile_count": len(b_load_event_requests),
             "tile_bytes": geometry.b_buffer_bytes,
             "tiles": b_timeline_tiles,
         },
@@ -1743,7 +2095,7 @@ def _simulate_ring_microtile_timeline(
             "tiles": output_writeback_tiles,
         },
     }
-    return bank_timeline, microtile_timeline, ring_link_completion_cycles, pe_available_cycle
+    return bank_timeline, microtile_timeline, ring_link_completion_cycles, pure_ring_transfer_bound_cycles, pure_ring_transfer_total_cycles, pe_available_cycle
 
 
 def _analyze_request_stream(
@@ -1872,7 +2224,7 @@ def _estimate_compute(op_type: str, op_data: Mapping[str, object], hw: HardwareS
         # so retain the per-output accumulation approximation until that metadata exists.
         op_work = float(_shape_product(output_shape))
         peak = hw.general_peak_ops_per_cycle
-    elif op_type in {"prefill_summac", "prefill_sum_rec", "prefill_max"}:
+    elif op_type in {"prefill_summac", "prefill_sum_rec_fp32MN_fp32MN", "prefill_max"}:
         input_port = next(iter(inputs))
         input_shape = {str(k): int(v) for k, v in dict(inputs[input_port]["resolved_shape"]).items()}
         input_elements = _shape_product(input_shape)
@@ -1893,8 +2245,6 @@ def _classify_input_stream(op_type: str, port_name: str) -> Tuple[str, Tuple[str
             return "A", ("ag0",)
         if port_name == "inB":
             return "B", ("ag1", "ag2")
-    if "add_MN_N" in op_type and port_name == "inB":
-        return "bias", ("ag3",)
     if port_name == "inA":
         return "A", ("ag0",)
     if port_name == "inB":

@@ -54,23 +54,34 @@ class OperatorTemplateManager:
         if config_stream_raw is not None:
             if not isinstance(config_stream_raw, dict):
                 raise ValueError("initial_config_stream must be an object")
-            config_stream = load_template_config_stream(
-                config_stream_raw,
-                self._base_info_path.parent,
-                self._register_db,
-            )
-            decoded_state = decode_initial_register_state(config_stream, self._register_db)
-            original_register_values = decoded_state.register_values
-            enabled_register_addresses = frozenset(decoded_state.enabled_register_addresses)
+            try:
+                config_stream = load_template_config_stream(
+                    config_stream_raw,
+                    self._base_info_path.parent,
+                    self._register_db,
+                )
+                decoded_state = decode_initial_register_state(config_stream, self._register_db)
+                original_register_values = decoded_state.register_values
+                enabled_register_addresses = frozenset(decoded_state.enabled_register_addresses)
+            except FileNotFoundError:
+                # Config dir may have been cleaned; _regenerate_bitstreams
+                # will recreate the files and populate these values later.
+                pass
 
         initial_size_raw = raw.get("initial_size")
         initial_io_sizes = _parse_io_sizes(initial_size_raw) if initial_size_raw is not None else {}
         initial_size_d = initial_io_sizes.get("D")
         target_size_d = target_io_sizes.get("D")
         should_update = _should_update_control_registers(initial_io_sizes, target_io_sizes)
-        detected_config_length = self._detect_config_length_from_bitstream64(op_type)
+        try:
+            detected_config_length = self._detect_config_length_from_bitstream64(op_type)
+        except (FileNotFoundError, ValueError):
+            detected_config_length = 0
         sfu_type = self._parse_sfu_type(op_type=op_type, raw_value=raw.get("config_sfu"))
-        sfu_config_length = self._detect_sfu_config_length(sfu_type) if sfu_type is not None else None
+        try:
+            sfu_config_length = self._detect_sfu_config_length(sfu_type) if sfu_type is not None else None
+        except (FileNotFoundError, ValueError):
+            sfu_config_length = None
 
         return OperatorTemplate(
             op_type=op_type,
