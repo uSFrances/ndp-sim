@@ -3,37 +3,6 @@ import os
 import glob
 import re
 import struct
-import json
-
-MODEL_PARAMS = {
-    "hidden_size": 896,
-    "intermediate_size": 1792,
-    "num_attention_heads": 7,
-    "num_key_value_heads": 1,
-    "head_dim": 128,
-    "sequence_length": 32,
-    "slice_per_head": 4,
-    "used_slices": 28,
-    "kv_padding": 256,
-}
-
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-
-def load_model_params(config_path=CONFIG_PATH):
-    params = dict(MODEL_PARAMS)
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ Config not found, using defaults: {config_path}")
-        return params
-
-    for key in params:
-        if key in config:
-            params[key] = config[key]
-    return params
-
-MODEL_PARAMS = load_model_params()
 
 def float16_to_bin(f):
     return bin(struct.unpack('<H', struct.pack('<e', np.float16(f)))[0])[2:].zfill(16)
@@ -169,10 +138,7 @@ def process_regular_tensors(input_dir, output_dir):
     """
     print(f"🚀 Starting Regular tensor relayout in: {input_dir}")
     
-    num_heads = MODEL_PARAMS["num_attention_heads"]
-    slice_per_head = MODEL_PARAMS["slice_per_head"]
-    head_replicated_slices = num_heads * slice_per_head
-    num_slices = head_replicated_slices
+    num_slices = 28
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
 
     # 移除 _subop- 限制，只要包含 _shape 即可被认为是张量数据
@@ -251,15 +217,15 @@ def process_regular_tensors(input_dir, output_dir):
             # 通用切分与分发策略
             slices_to_distribute = []
 
-            # 特判：Kcur/Vcur 的 add，首维是 head_dim，按首维切 slice_per_head 份，再复制 num_attention_heads 组
+            # 特判：Kcur/Vcur 的 add，首维是 head_dim，按首维切 4 份，再复制 7 组
             if is_kcur_vcur_add_tensor(filename):
-                if M % slice_per_head != 0:
-                    print(f"  ⚠️ Cannot slice Kcur/Vcur add tensor shape {M}x{N} by slice_per_head={slice_per_head}.")
+                if M % 4 != 0:
+                    print(f"  ⚠️ Cannot slice Kcur/Vcur add tensor shape {M}x{N} by 4.")
                     continue
-                m_per_slice = M // slice_per_head
-                base_slices = [data_2d[i * m_per_slice:(i + 1) * m_per_slice, :] for i in range(slice_per_head)]
-                slices_to_distribute = base_slices * num_heads
-                print(f"  ⚠️ Kcur/Vcur add tensor detected, sliced M to {slice_per_head} and copied to {head_replicated_slices}.")
+                m_per_slice = M // 4
+                base_slices = [data_2d[i * m_per_slice:(i + 1) * m_per_slice, :] for i in range(4)]
+                slices_to_distribute = base_slices * 7  # 4 * 7 = 28
+                print(f"  ⚠️ Kcur/Vcur add tensor detected, sliced M to 4 and copied to 28.")
             elif N % num_slices == 0:
                 # 规则 1：按 N 维度 (通常对应特征维或者 batch) 均分 28 份
                 n_per_slice = N // num_slices
@@ -270,18 +236,18 @@ def process_regular_tensors(input_dir, output_dir):
                 m_per_slice = M // num_slices
                 for i in range(num_slices):
                     slices_to_distribute.append(data_2d[i * m_per_slice : (i + 1) * m_per_slice, :])
-            elif N % slice_per_head == 0:
-                # --- 新增规则：按 N 维分 slice_per_head 份，然后复制 num_attention_heads 组 ---
-                n_per_slice = N // slice_per_head
-                base_slices = [data_2d[:, i * n_per_slice : (i + 1) * n_per_slice] for i in range(slice_per_head)]
-                slices_to_distribute = base_slices * num_heads
-                print(f"  ⚠️ Cannot slice shape {M}x{N} to {num_slices} slices. Sliced N to {slice_per_head} and copied to {head_replicated_slices}.")
-            elif M % slice_per_head == 0:
-                # --- 新增规则：按 M 维分 slice_per_head 份，然后复制 num_attention_heads 组 ---
-                m_per_slice = M // slice_per_head
-                base_slices = [data_2d[i * m_per_slice : (i + 1) * m_per_slice, :] for i in range(slice_per_head)]
-                slices_to_distribute = base_slices * num_heads
-                print(f"  ⚠️ Cannot slice shape {M}x{N} to {num_slices} slices. Sliced M to {slice_per_head} and copied to {head_replicated_slices}.")
+            elif N % 4 == 0:
+                # --- 新增规则：按 N 维分 4 份，然后复制后面 6 组相同的给 28 个 slice ---
+                n_per_slice = N // 4
+                base_slices = [data_2d[:, i * n_per_slice : (i + 1) * n_per_slice] for i in range(4)]
+                slices_to_distribute = base_slices * 7  # 4 * 7 = 28
+                print(f"  ⚠️ Cannot slice shape {M}x{N} to 28 slices. Sliced N to 4 and copied to 28.")
+            elif M % 4 == 0:
+                # --- 新增规则：按 M 维分 4 份，然后复制后面 6 组相同的给 28 个 slice ---
+                m_per_slice = M // 4
+                base_slices = [data_2d[i * m_per_slice : (i + 1) * m_per_slice, :] for i in range(4)]
+                slices_to_distribute = base_slices * 7  # 4 * 7 = 28
+                print(f"  ⚠️ Cannot slice shape {M}x{N} to 28 slices. Sliced M to 4 and copied to 28.")
             else:
                 # 规则 5：无法切分维度（例如偏置/向量），将自身作为全量数据广播到 28 个 slice
                 print(f"  ⚠️ Cannot slice shape {M}x{N} to 28 or 4 slices. Broadcasting to all slices.")

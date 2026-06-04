@@ -3,37 +3,6 @@ import os
 import glob
 import re
 import struct
-import json
-
-MODEL_PARAMS = {
-    "hidden_size": 896,
-    "intermediate_size": 1792,
-    "num_attention_heads": 7,
-    "num_key_value_heads": 1,
-    "head_dim": 128,
-    "sequence_length": 32,
-    "slice_per_head": 4,
-    "used_slices": 28,
-    "kv_padding": 256,
-}
-
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-
-def load_model_params(config_path=CONFIG_PATH):
-    params = dict(MODEL_PARAMS)
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ Config not found, using defaults: {config_path}")
-        return params
-
-    for key in params:
-        if key in config:
-            params[key] = config[key]
-    return params
-
-MODEL_PARAMS = load_model_params()
 
 def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
@@ -172,7 +141,7 @@ def process_rmsnorm_tensors(
     input_dir,
     output_dir,
     kv_replace_enabled=True,
-    kv_sum_bin_name=None,
+    kv_sum_bin_name="kv_caseA_sum_32x28_fstyle.bin",
     kv_replace_filenames=None,
     kv_caseA_preferred_source_key="sum_mac_in0",
 ):
@@ -180,12 +149,6 @@ def process_rmsnorm_tensors(
     处理 rmsnorm 生成的所有 sub_op .bin 文件。
     """
     print(f"🚀 Starting RMSNorm tensor relayout in: {input_dir}")
-
-    num_heads = MODEL_PARAMS["num_attention_heads"]
-    slice_per_head = MODEL_PARAMS["slice_per_head"]
-    used_slices = num_heads * slice_per_head
-    if kv_sum_bin_name is None:
-        kv_sum_bin_name = f"kv_caseA_sum_{MODEL_PARAMS['sequence_length']}x{used_slices}_fstyle.bin"
 
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
     valid_files = [f for f in bin_files if "rms_norm" in os.path.basename(f) and "_subop" in os.path.basename(f)]
@@ -305,17 +268,16 @@ def process_rmsnorm_tensors(
         print(f"🔁 Generating KV-style relayout for group: {target_prefix} -> {kv_group_output_dir}")
 
         if kv_replace_filenames is None:
-            seq = MODEL_PARAMS["sequence_length"]
             kv_replace_filenames = {
-                f"blk.0_norm-0_op-rms_norm_subop-sum_mac_out_shape{seq}x{used_slices}x1x1_dtype_f32.bin",
-                f"blk.0_norm-0_op-rms_norm_subop-remote_sum_in0_shape{seq}x{used_slices}x1x1_dtype_f32.bin",
+                "blk.0_norm-0_op-rms_norm_subop-sum_mac_out_shape32x28x1x1_dtype_f32.bin",
+                "blk.0_norm-0_op-rms_norm_subop-remote_sum_in0_shape32x28x1x1_dtype_f32.bin",
             }
 
-        # 固定策略：切成 slice_per_head 份并广播 num_attention_heads 次
-        slices_per_group = slice_per_head
-        heads = num_heads
+        # 固定策略：切成 4 份并广播7次（4*7=28）
+        slices_per_group = 4
+        heads = 7
 
-        # 新增：基于情况A切片生成 sequence_length x head-local-slices 的聚合矩阵
+        # 新增：基于情况A切片生成 32x28 的聚合矩阵（每个slice对 N 维求和 -> 32x1）
         kv_caseA_sum_matrix = None
         kv_caseA_sum_bin_path = os.path.join(kv_group_output_dir, kv_sum_bin_name)
 
@@ -422,7 +384,7 @@ def process_rmsnorm_tensors(
                         relayout_data.tofile(out_path)
                         convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1])
 
-            # 情况 B-special: 被替换后的聚合数据，按列一一映射到每个 head-local slice
+            # 情况 B-special: 被替换后的 32x28 数据，按列一一映射到 28 个 slice
             elif (
                 kv_replace_enabled
                 and filename in kv_replace_filenames

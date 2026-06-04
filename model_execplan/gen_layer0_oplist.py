@@ -26,7 +26,7 @@ DEFAULT_OPLIST = [
     # "prefill_qkt_kt_view_fp16_fp16"
 
     "gemm_local_qkt",
-    "remote_sum_fp16MN_fp32MN",
+    "remote_sum_fp32MN_fp32MN",
     "softmax",
     "gemm_local_sv",
     "gemm_ring",
@@ -65,11 +65,10 @@ ALIAS_TO_FILE = {
     "add_fp16MN_fp32N_fp32MN_k": "prefill_add_fp16MN_fp32N_fp32MN_k.json",
     "add_V_fp16MN_fp32N_fp16MN": "prefill_add_V_fp16MN_fp32N_fp16MN.json",
     "mul_fp32MN_fp16MN_fp16MN": "prefill_mul_fp32MN_fp16MN_fp16MN.json",
-    "add_fp32MN_fo32MN_fp16MN": "prefill_add_fp32MN_fp32MN_fp16MN.json",
     "add_fp32MN_fp16MN_fp32MN_residual": "prefill_add_fp32MN_fp16MN_fp32MN_residual.json",
     "add_fp32MN_fp16MN_fp32MN_out": "prefill_add_fp32MN_fp16MN_fp32MN_out.json",
 
-    "remote_sum_fp16MN_fp32MN": "prefill_remote_sum_4slice_fp16MN_fp32MN.json",
+    "remote_sum_fp32MN_fp32MN": "prefill_remote_sum_4slice_fp32MN_fp32MN.json",
 
     "silu": "prefill_silu_fp16MN_fp32MN.json"
 }

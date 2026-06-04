@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     orig_weights_folder = os.path.join(base_dir, "DeepSeek-R1-Distill-Qwen-1.5B-f16")
     original_weights = load_original_weights(orig_weights_folder)
-    new_weights_folder = os.path.join(base_dir, "model_weights_small")
+    new_weights_folder = os.path.join(base_dir, "model_weights_full")
     
     if not os.path.exists(new_weights_folder):
         os.makedirs(new_weights_folder)

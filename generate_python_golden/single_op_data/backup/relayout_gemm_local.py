@@ -3,37 +3,6 @@ import os
 import glob
 import re
 import struct
-import json
-
-MODEL_PARAMS = {
-    "hidden_size": 896,
-    "intermediate_size": 1792,
-    "num_attention_heads": 7,
-    "num_key_value_heads": 1,
-    "head_dim": 128,
-    "sequence_length": 32,
-    "slice_per_head": 4,
-    "used_slices": 28,
-    "kv_padding": 256,
-}
-
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-
-def load_model_params(config_path=CONFIG_PATH):
-    params = dict(MODEL_PARAMS)
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ Config not found, using defaults: {config_path}")
-        return params
-
-    for key in params:
-        if key in config:
-            params[key] = config[key]
-    return params
-
-MODEL_PARAMS = load_model_params()
 
 def float16_to_bin(f):
     """将单个 float16 转换为 16 位二进制字符串"""
@@ -262,6 +231,7 @@ def infer_gemm_local_params(group_files, target_prefix):
 def process_gemm_local_tensors(input_dir, output_dir):
     print(f"🚀 Starting GEMM-Local tensor relayout in: {input_dir}")
     
+    num_slices = 28
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
     
     valid_files = [f for f in bin_files if ("gemm_local" in os.path.basename(f) or 
@@ -296,11 +266,7 @@ def process_gemm_local_tensors(input_dir, output_dir):
             continue
 
         is_attn_scores_group = "attn_scores" in target_prefix
-        slices_per_head = MODEL_PARAMS["slice_per_head"]
-        num_slices = slices_per_head * H
-        if K % slices_per_head != 0:
-            print(f"  ⚠️ Skip {target_prefix}: K={K} is not divisible by slice_per_head={slices_per_head}")
-            continue
+        slices_per_head = num_slices // H
         slice_k = K // slices_per_head
         print(f"  🧩 [LOCAL PARAM] K={K}, L={L}, H={H}, SlicesPerHead={slices_per_head}")
 
