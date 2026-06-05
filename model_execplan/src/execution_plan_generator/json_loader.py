@@ -180,6 +180,7 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str, params: dict[str
     special_type = _parse_special_type(raw_tensor, f"Operator {op_id}: input {name}")
     write_reg_hint = _parse_write_reg_hint(raw_tensor, f"Operator {op_id}: input {name}")
     source = _parse_source(_pick(raw_tensor, "source", "输入来源", "来源"), op_id, name)
+    bank_interleave = _parse_bank_interleave(raw_tensor, f"Operator {op_id}: input {name}")
 
     return TensorSpec(
         shape=shape,
@@ -188,6 +189,7 @@ def _parse_input_tensor(raw_tensor: Any, op_id: str, name: str, params: dict[str
         remapping=remapping,
         special_type=special_type,
         write_reg_hint=write_reg_hint,
+        bank_interleave=bank_interleave,
     )
 
 
@@ -203,12 +205,14 @@ def _parse_output(raw_op: dict[str, Any], op_id: str, params: dict[str, int]) ->
     remapping = _parse_remapping(raw_output, f"Operator {op_id}: output")
     special_type = _parse_special_type(raw_output, f"Operator {op_id}: output")
     write_reg_hint = _parse_write_reg_hint(raw_output, f"Operator {op_id}: output")
+    bank_interleave = _parse_bank_interleave(raw_output, f"Operator {op_id}: output")
     return TensorSpec(
         shape=shape,
         dtype=dtype,
         remapping=remapping,
         special_type=special_type,
         write_reg_hint=write_reg_hint,
+        bank_interleave=bank_interleave,
     )
 
 
@@ -234,6 +238,22 @@ def _parse_write_reg_hint(raw_tensor: dict[str, Any], location: str) -> str | No
     if not text:
         raise JsonFormatError(f"{location} write_reg_hint cannot be empty.")
     return text
+
+
+def _parse_bank_interleave(raw_tensor: dict[str, Any], location: str) -> int:
+    raw = raw_tensor.get("bank_interleave", 1)
+    if raw is None:
+        return 1
+    if isinstance(raw, bool):
+        raise JsonFormatError(f"{location} bank_interleave must be an integer, got bool.")
+    if not isinstance(raw, (int, float)):
+        raise JsonFormatError(f"{location} bank_interleave must be an integer, got {type(raw).__name__}.")
+    value = int(raw)
+    if value < 1:
+        raise JsonFormatError(f"{location} bank_interleave must be >= 1, got {value}.")
+    if value not in (1, 2, 4):
+        raise JsonFormatError(f"{location} bank_interleave must be 1, 2, or 4, got {value}.")
+    return value
 
 
 def _parse_dtype(raw_tensor: dict[str, Any], location: str) -> str:

@@ -132,8 +132,14 @@ def _patch_emulator_operator_json_payload(
     payload: dict[str, object],
     operator: OperatorSpec,
     address_plan: AddressPlan,
+    use_global_addrs: bool = False,
 ) -> None:
-    _patch_stream_base_addrs(payload=payload, operator=operator, address_plan=address_plan)
+    _patch_stream_base_addrs(
+        payload=payload,
+        operator=operator,
+        address_plan=address_plan,
+        use_global=use_global_addrs,
+    )
 
     # Apply shape-driven control rules for this operator type.
     updates = compute_control_register_updates(
@@ -155,13 +161,28 @@ def _patch_stream_base_addrs(
     payload: dict[str, object],
     operator: OperatorSpec,
     address_plan: AddressPlan,
+    use_global: bool = False,
 ) -> None:
+    """Write base addresses into each stream engine node.
+
+    When ``use_global`` is True (bitstream regeneration), the slice-00
+    address from the global address plan is used.  When False (emulator
+    export), operator-local offsets starting from 0x0 are used.
+    """
     stream_engine = payload.get("stream_engine")
     if not isinstance(stream_engine, dict):
         return
 
-    local_base_addrs = _compute_operator_local_base_addrs(operator=operator, address_plan=address_plan)
-    for target_name, base_addr in local_base_addrs.items():
+    if use_global:
+        base_addrs = _compute_global_slice0_base_addrs(
+            operator=operator, address_plan=address_plan
+        )
+    else:
+        base_addrs = _compute_operator_local_base_addrs(
+            operator=operator, address_plan=address_plan
+        )
+
+    for target_name, base_addr in base_addrs.items():
         mode = "write" if target_name == "D" else "read"
         stream_key = _find_stream_key_by_target(
             stream_engine=stream_engine,
@@ -175,10 +196,43 @@ def _patch_stream_base_addrs(
             stream_node["base_addr"] = _format_base_addr_hex(base_addr)
 
 
+def _compute_global_slice0_base_addrs(
+    operator: OperatorSpec,
+    address_plan: AddressPlan,
+) -> dict[str, int]:
+    """Return the slice-00 base address from the global address plan for
+    every input and output of *operator*."""
+    addrs: dict[str, int] = {}
+
+    for input_name in operator.inputs.keys():
+        io_key = f"{operator.op_id}.input.{input_name}"
+        tensor_name = address_plan.operator_io_to_tensor.get(io_key)
+        if tensor_name is None:
+            continue
+        assignment = address_plan.assignments.get(tensor_name)
+        if assignment is None:
+            continue
+        addrs[input_name] = assignment.per_slice_addresses.get(
+            0, assignment.base_address
+        )
+
+    output_key = f"{operator.op_id}.output.D"
+    output_tensor_name = address_plan.operator_io_to_tensor.get(output_key)
+    if output_tensor_name is not None:
+        output_assignment = address_plan.assignments.get(output_tensor_name)
+        if output_assignment is not None:
+            addrs["D"] = output_assignment.per_slice_addresses.get(
+                0, output_assignment.base_address
+            )
+
+    return addrs
+
+
 def _compute_operator_local_base_addrs(
     operator: OperatorSpec,
     address_plan: AddressPlan,
 ) -> dict[str, int]:
+    """Compute operator-local base addresses (starting from 0x0) for emulator export."""
     local_base_addrs: dict[str, int] = {}
     cursor = 0
 

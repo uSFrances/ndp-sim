@@ -23,6 +23,7 @@ class TensorSpec:
     remapping: tuple[int, ...] | None = None
     special_type: str | None = None
     write_reg_hint: str | None = None
+    bank_interleave: int = 1
 
 
 @dataclass(frozen=True)

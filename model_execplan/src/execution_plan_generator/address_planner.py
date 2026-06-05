@@ -23,6 +23,12 @@ class AddressPlanner:
 
     Address format: slave(5), bank(2), row(13), col(6), subword(4).
     The planner allocates monotonically increasing addresses and never reclaims memory.
+
+    When *all* tensors in the plan carry ``bank_interleave > 1``, the planner
+    splits the 4 physical banks into ``4 // bank_interleave`` independent groups
+    and always picks the least-used group.  Within each group the caller only
+    sees the first bank of the group so ``base_addr`` always lands on an even
+    bank (0 or 2 for interleave 2).
     """
 
     WORD_BYTES = 16
@@ -47,11 +53,237 @@ class AddressPlanner:
             "uint32": 4,
         }
 
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
+
     def plan(
         self,
         execution_input: ExecutionPlanInput,
         config_lengths_by_op: dict[str, int] | None = None,
         sfu_config_lengths_by_op: dict[str, int] | None = None,
+    ) -> AddressPlan:
+        interleave = self._resolve_plan_interleave(execution_input)
+
+        if interleave <= 1:
+            return self._plan_flat(
+                execution_input,
+                config_lengths_by_op=config_lengths_by_op,
+                sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+            )
+        return self._plan_interleaved(
+            execution_input,
+            interleave=interleave,
+            config_lengths_by_op=config_lengths_by_op,
+            sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+        )
+
+    # ------------------------------------------------------------------
+    # Interleave helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_plan_interleave(execution_input: ExecutionPlanInput) -> int:
+        """Return the maximum ``bank_interleave`` across every tensor in the plan."""
+        max_val = 1
+        for op in execution_input.operators:
+            for t in op.inputs.values():
+                max_val = max(max_val, t.bank_interleave)
+            max_val = max(max_val, op.output.bank_interleave)
+        return max_val
+
+    def _group_count(self, interleave: int) -> int:
+        return self.MAX_BANKS // interleave
+
+    def _group_start_bank(self, group_idx: int, interleave: int) -> int:
+        return group_idx * interleave
+
+    # ------------------------------------------------------------------
+    # Interleaved plan (bank_interleave > 1)
+    # ------------------------------------------------------------------
+
+    def _plan_interleaved(
+        self,
+        execution_input: ExecutionPlanInput,
+        interleave: int,
+        config_lengths_by_op: dict[str, int] | None,
+        sfu_config_lengths_by_op: dict[str, int] | None,
+    ) -> AddressPlan:
+        num_groups = self._group_count(interleave)
+        group_cursors = [_AddressCursor() for _ in range(num_groups)]
+
+        assignments: dict[str, AddressAssignment] = {}
+        io_map: dict[str, str] = {}
+        output_tensor_by_op: dict[str, str] = {}
+        operator_config_base_addresses: dict[str, int] = {}
+        operator_config_lengths: dict[str, int] = {}
+        operator_sfu_config_base_addresses: dict[str, int] = {}
+        operator_sfu_config_lengths: dict[str, int] = {}
+
+        # -- tensor data -------------------------------------------------
+        for op in execution_input.operators:
+            enabled_slice_ids = op.enabled_slice_ids()
+            if not enabled_slice_ids or len(enabled_slice_ids) > self.MAX_SLAVES:
+                raise AddressPlanningError(
+                    f"Operator {op.op_id} used_slices must enable between 1 and "
+                    f"{self.MAX_SLAVES} slices, got mask {op.used_slices}."
+                )
+
+            for input_name, tensor in op.inputs.items():
+                io_key = self._io_key(op.op_id, "input", input_name)
+
+                if input_name == "B'" and "B" in op.inputs:
+                    b_io_key = self._io_key(op.op_id, "input", "B")
+                    b_tensor_name = io_map.get(b_io_key)
+                    if b_tensor_name is not None:
+                        io_map[io_key] = b_tensor_name
+                        continue
+
+                source = tensor.source
+                if source is None:
+                    raise AddressPlanningError(f"{io_key} is missing source.")
+
+                if source.source_type == InputSourceType.EXTERNAL:
+                    tensor_name = f"{op.op_id}.input.{input_name}"
+                    assignment, group_idx, bank_in_group, row, col = (
+                        self._allocate_tensor_interleaved(
+                            tensor_name=tensor_name,
+                            tensor_dtype=tensor.dtype,
+                            shape=tensor.shape,
+                            enabled_slice_ids=enabled_slice_ids,
+                            group_cursors=group_cursors,
+                            interleave=interleave,
+                        )
+                    )
+                    assignments[tensor_name] = assignment
+                    io_map[io_key] = tensor_name
+                    continue
+
+                source_op_id = source.operator_id
+                if source_op_id is None:
+                    raise AddressPlanningError(
+                        f"{io_key} depends on operator source but operator_id is empty."
+                    )
+                if source_op_id not in output_tensor_by_op:
+                    raise AddressPlanningError(
+                        f"{io_key} references unknown/unplanned source operator: "
+                        f"{source_op_id}."
+                    )
+                io_map[io_key] = output_tensor_by_op[source_op_id]
+
+            # output
+            output_name = f"{op.op_id}.output.D"
+            assignment, group_idx, bank_in_group, row, col = (
+                self._allocate_tensor_interleaved(
+                    tensor_name=output_name,
+                    tensor_dtype=op.output.dtype,
+                    shape=op.output.shape,
+                    enabled_slice_ids=enabled_slice_ids,
+                    group_cursors=group_cursors,
+                    interleave=interleave,
+                )
+            )
+            assignments[output_name] = assignment
+            output_tensor_by_op[op.op_id] = output_name
+            io_map[self._io_key(op.op_id, "output", "D")] = output_name
+
+        # -- config payloads ------------------------------------------------
+        config_lengths_by_op = config_lengths_by_op or {}
+        sfu_config_lengths_by_op = sfu_config_lengths_by_op or {}
+
+        # Align every group cursor to row start.
+        for gi in range(num_groups):
+            group_cursors[gi] = self._align_cursor_to_row_in_group(
+                group_cursors[gi], interleave
+            )
+
+        # Pick the least-used group for config placement.
+        config_group = self._choose_bank_group(group_cursors, interleave)
+        config_cursor = group_cursors[config_group]
+
+        config_base = self._pack_address(
+            slave=0,
+            bank=self._group_start_bank(config_group, interleave),
+            row=config_cursor.row,
+            col=0,
+            subword=0,
+        )
+
+        seen_config_types: dict[str, int] = {}
+        seen_sfu_types: dict[str, int] = {}
+        for op in execution_input.operators:
+            if op.op_type in seen_config_types:
+                base_addr = seen_config_types[op.op_type]
+                operator_config_base_addresses[op.op_id] = base_addr
+                operator_config_lengths[op.op_id] = operator_config_lengths.get(
+                    op.op_id, config_lengths_by_op.get(op.op_id, 0) or 0
+                )
+                if op.op_type in seen_sfu_types:
+                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[
+                        op.op_type
+                    ]
+                    operator_sfu_config_lengths[op.op_id] = (
+                        operator_sfu_config_lengths.get(
+                            op.op_id, sfu_config_lengths_by_op.get(op.op_id, 0) or 0
+                        )
+                    )
+                continue
+
+            config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
+            if config_length_64b < 0:
+                raise AddressPlanningError(
+                    f"Operator {op.op_id} config_length must be non-negative, "
+                    f"got {config_length_64b}."
+                )
+            if config_length_64b == 0:
+                operator_config_lengths[op.op_id] = 0
+            else:
+                operator_config_base_addresses[op.op_id] = config_base
+                seen_config_types[op.op_type] = config_base
+                operator_config_lengths[op.op_id] = config_length_64b
+
+                config_bytes = config_length_64b * 8
+                reserved_bytes = self._align_up(config_bytes, self.ROW_BYTES)
+                config_base = self._align_up(
+                    config_base + reserved_bytes, self.ROW_BYTES
+                )
+
+            sfu_config_length_64b = int(sfu_config_lengths_by_op.get(op.op_id, 0) or 0)
+            if sfu_config_length_64b < 0:
+                raise AddressPlanningError(
+                    f"Operator {op.op_id} sfu config_length must be non-negative, "
+                    f"got {sfu_config_length_64b}."
+                )
+            if sfu_config_length_64b > 0:
+                operator_sfu_config_base_addresses[op.op_id] = config_base
+                seen_sfu_types[op.op_type] = config_base
+                operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
+                sfu_config_bytes = sfu_config_length_64b * 8
+                sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
+                config_base = self._align_up(
+                    config_base + sfu_reserved_bytes, self.ROW_BYTES
+                )
+            else:
+                operator_sfu_config_lengths[op.op_id] = 0
+
+        return AddressPlan(
+            assignments=assignments,
+            operator_io_to_tensor=io_map,
+            operator_config_base_addresses=operator_config_base_addresses,
+            operator_config_lengths=operator_config_lengths,
+            operator_sfu_config_base_addresses=operator_sfu_config_base_addresses,
+            operator_sfu_config_lengths=operator_sfu_config_lengths,
+        )
+
+    # ------------------------------------------------------------------
+    # Original flat plan (bank_interleave = 1, backward-compatible)
+    # ------------------------------------------------------------------
+
+    def _plan_flat(
+        self,
+        execution_input: ExecutionPlanInput,
+        config_lengths_by_op: dict[str, int] | None,
+        sfu_config_lengths_by_op: dict[str, int] | None,
     ) -> AddressPlan:
         cursor = _AddressCursor()
         assignments: dict[str, AddressAssignment] = {}
@@ -66,12 +298,12 @@ class AddressPlanner:
             enabled_slice_ids = op.enabled_slice_ids()
             if not enabled_slice_ids or len(enabled_slice_ids) > self.MAX_SLAVES:
                 raise AddressPlanningError(
-                    f"Operator {op.op_id} used_slices must enable between 1 and {self.MAX_SLAVES} slices, got mask {op.used_slices}."
+                    f"Operator {op.op_id} used_slices must enable between 1 and "
+                    f"{self.MAX_SLAVES} slices, got mask {op.used_slices}."
                 )
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
-                # B' shares the same allocated address space as B for this operator.
                 if input_name == "B'" and "B" in op.inputs:
                     b_io_key = self._io_key(op.op_id, "input", "B")
                     b_tensor_name = io_map.get(b_io_key)
@@ -85,7 +317,7 @@ class AddressPlanner:
 
                 if source.source_type == InputSourceType.EXTERNAL:
                     tensor_name = f"{op.op_id}.input.{input_name}"
-                    assignment, cursor = self._allocate_tensor(
+                    assignment, cursor = self._allocate_tensor_flat(
                         tensor_name=tensor_name,
                         tensor_dtype=tensor.dtype,
                         shape=tensor.shape,
@@ -98,15 +330,18 @@ class AddressPlanner:
 
                 source_op_id = source.operator_id
                 if source_op_id is None:
-                    raise AddressPlanningError(f"{io_key} depends on operator source but operator_id is empty.")
+                    raise AddressPlanningError(
+                        f"{io_key} depends on operator source but operator_id is empty."
+                    )
                 if source_op_id not in output_tensor_by_op:
                     raise AddressPlanningError(
-                        f"{io_key} references unknown/unplanned source operator: {source_op_id}."
+                        f"{io_key} references unknown/unplanned source operator: "
+                        f"{source_op_id}."
                     )
                 io_map[io_key] = output_tensor_by_op[source_op_id]
 
             output_name = f"{op.op_id}.output.D"
-            output_assignment, cursor = self._allocate_tensor(
+            output_assignment, cursor = self._allocate_tensor_flat(
                 tensor_name=output_name,
                 tensor_dtype=op.output.dtype,
                 shape=op.output.shape,
@@ -117,9 +352,6 @@ class AddressPlanner:
             output_tensor_by_op[op.op_id] = output_name
             io_map[self._io_key(op.op_id, "output", "D")] = output_name
 
-        # Place config payloads after tensor data.
-        # config_length unit is 64-bit row count; each config is placed at BANK-row start
-        # and reserves a whole number of rows so the next config also begins on a row boundary.
         config_lengths_by_op = config_lengths_by_op or {}
         sfu_config_lengths_by_op = sfu_config_lengths_by_op or {}
         cursor = self._align_cursor_to_row(cursor)
@@ -130,58 +362,60 @@ class AddressPlanner:
             col=0,
             subword=0,
         )
-        # De-duplicate: operators of the same type share one config payload.
         seen_config_types: dict[str, int] = {}
         seen_sfu_types: dict[str, int] = {}
         for op in execution_input.operators:
             if op.op_type in seen_config_types:
-                # Reuse the already-allocated address for this operator type.
                 base_addr = seen_config_types[op.op_type]
                 operator_config_base_addresses[op.op_id] = base_addr
                 operator_config_lengths[op.op_id] = operator_config_lengths.get(
                     op.op_id, config_lengths_by_op.get(op.op_id, 0) or 0
                 )
-                # SFU also shared when already allocated.
                 if op.op_type in seen_sfu_types:
-                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[op.op_type]
-                    operator_sfu_config_lengths[op.op_id] = operator_sfu_config_lengths.get(
-                        op.op_id, sfu_config_lengths_by_op.get(op.op_id, 0) or 0
+                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[
+                        op.op_type
+                    ]
+                    operator_sfu_config_lengths[op.op_id] = (
+                        operator_sfu_config_lengths.get(
+                            op.op_id,
+                            sfu_config_lengths_by_op.get(op.op_id, 0) or 0,
+                        )
                     )
                 continue
 
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
                 raise AddressPlanningError(
-                    f"Operator {op.op_id} config_length must be non-negative, got {config_length_64b}."
+                    f"Operator {op.op_id} config_length must be non-negative, "
+                    f"got {config_length_64b}."
                 )
-
             if config_length_64b == 0:
                 operator_config_lengths[op.op_id] = 0
             else:
-                base_address = config_cursor_addr
-                operator_config_base_addresses[op.op_id] = base_address
-                seen_config_types[op.op_type] = base_address
-                # Keep metadata value as original 64-bit row count.
+                operator_config_base_addresses[op.op_id] = config_cursor_addr
+                seen_config_types[op.op_type] = config_cursor_addr
                 operator_config_lengths[op.op_id] = config_length_64b
-
                 config_bytes = config_length_64b * 8
                 reserved_bytes = self._align_up(config_bytes, self.ROW_BYTES)
-                config_cursor_addr = self._align_up(base_address + reserved_bytes, self.ROW_BYTES)
+                config_cursor_addr = self._align_up(
+                    config_cursor_addr + reserved_bytes, self.ROW_BYTES
+                )
 
             sfu_config_length_64b = int(sfu_config_lengths_by_op.get(op.op_id, 0) or 0)
             if sfu_config_length_64b < 0:
                 raise AddressPlanningError(
-                    f"Operator {op.op_id} sfu config_length must be non-negative, got {sfu_config_length_64b}."
+                    f"Operator {op.op_id} sfu config_length must be non-negative, "
+                    f"got {sfu_config_length_64b}."
                 )
             if sfu_config_length_64b > 0:
-                sfu_base_address = config_cursor_addr
-                operator_sfu_config_base_addresses[op.op_id] = sfu_base_address
-                seen_sfu_types[op.op_type] = sfu_base_address
+                operator_sfu_config_base_addresses[op.op_id] = config_cursor_addr
+                seen_sfu_types[op.op_type] = config_cursor_addr
                 operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
-
                 sfu_config_bytes = sfu_config_length_64b * 8
                 sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
-                config_cursor_addr = self._align_up(sfu_base_address + sfu_reserved_bytes, self.ROW_BYTES)
+                config_cursor_addr = self._align_up(
+                    config_cursor_addr + sfu_reserved_bytes, self.ROW_BYTES
+                )
             else:
                 operator_sfu_config_lengths[op.op_id] = 0
 
@@ -194,7 +428,145 @@ class AddressPlanner:
             operator_sfu_config_lengths=operator_sfu_config_lengths,
         )
 
-    def _allocate_tensor(
+    # ------------------------------------------------------------------
+    # Interleaved allocation helpers
+    # ------------------------------------------------------------------
+
+    def _choose_bank_group(
+        self,
+        group_cursors: list[_AddressCursor],
+        interleave: int,
+    ) -> int:
+        """Return the index of the least-used bank group."""
+        best = 0
+        best_flat = self._flatten_in_group(
+            bank=group_cursors[0].bank,
+            row=group_cursors[0].row,
+            col=group_cursors[0].col,
+            interleave=interleave,
+        )
+        for gi in range(1, len(group_cursors)):
+            flat = self._flatten_in_group(
+                bank=group_cursors[gi].bank,
+                row=group_cursors[gi].row,
+                col=group_cursors[gi].col,
+                interleave=interleave,
+            )
+            if flat < best_flat:
+                best_flat = flat
+                best = gi
+        return best
+
+    def _flatten_in_group(
+        self, bank: int, row: int, col: int, interleave: int
+    ) -> int:
+        """Flatten (bank_in_group, row, col) into a linear word index."""
+        _ = interleave  # group capacity is implicit in MAX_ROWS/MAX_COLS
+        return ((bank * self.MAX_ROWS) + row) * self.MAX_COLS + col
+
+    def _unflatten_in_group(
+        self, flat: int, interleave: int
+    ) -> tuple[int, int, int]:
+        """Inverse of ``_flatten_in_group``."""
+        banks_in_group = interleave
+        bank_rows = self.MAX_ROWS * self.MAX_COLS
+        bank = flat // bank_rows
+        rem = flat % bank_rows
+        row = rem // self.MAX_COLS
+        col = rem % self.MAX_COLS
+        if bank >= banks_in_group:
+            raise AddressPlanningError(
+                "Address space overflow in bank group."
+            )
+        return bank, row, col
+
+    def _advance_in_group(
+        self,
+        cursor: _AddressCursor,
+        words: int,
+        interleave: int,
+    ) -> _AddressCursor:
+        current = self._flatten_in_group(
+            bank=cursor.bank, row=cursor.row, col=cursor.col,
+            interleave=interleave,
+        )
+        nxt = current + words
+        if nxt > interleave * self.MAX_ROWS * self.MAX_COLS:
+            raise AddressPlanningError(
+                "Address space exhausted in bank group."
+            )
+        bank, row, col = self._unflatten_in_group(nxt, interleave)
+        return _AddressCursor(bank=bank, row=row, col=col)
+
+    def _align_cursor_to_row_in_group(
+        self, cursor: _AddressCursor, interleave: int
+    ) -> _AddressCursor:
+        if cursor.col == 0:
+            return cursor
+        return self._advance_in_group(
+            cursor,
+            self.MAX_COLS - cursor.col,
+            interleave,
+        )
+
+    def _allocate_tensor_interleaved(
+        self,
+        tensor_name: str,
+        tensor_dtype: str,
+        shape: tuple[int, int, int],
+        enabled_slice_ids: list[int],
+        group_cursors: list[_AddressCursor],
+        interleave: int,
+    ) -> tuple[AddressAssignment, int, int, int, int]:
+        size_bytes = self._tensor_size_bytes(
+            tensor_name=tensor_name,
+            tensor_dtype=tensor_dtype,
+            shape=shape,
+        )
+        # Each bank in the group holds 1/interleave of the data.
+        per_bank_bytes = size_bytes // interleave
+        words = ceil(per_bank_bytes / self.WORD_BYTES)
+
+        gi = self._choose_bank_group(group_cursors, interleave)
+        cursor = group_cursors[gi]
+
+        bank = self._group_start_bank(gi, interleave)
+        row = cursor.row
+        col = cursor.col
+
+        base_address = self._pack_address(
+            slave=0, bank=bank, row=row, col=col, subword=0
+        )
+
+        per_slice_addresses: dict[int, int] = {}
+        for slice_id in enabled_slice_ids:
+            per_slice_addresses[slice_id] = self._pack_address(
+                slave=slice_id, bank=bank, row=row, col=col, subword=0
+            )
+
+        group_cursors[gi] = self._advance_in_group(
+            cursor, words, interleave
+        )
+
+        return (
+            AddressAssignment(
+                tensor_name=tensor_name,
+                base_address=base_address,
+                per_slice_addresses=per_slice_addresses,
+                size_bytes=size_bytes,
+                shape=shape,
+            ),
+            gi,
+            cursor.bank,
+            row,
+            col,
+        )
+
+    # ------------------------------------------------------------------
+    # Flat allocation helper (original, renamed from _allocate_tensor)
+    # ------------------------------------------------------------------
+
+    def _allocate_tensor_flat(
         self,
         tensor_name: str,
         tensor_dtype: str,
@@ -210,7 +582,9 @@ class AddressPlanner:
         words = ceil(size_bytes / self.WORD_BYTES)
 
         bank, row, col = cursor.bank, cursor.row, cursor.col
-        base_address = self._pack_address(slave=0, bank=bank, row=row, col=col, subword=0)
+        base_address = self._pack_address(
+            slave=0, bank=bank, row=row, col=col, subword=0
+        )
 
         per_slice_addresses: dict[int, int] = {}
         for slice_id in enabled_slice_ids:
@@ -222,8 +596,12 @@ class AddressPlanner:
                 subword=0,
             )
 
-        next_bank, next_row, next_col = self._advance(bank=bank, row=row, col=col, words=words)
-        next_cursor = _AddressCursor(bank=next_bank, row=next_row, col=next_col)
+        next_bank, next_row, next_col = self._advance(
+            bank=bank, row=row, col=col, words=words
+        )
+        next_cursor = _AddressCursor(
+            bank=next_bank, row=next_row, col=next_col
+        )
 
         return (
             AddressAssignment(
@@ -235,6 +613,10 @@ class AddressPlanner:
             ),
             next_cursor,
         )
+
+    # ------------------------------------------------------------------
+    # Shared helpers (used by both allocation modes)
+    # ------------------------------------------------------------------
 
     def _tensor_size_bytes(
         self,

@@ -139,6 +139,7 @@ class ExecutionPlanPipeline:
                 payload=op_payload,
                 operator=op,
                 address_plan=address_plan,
+                use_global_addrs=True,
             )
 
             op_dir = op_config_root / op.op_type
