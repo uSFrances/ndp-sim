@@ -2,6 +2,7 @@ import numpy as np
 import os
 import re
 import math
+import json
 
 def duplicate_tokens_to_seq_length(input_bin_path, output_dir, original_seq_len=8, target_seq_len=32):
     """
@@ -75,6 +76,17 @@ if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.join(current_dir, "inputs_good")
     output_dir = os.path.join(current_dir, "python_golden_custom_seq")
+
+    # 从 config.json 读取目标序列长度
+    config_path = os.path.join(current_dir, "config.json")
+    target_seq_len = 32  # 默认值
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            target_seq_len = config.get("sequence_length", 32)
+            print(f"✓ Read target sequence length from config.json: {target_seq_len}")
+    except FileNotFoundError:
+        print(f"⚠️ config.json not found at {config_path}. Using default sequence length: {target_seq_len}")
     
     # Process all bin files in the inputs_good directory
     if os.path.exists(input_dir):
@@ -88,5 +100,5 @@ if __name__ == "__main__":
             input_bin_path=os.path.join(input_dir, f),
             output_dir=output_dir,
             original_seq_len=8,
-            target_seq_len=32
+            target_seq_len=target_seq_len
         )

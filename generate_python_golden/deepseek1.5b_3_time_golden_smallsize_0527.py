@@ -178,9 +178,6 @@ def matmul_2d(src0, src1, m, n ,k, out_dtype=np.float32):
         for j in range(n):      
             sum_val = FLOAT_ACCUM(0.0)       
             for l in range(k):  
-                # 修正：防止越界
-                if l >= src0.shape[1] or l >= src1.shape[0]:
-                    continue
                 a_val = src0[i, l].astype(FLOAT_ACCUM)
                 b_val = src1[l, j].astype(FLOAT_ACCUM)
                 tmp = a_val * b_val
@@ -500,38 +497,6 @@ def unary(x):
     return x_fp32 / (1 + np.exp(-x_fp32))
 
 @log_op
-# def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
-#     """
-#     src0: 源 tensor，4D，列优先
-#     src1: 索引 tensor，4D，列优先
-#     返回：根据索引抽取后的 dst tensor，列优先
-#     """
-#     assert src0.ndim == 4
-#     assert src1.ndim == 4
-#     assert src0.dtype in (np.float16, np.float32)
-#     assert src1.dtype == np.int32
-
-#     D0, D1_src, D2, D3 = src0.shape
-#     D0_idx, D1_dst, D2_dst, D3_dst = src1.shape
-#     assert D0_idx == 1, f"src1第一维应为1，当前为{D0_idx}"
-
-#     max_idx = int(np.max(src1))
-#     if max_idx >= D1_src:
-#         print(f"⚠️ get_rows index out of range: max_idx={max_idx}, D1_src={D1_src}, 将自动clamp到[0,{D1_src - 1}]")
-
-#     dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=src0.dtype, order='F')
-
-#     for i1 in range(D1_dst):
-#         for i2 in range(D2_dst):
-#             for i3 in range(D3_dst):
-#                 idx = int(src1[0, i1, i2, i3])  # 显式4D索引
-#                 if idx < 0:
-#                     idx = 0
-#                 elif idx >= D1_src:
-#                     idx = D1_src - 1
-#                 dst[:, i1, i2, i3] = src0[:, idx, i2, i3].reshape(-1)
-
-#     return dst
 def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
     """
     src0: 源 tensor，4D，列优先
@@ -762,8 +727,6 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     start_time = time.time()
 
     input_key = "inp_embd" if layer_id == 0 else f"l_out-{layer_id - 1}"
-    cur_token_num = store.get(input_key).shape[1]  # 用真实 token 长度，避免 reshape 错误
-
     timed_op(f"norm-{layer_id}", rms_norm, store.get(input_key))
     timed_op(
         f"attn_norm-{layer_id}",
@@ -777,7 +740,7 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     timed_op(
         f"Qcur-{layer_id}",
         rope,
-        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'),
         store_dtype='fp16',
     )
     timed_matmul_fp16(f"node_{layer_id}_k", store.get(f"{lid}.attn_k.weight"), store.get(f"attn_norm-{layer_id}"))
@@ -785,18 +748,19 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     timed_op(
         f"Kcur-{layer_id}",
         rope,
-        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
         store_dtype='fp16',
     )
     timed_matmul_fp16(f"node_{layer_id}_v", store.get(f"{lid}.attn_v.weight"), store.get(f"attn_norm-{layer_id}"))
     timed_op(f"Vcur-{layer_id}-add", add, store.get(f"node_{layer_id}_v"), store.get(f"{lid}.attn_v.bias"))
     store_fp16(
         f"Vcur-{layer_id}",
-        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
     )
     
     update_kv_cache(store, layer_id, store.get(f"Kcur-{layer_id}"), store.get(f"Vcur-{layer_id}"))
-    k_selected, v_selected = get_kv_for_attention(store, layer_id, cur_token_num)
+    
+    k_selected, v_selected = get_kv_for_attention(store, layer_id, token_num)
     store.set(f"cache_k_l{layer_id}", k_selected)
     store.set(f"cache_v_l{layer_id}", v_selected)
     
@@ -806,8 +770,8 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
 
     # 新：准备未完全规约的局部累加和（模拟硬件每个Slice上的局部 matmul 结果交由 remote_sum_in）
     k_slice = k_selected
-    if k_selected.shape[1] > cur_token_num:
-        k_slice = k_selected[:, -cur_token_num:, :, :]
+    if k_selected.shape[1] > token_num:
+        k_slice = k_selected[:, -token_num:, :, :]
 
     Qperm = store.get(f"Qcur-{layer_id}-permute")
     
@@ -824,23 +788,15 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
         # 对于 k_slice (128(HEAD), 32(L_k), 1(H), 1) 和 Qperm (128(HEAD), 32(L_q), 7(H), 1)
         # 本算法 mul_mat 相当于对每个 HEAD (H)，执行 K_slice.T(L_k * HEAD) x Qperm(HEAD * L_q) 得分
         # 这里模拟对应的局部点乘累加
-        p_out = np.zeros((k_slice.shape[1], Qperm.shape[1], NUM_Q_HEADS, 1), dtype=np.float32)
-        for h in range(NUM_Q_HEADS):
-            # 修正 GQA (Grouped-Query Attention) 的 K 头索引
-            h_k = h // (NUM_Q_HEADS // NUM_KV_HEADS)
-            ks = k_slice[start_k:end_k, :, h_k, 0] # shape (slice_k, L_k)
-            qs = Qperm[start_k:end_k, :, h, 0]     # shape (slice_k, L_q)
-            ks_T = ks.T                            # shape (L_k, slice_k)
-            # 修正参数，保证 k 不越界
-            m = ks_T.shape[0]
-            n = qs.shape[1]
-            k_dim = min(ks_T.shape[1], qs.shape[0])
-
-            # hardware matmul 追踪：仅保存第一个 slice 的第一个 head 的 matmul 输入输出作为示例
-            # _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
-            # p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
-            # software matmul 结果也保存一次以供对比
-            p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
+        p_out = np.zeros((32, 32, 7, 1), dtype=np.float32)
+        for h in range(7):
+            h_k = 0 if k_slice.shape[2] == 1 else h # KV cache广播支持
+            ks = k_slice[start_k:end_k, :, h_k, 0] # shape (32, 32)
+            qs = Qperm[start_k:end_k, :, h, 0]   # shape (32, 32)
+            ks_T = ks.T
+            _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
+            # p_out[:, :, h, 0] = matmul_2d( ks_T,qs, qs.shape[0], ks_T.shape[1], qs.shape[1], out_dtype=np.float32, debug_trace_path=_trace)
+            p_out[:, :, h, 0] = matmul_2d( ks_T,qs, qs.shape[0], ks_T.shape[1], qs.shape[1], out_dtype=np.float32)
         partial_sums_2d.append(p_out)
 
     # 在第一维度拼成 (128, 32, 7, 1) -> 对应 4 个 (32, 32, 7, 1)
@@ -871,21 +827,19 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     timed_matmul_fp16(f"node_{layer_id}_attn_out", v_selected, store.get(f"node_{layer_id}_attn_probs"))
     store_fp16(
         f"kqv_out-{layer_id}",
-        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, cur_token_num, 1, 1), order='F'),
+        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'),
     )
     timed_matmul_fp16(f"node_{layer_id}_attn_final", store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
     # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
-    # if NUM_LAYERS == 1:
-    #     # 直接用完整序列 residual 进入 FFN
-    #     timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
-    # else:
-    #     # 多层情形保留原有的 token gather 行为
-    #     timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
-    #     timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
-    #     timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
-
-    timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
+    if NUM_LAYERS == 1:
+        # 直接用完整序列 residual 进入 FFN
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
+    else:
+        # 多层情形保留原有的 token gather 行为
+        timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
+        timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
 
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
     timed_op(
@@ -958,7 +912,6 @@ def run_final_layer(store: TensorStore, token_num: int):
 
     # 处理单层情况：如果是第一层(layer_id=0)，输入为inp_embd
     input_key = "inp_embd" if layer_id == 0 else f"l_out-{layer_id - 1}"
-    cur_token_num = store.get(input_key).shape[1]  # 用真实 token 长度
 
     # Q/K/V 分支
     timed_op(f"norm-{layer_id}", rms_norm, store.get(input_key))
@@ -974,7 +927,7 @@ def run_final_layer(store: TensorStore, token_num: int):
     timed_op(
         f"Qcur-{layer_id}",
         rope,
-        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Qcur-{layer_id}-add").reshape((HEAD_DIM, NUM_Q_HEADS, token_num, 1),  order='F'),
         store_dtype='fp16',
     )
     
@@ -983,7 +936,7 @@ def run_final_layer(store: TensorStore, token_num: int):
     timed_op(
         f"Kcur-{layer_id}",
         rope,
-        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Kcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
         store_dtype='fp16',
     )
     
@@ -991,14 +944,14 @@ def run_final_layer(store: TensorStore, token_num: int):
     timed_op(f"Vcur-{layer_id}-add", add, store.get(f"node_{layer_id}_v"), store.get(f"{lid}.attn_v.bias"))
     store_fp16(
         f"Vcur-{layer_id}",
-        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, cur_token_num, 1), order='F'),
+        store.get(f"Vcur-{layer_id}-add").reshape((HEAD_DIM, NUM_KV_HEADS, token_num, 1), order='F'),
     )
     
     # 更新 KV Cache
     update_kv_cache(store, layer_id, store.get(f"Kcur-{layer_id}"), store.get(f"Vcur-{layer_id}"))
     
     # 获取 KV Cache 中最近的 32 倍数的 token
-    k_selected, v_selected = get_kv_for_attention(store, layer_id, cur_token_num)
+    k_selected, v_selected = get_kv_for_attention(store, layer_id, token_num)
     store.set(f"cache_k_l{layer_id}", k_selected)
     store.set(f"cache_v_l{layer_id}", v_selected)
     
@@ -1008,8 +961,8 @@ def run_final_layer(store: TensorStore, token_num: int):
 
     # 新：准备未完全规约的局部累加和（模拟硬件每个Slice上的局部 matmul 结果交由 remote_sum_in）
     k_slice = k_selected
-    if k_selected.shape[1] > cur_token_num:
-        k_slice = k_selected[:, -cur_token_num:, :, :]
+    if k_selected.shape[1] > token_num:
+        k_slice = k_selected[:, -token_num:, :, :]
 
     Qperm = store.get(f"Qcur-{layer_id}-permute")
     
@@ -1026,23 +979,15 @@ def run_final_layer(store: TensorStore, token_num: int):
         # 对于 k_slice (128(HEAD), 32(L_k), 1(H), 1) 和 Qperm (128(HEAD), 32(L_q), 7(H), 1)
         # 本算法 mul_mat 相当于对每个 HEAD (H)，执行 K_slice.T(L_k * HEAD) x Qperm(HEAD * L_q) 得分
         # 这里模拟对应的局部点乘累加
-        p_out = np.zeros((k_slice.shape[1], Qperm.shape[1], NUM_Q_HEADS, 1), dtype=np.float32)
-        for h in range(NUM_Q_HEADS):
-            # 修正 GQA (Grouped-Query Attention) 的 K 头索引
-            h_k = h // (NUM_Q_HEADS // NUM_KV_HEADS)
-            ks = k_slice[start_k:end_k, :, h_k, 0] # shape (slice_k, L_k)
-            qs = Qperm[start_k:end_k, :, h, 0]     # shape (slice_k, L_q)
-            ks_T = ks.T                            # shape (L_k, slice_k)
-            # 修正参数，保证 k 不越界
-            m = ks_T.shape[0]
-            n = qs.shape[1]
-            k_dim = min(ks_T.shape[1], qs.shape[0])
-
-            # hardware matmul 追踪：仅保存第一个 slice 的第一个 head 的 matmul 输入输出作为示例
-            # _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
-            # p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
-            # software matmul 结果也保存一次以供对比
-            p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
+        p_out = np.zeros((32, 32, 7, 1), dtype=np.float32)
+        for h in range(7):
+            h_k = 0 if k_slice.shape[2] == 1 else h # KV cache广播支持
+            ks = k_slice[start_k:end_k, :, h_k, 0] # shape (32, 32)
+            qs = Qperm[start_k:end_k, :, h, 0]   # shape (32, 32)
+            ks_T = ks.T
+            _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
+            # p_out[:, :, h, 0] = matmul_2d(ks_T, qs, ks_T.shape[0], qs.shape[1], ks_T.shape[1], out_dtype=np.float32, debug_trace_path=_trace)
+            p_out[:, :, h, 0] = matmul_2d(ks_T, qs, ks_T.shape[0], qs.shape[1], ks_T.shape[1], out_dtype=np.float32)
         partial_sums_2d.append(p_out)
 
     # 在第一维度拼成 (128, 32, 7, 1) -> 对应 4 个 (32, 32, 7, 1)
@@ -1073,23 +1018,19 @@ def run_final_layer(store: TensorStore, token_num: int):
     timed_matmul_fp16(f"node_{layer_id}_attn_out", v_selected, store.get(f"node_{layer_id}_attn_probs"))
     store_fp16(
         f"kqv_out-{layer_id}",
-        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, cur_token_num, 1, 1), order='F'),
+        store.get(f"node_{layer_id}_attn_out").transpose(0, 2, 1, 3).reshape((HIDDEN_SIZE, token_num, 1, 1), order='F'),
     )
     timed_matmul_fp16(f"node_{layer_id}_attn_final", store.get(f"{lid}.attn_output.weight"), store.get(f"kqv_out-{layer_id}"))
 
     # 单层情形：如果模型只有一层，跳过 get_rows（避免把序列 L 收缩为 1）
-    # if NUM_LAYERS == 1:
-    #     # 直接用完整序列 residual 进入 FFN
-    #     timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
-    # else:
-    #     # 多层情形保留原有的 token gather 行为
-    #     timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
-    #     timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
-    #     timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
-
-    timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
-    timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
-    timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
+    if NUM_LAYERS == 1:
+        # 直接用完整序列 residual 进入 FFN
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_{layer_id}_attn_final"), store.get(input_key))
+    else:
+        # 多层情形保留原有的 token gather 行为
+        timed_op(f"node_attn-{layer_id}", get_rows, store.get(f"node_{layer_id}_attn_final"), store.get("leaf_395"))
+        timed_op(f"l_out_prev-{layer_id}", get_rows, store.get(input_key), store.get("leaf_395"))
+        timed_op(f"ffn_inp-{layer_id}", add, store.get(f"node_attn-{layer_id}"), store.get(f"l_out_prev-{layer_id}"))
     
     timed_op(f"norm_ffn-{layer_id}", rms_norm, store.get(f"ffn_inp-{layer_id}"))
     timed_op(
@@ -1116,10 +1057,10 @@ def run_final_layer(store: TensorStore, token_num: int):
 
     # Final norm and output projection 
     # (纯Python计算 L=32 时的词表投影极慢，且调试单层特征时通常不需要这部分，故注释跳过)
-    timed_op("norm", rms_norm, store.get(f"l_out-{layer_id}"))
-    timed_op("result_norm", mul, store.get("norm"), store.get("output_norm.weight"))
-    timed_op("result_output", mul_mat, store.get("output.weight"), store.get("result_norm"))
-    store.set_debug("result_output", store.get("result_output"))
+    # timed_op("norm", rms_norm, store.get(f"l_out-{layer_id}"))
+    # timed_op("result_norm", mul, store.get("norm"), store.get("output_norm.weight"))
+    # timed_op("result_output", mul_mat, store.get("output.weight"), store.get("result_norm"))
+    # store.set_debug("result_output", store.get("result_output"))
     
     duration = time.time() - start_time
     print(f"✅ Finished layer {layer_id} in {duration:.3f} seconds | Output: l_out-{layer_id} shape = {store.get(f'l_out-{layer_id}').shape}")
@@ -1152,7 +1093,7 @@ if __name__ == "__main__":
 
     # 加载模型权重（非输入）
     # weight_folder = "/mnt/139_nvme2/liudongyan/workspace/CGRA_SIM/cgra_python/op_lib/LLM_golden/prefill_token8_bs1/llamacpp_cpu/model_weights"
-    weight_folder = os.path.join(base_dir, "model_weights_full")
+    weight_folder = os.path.join(base_dir, "model_weights_small")
     print(f"✅ Loading sliced weights from: {weight_folder}")
     if not os.path.exists(weight_folder):
         print(f"❌ Error: Weight folder '{weight_folder}' not found.")
@@ -1161,8 +1102,7 @@ if __name__ == "__main__":
         store.load_from_bin_folder(weight_folder)
 
     # 加载输入张量（inp_embd, leaf_12, leaf_395）
-    # input_folder = "/Users/jielu/Desktop/CGRA mapping/configuration/LLM_python_golden/0316_python_golden/inputs"
-    input_folder = os.path.join(base_dir, "inputs_full")
+    input_folder = "/Users/jielu/Desktop/CGRA mapping/configuration/LLM_python_golden/0316_python_golden/inputs"
     print(f"✅ Loading inputs from local path: {input_folder}")
     store.load_from_bin_folder(input_folder)
 
@@ -1175,8 +1115,7 @@ if __name__ == "__main__":
 
     # 运行 Transformer 模型
     if 'output.weight' in store.store: # 仅在权重加载成功时运行
-        runtime_token_num = store.get("inp_embd").shape[1]  # 运行时真实 token 数
-        output = run_transformer(store, runtime_token_num)
+        output = run_transformer(store, SEQUENCE_LENGTH)
         print("Transformer 输出形状:", output.shape)
     else:
         print("Skipping transformer run due to missing weights.")

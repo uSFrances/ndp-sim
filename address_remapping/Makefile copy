@@ -1,0 +1,50 @@
+#----------------------------------------------------------------------------
+# Project Name  : Soc_lab1
+# File Name     : Makefile
+# Description   : Automated simulation matrix for unit adder check
+#----------------------------------------------------------------------------
+
+# 1. 编译器及仿真参数配置
+VCS 		= vcs -full64 +v2k -sverilog +timescale=1ns/1ps \
+              -debug_acc+all -debug_region+cell+all \
+              -kdb -lcom.log
+
+SIMV 		= ./simv -l sim.log
+
+# 2. 源文件物理网表
+RTL_SRC 	= ./adder.v
+TB_SRC 		= ./tb.sv
+
+# 3. 默认伪目标
+.PHONY: all compile sim wave clean
+
+all: compile sim wave
+
+# 步骤一：编译硬件代码与测试平台
+compile:
+	@echo "========================================"
+	@echo "    正在使用 VCS 编译加法器内核...     "
+	@echo "========================================"
+	$(VCS) $(RTL_SRC) $(TB_SRC)
+
+# 步骤二：执行仿真并生成波形数据
+sim:
+	@echo "========================================"
+	@echo "    正在运行仿真生成波形数据...        "
+	@echo "========================================"
+	$(SIMV)
+
+# 步骤三：启动 Verdi/DVE 查看两级流水线时序波形
+wave:
+	@echo "========================================"
+	@echo "    正在打开 Verdi 查看硬件仿真波形...  "
+	@echo "========================================"
+	verdi -ssf adder_sim.fsdb &
+
+# 步骤四：清理生成的仿真缓存及中间文件
+clean:
+	@echo "========================================"
+	@echo "    正在清理仿真临时中间文件...        "
+	@echo "========================================"
+	rm -rf csrc simv simv.daidir ucli.key vcdplus.vpd
+	rm -rf *.log *.fsdb verdiLog novas*

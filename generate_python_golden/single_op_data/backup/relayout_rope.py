@@ -3,37 +3,6 @@ import os
 import glob
 import re
 import struct
-import json
-
-MODEL_PARAMS = {
-    "hidden_size": 896,
-    "intermediate_size": 1792,
-    "num_attention_heads": 7,
-    "num_key_value_heads": 1,
-    "head_dim": 128,
-    "sequence_length": 32,
-    "slice_per_head": 4,
-    "used_slices": 28,
-    "kv_padding": 256,
-}
-
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-
-def load_model_params(config_path=CONFIG_PATH):
-    params = dict(MODEL_PARAMS)
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ Config not found, using defaults: {config_path}")
-        return params
-
-    for key in params:
-        if key in config:
-            params[key] = config[key]
-    return params
-
-MODEL_PARAMS = load_model_params()
 
 def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
@@ -141,7 +110,7 @@ def infer_rope_params(group_files, target_prefix):
     从文件名精准提取物理参数：
     如果是 128x7x32x1 这种多头结构：
     - total_n = 128
-    - num_heads = 文件中的 head 轴
+    - num_heads = 7
     - tile_m = 32
     如果是 128x32x1x1 这种单头拉平结构：
     - total_n = 128
@@ -166,11 +135,7 @@ def infer_rope_params(group_files, target_prefix):
                 # 对应 128x32 的无独立头平面结构（即单头 head=1）
                 return dims[0], dims[1], 1
                 
-    return (
-        MODEL_PARAMS["head_dim"],
-        MODEL_PARAMS["sequence_length"],
-        MODEL_PARAMS["num_attention_heads"],
-    )
+    return 128, 32, 7
 
 
 def process_rope_tensors(input_dir, output_dir):
@@ -195,11 +160,12 @@ def process_rope_tensors(input_dir, output_dir):
         total_n, tile_m, inferred_heads = infer_rope_params(group_files, target_prefix)
         
         # 当 inferred_heads == 1 时，属于无独立 head 轴数据，
-        # 按照设计：强行虚拟为 num_attention_heads 组。
+        # 按照设计：强行虚拟为 7 组，以让 7 组每组 4 个 slice (共28个) 算一模一样的数据。
         is_head_one_broadcasting = (inferred_heads == 1)
-        current_num_heads = MODEL_PARAMS["num_attention_heads"] if is_head_one_broadcasting else inferred_heads
+        current_num_heads = 7 if is_head_one_broadcasting else inferred_heads
         
-        slices_per_head = MODEL_PARAMS["slice_per_head"]
+        # 28个slice / 7个Head = 每个 Head 拥有 4 个 slice
+        slices_per_head = 4 
         
         print(f"🎯 Processing instance group: '{target_prefix}'")
         print(f"  🧩 [LOCAL PARAM] N={total_n}, M={tile_m}, LogicHeads={current_num_heads}, SlicesPerHead={slices_per_head} (IsBroadcasting={is_head_one_broadcasting})")
@@ -233,7 +199,7 @@ def process_rope_tensors(input_dir, output_dir):
             print(f"📦 Processing: {filename} -> {target_prefix}/{op_id}/{out_name} | F-view Shape: {data.shape}")
 
             # ----------------------------------------------------
-            # 分支 A：原文件带有独立 head 轴的数据
+            # 分支 A：原文件带有 7 维独立 head 轴的数据 (如：128x7x32)
             # ----------------------------------------------------
             if not is_head_one_broadcasting:
                 # 形状为 (N=128, H=7, M=32)
@@ -258,7 +224,7 @@ def process_rope_tensors(input_dir, output_dir):
                         convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
 
             # ----------------------------------------------------
-            # 分支 B：单头无独立轴平面数据，执行 num_attention_heads x slice_per_head 广播复制
+            # 分支 B：单头无独立轴平面数据 (如 128x32)，执行 7x4 广播复制
             # ----------------------------------------------------
             else:
                 # 此时 data 的基本 2D 尺寸即为 (128, 32)，也就是 (物理N, 物理M)

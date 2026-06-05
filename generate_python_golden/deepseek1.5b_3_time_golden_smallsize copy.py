@@ -171,65 +171,65 @@ def mul(x, y):
     return ensure_fp32(x) * ensure_fp32(y)
 
 @log_op
-def matmul_2d(src0, src1, m, n ,k, out_dtype=np.float32):
-    dst_py = np.zeros((m,n), dtype=np.float32) 
+# def matmul_2d(src0, src1, m, n ,k, out_dtype=np.float32):
+#     dst_py = np.zeros((m,n), dtype=np.float32) 
   
-    for i in range(m):          
-        for j in range(n):      
-            sum_val = FLOAT_ACCUM(0.0)       
-            for l in range(k):  
-                # 修正：防止越界
-                if l >= src0.shape[1] or l >= src1.shape[0]:
-                    continue
-                a_val = src0[i, l].astype(FLOAT_ACCUM)
-                b_val = src1[l, j].astype(FLOAT_ACCUM)
-                tmp = a_val * b_val
-                sum_val += tmp
-            dst_py[i, j] = np.float32(sum_val)  
+#     for i in range(m):          
+#         for j in range(n):      
+#             sum_val = FLOAT_ACCUM(0.0)       
+#             for l in range(k):  
+#                 # 修正：防止越界
+#                 if l >= src0.shape[1] or l >= src1.shape[0]:
+#                     continue
+#                 a_val = src0[i, l].astype(FLOAT_ACCUM)
+#                 b_val = src1[l, j].astype(FLOAT_ACCUM)
+#                 tmp = a_val * b_val
+#                 sum_val += tmp
+#             dst_py[i, j] = np.float32(sum_val)  
 
-    return dst_py.astype(out_dtype, copy=False)
+#     return dst_py.astype(out_dtype, copy=False)
 
-# def matmul_2d(src0, src1, m, n, k, out_dtype=np.float32, dot_size=2, debug_trace_path=None):
-#     _maybe_trace = None
-#     if debug_trace_path is not None:
-#         _maybe_trace = open(debug_trace_path, "w", encoding="utf-8")
+def matmul_2d(src0, src1, m, n, k, out_dtype=np.float32, dot_size=2, debug_trace_path=None):
+    _maybe_trace = None
+    if debug_trace_path is not None:
+        _maybe_trace = open(debug_trace_path, "w", encoding="utf-8")
 
-#     dst = np.zeros((m, n), dtype=np.float32)
-#     for i in range(m):
-#         for j in range(n):
-#             psum = np.float32(0.0)
-#             for chunk_start in range(0, k, dot_size):
-#                 dot_val = FLOAT_ACCUM(0.0)
-#                 a_hex_list = []
-#                 b_hex_list = []
-#                 for l in range(chunk_start, chunk_start + dot_size):
-#                     if l < k:
-#                         a_val = src0[i, l].astype(FLOAT_ACCUM)
-#                         b_val = src1[l, j].astype(FLOAT_ACCUM)
-#                         dot_val += a_val * b_val
-#                         if _maybe_trace is not None and i < 2 and j < 2:
-#                             a_hex = f"0x{np.float16(src0[i, l]).view(np.uint16):04X}"
-#                             b_hex = f"0x{np.float16(src1[l, j]).view(np.uint16):04X}"
-#                             a_hex_list.append(a_hex)
-#                             b_hex_list.append(b_hex)
-#                 psum_prev_hex = f"0x{np.float32(psum).view(np.uint32):08X}" if _maybe_trace is not None else ""
-#                 psum = np.float32(FLOAT_ACCUM(psum) + dot_val)
-#                 if _maybe_trace is not None and i < 2 and j < 2:
-#                     dot_f32 = np.float32(dot_val)
-#                     psum_new_hex = f"0x{np.float32(psum).view(np.uint32):08X}"
-#                     dot_hex = f"0x{dot_f32.view(np.uint32):08X}"
-#                     _maybe_trace.write(
-#                         f"i={i},j={j},chunk={chunk_start//dot_size}: "
-#                         f"A=[{','.join(a_hex_list)}] "
-#                         f"B=[{','.join(b_hex_list)}] "
-#                         f"psum_in={psum_prev_hex} "
-#                         f"dot={dot_hex} "
-#                         f"psum_out={psum_new_hex}\n"
-#                     )
-#             dst[i, j] = psum
-#     if _maybe_trace is not None:
-#         _maybe_trace.close()
-#     return dst.astype(out_dtype, copy=False)
+    dst = np.zeros((m, n), dtype=np.float32)
+    for i in range(m):
+        for j in range(n):
+            psum = np.float32(0.0)
+            for chunk_start in range(0, k, dot_size):
+                dot_val = FLOAT_ACCUM(0.0)
+                a_hex_list = []
+                b_hex_list = []
+                for l in range(chunk_start, chunk_start + dot_size):
+                    if l < k:
+                        a_val = src0[i, l].astype(FLOAT_ACCUM)
+                        b_val = src1[l, j].astype(FLOAT_ACCUM)
+                        dot_val += a_val * b_val
+                        if _maybe_trace is not None and i < 2 and j < 2:
+                            a_hex = f"0x{np.float16(src0[i, l]).view(np.uint16):04X}"
+                            b_hex = f"0x{np.float16(src1[l, j]).view(np.uint16):04X}"
+                            a_hex_list.append(a_hex)
+                            b_hex_list.append(b_hex)
+                psum_prev_hex = f"0x{np.float32(psum).view(np.uint32):08X}" if _maybe_trace is not None else ""
+                psum = np.float32(FLOAT_ACCUM(psum) + dot_val)
+                if _maybe_trace is not None and i < 2 and j < 2:
+                    dot_f32 = np.float32(dot_val)
+                    psum_new_hex = f"0x{np.float32(psum).view(np.uint32):08X}"
+                    dot_hex = f"0x{dot_f32.view(np.uint32):08X}"
+                    _maybe_trace.write(
+                        f"i={i},j={j},chunk={chunk_start//dot_size}: "
+                        f"A=[{','.join(a_hex_list)}] "
+                        f"B=[{','.join(b_hex_list)}] "
+                        f"psum_in={psum_prev_hex} "
+                        f"dot={dot_hex} "
+                        f"psum_out={psum_new_hex}\n"
+                    )
+            dst[i, j] = psum
+    if _maybe_trace is not None:
+        _maybe_trace.close()
+    return dst.astype(out_dtype, copy=False)
 
 @log_op
 def mul_mat(src0, src1, out_dtype=np.float32):
@@ -500,38 +500,6 @@ def unary(x):
     return x_fp32 / (1 + np.exp(-x_fp32))
 
 @log_op
-# def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
-#     """
-#     src0: 源 tensor，4D，列优先
-#     src1: 索引 tensor，4D，列优先
-#     返回：根据索引抽取后的 dst tensor，列优先
-#     """
-#     assert src0.ndim == 4
-#     assert src1.ndim == 4
-#     assert src0.dtype in (np.float16, np.float32)
-#     assert src1.dtype == np.int32
-
-#     D0, D1_src, D2, D3 = src0.shape
-#     D0_idx, D1_dst, D2_dst, D3_dst = src1.shape
-#     assert D0_idx == 1, f"src1第一维应为1，当前为{D0_idx}"
-
-#     max_idx = int(np.max(src1))
-#     if max_idx >= D1_src:
-#         print(f"⚠️ get_rows index out of range: max_idx={max_idx}, D1_src={D1_src}, 将自动clamp到[0,{D1_src - 1}]")
-
-#     dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=src0.dtype, order='F')
-
-#     for i1 in range(D1_dst):
-#         for i2 in range(D2_dst):
-#             for i3 in range(D3_dst):
-#                 idx = int(src1[0, i1, i2, i3])  # 显式4D索引
-#                 if idx < 0:
-#                     idx = 0
-#                 elif idx >= D1_src:
-#                     idx = D1_src - 1
-#                 dst[:, i1, i2, i3] = src0[:, idx, i2, i3].reshape(-1)
-
-#     return dst
 def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
     """
     src0: 源 tensor，4D，列优先
@@ -544,16 +512,23 @@ def get_rows(src0: np.ndarray, src1: np.ndarray) -> np.ndarray:
     assert src1.dtype == np.int32
 
     D0, D1_src, D2, D3 = src0.shape
-    _, D1_dst, D2_dst, D3_dst = src1.shape
-    assert (D1_src >= np.max(src1) + 1), "src1索引超出src0范围"
+    D0_idx, D1_dst, D2_dst, D3_dst = src1.shape
+    assert D0_idx == 1, f"src1第一维应为1，当前为{D0_idx}"
+
+    max_idx = int(np.max(src1))
+    if max_idx >= D1_src:
+        print(f"⚠️ get_rows index out of range: max_idx={max_idx}, D1_src={D1_src}, 将自动clamp到[0,{D1_src - 1}]")
 
     dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=src0.dtype, order='F')
 
     for i1 in range(D1_dst):
         for i2 in range(D2_dst):
             for i3 in range(D3_dst):
-                idx = src1[i1, i2, i3]
-                # 加 .reshape(-1)，确保是 (1536,)
+                idx = int(src1[0, i1, i2, i3])  # 显式4D索引
+                if idx < 0:
+                    idx = 0
+                elif idx >= D1_src:
+                    idx = D1_src - 1
                 dst[:, i1, i2, i3] = src0[:, idx, i2, i3].reshape(-1)
 
     return dst
@@ -837,10 +812,10 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
             k_dim = min(ks_T.shape[1], qs.shape[0])
 
             # hardware matmul 追踪：仅保存第一个 slice 的第一个 head 的 matmul 输入输出作为示例
-            # _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
-            # p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
+            _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
+            p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
             # software matmul 结果也保存一次以供对比
-            p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
+            # p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
         partial_sums_2d.append(p_out)
 
     # 在第一维度拼成 (128, 32, 7, 1) -> 对应 4 个 (32, 32, 7, 1)
@@ -1039,10 +1014,10 @@ def run_final_layer(store: TensorStore, token_num: int):
             k_dim = min(ks_T.shape[1], qs.shape[0])
 
             # hardware matmul 追踪：仅保存第一个 slice 的第一个 head 的 matmul 输入输出作为示例
-            # _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
-            # p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
+            _trace = os.path.join(GOLDEN_DIR, f"debug_trace_s{s_idx}_h{h}.txt") if s_idx == 0 and h == 0 else None
+            p_out[:, :, h, 0] = matmul_2d( ks_T,qs, m, n, k_dim, out_dtype=np.float32, debug_trace_path=_trace)
             # software matmul 结果也保存一次以供对比
-            p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
+            # p_out[:, :, h, 0] = matmul_2d(ks_T, qs, m, n, k_dim, out_dtype=np.float32)
         partial_sums_2d.append(p_out)
 
     # 在第一维度拼成 (128, 32, 7, 1) -> 对应 4 个 (32, 32, 7, 1)

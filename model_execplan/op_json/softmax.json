@@ -1,4 +1,16 @@
 {
+  "params": {
+    "hidden_size": 896,
+    "intermediate_size": 1792,
+    "num_attention_heads": 7,
+    "num_key_value_heads": 1,
+    "head_dim": 128,
+    "num_hidden_layers": 1,
+    "sequence_length": 32,
+    "slice_per_head": 4,
+    "used_slices": 28,
+    "target_op": "gemm"
+  },
   "used_slices": 28,
   "operators": [
     {
@@ -9,9 +21,7 @@
         "A": {
           "shape": [1, "sequence_length", "sequence_length"],
           "remapping": null,
-          "source": {
-            "type": "op-1"
-          }
+          "source": "op-1"
         },
         "B": {
           "shape": [1, "sequence_length", "sequence_length"],
@@ -37,7 +47,7 @@
         }
       },
       "output": {
-        "shape": [1, "sequence_length", 1]
+        "shape": [1, 1, "sequence_length"]
       }
     },
     {
@@ -50,7 +60,7 @@
           "source": "op0"
         },
         "B": {
-          "shape": [1, "sequence_length", 1],
+          "shape": [1, 1, "sequence_length"],
           "source": "op1"
         }
       },
@@ -69,7 +79,7 @@
         }
       },
       "output": {
-        "shape": [1, "sequence_length", 1]
+        "shape": [1, 1, "sequence_length"]
       }
     },
      {
@@ -82,7 +92,7 @@
           "source": "op2"
         },
         "B": {
-          "shape": [1, "sequence_length", 1],
+          "shape": [1, 1, "sequence_length"],
           "source": "op3"
         }
       },

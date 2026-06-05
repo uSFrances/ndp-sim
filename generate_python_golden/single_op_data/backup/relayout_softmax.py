@@ -3,37 +3,6 @@ import os
 import glob
 import re
 import struct
-import json
-
-MODEL_PARAMS = {
-    "hidden_size": 896,
-    "intermediate_size": 1792,
-    "num_attention_heads": 7,
-    "num_key_value_heads": 1,
-    "head_dim": 128,
-    "sequence_length": 32,
-    "slice_per_head": 4,
-    "used_slices": 28,
-    "kv_padding": 256,
-}
-
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-
-def load_model_params(config_path=CONFIG_PATH):
-    params = dict(MODEL_PARAMS)
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ Config not found, using defaults: {config_path}")
-        return params
-
-    for key in params:
-        if key in config:
-            params[key] = config[key]
-    return params
-
-MODEL_PARAMS = load_model_params()
 
 def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
@@ -136,7 +105,7 @@ def split_op1_max_slices(head_data, matrix_id, slices_per_group):
 
 def infer_softmax_params(group_files):
     """从文件名里提取大于 1 的核心维度来推导切片参数"""
-    num_heads = MODEL_PARAMS["num_attention_heads"]
+    num_heads = 7
     for fp in group_files:
         filename = os.path.basename(fp)
         m = re.search(r"_shape([\dx]+)_dtype", filename)
@@ -153,6 +122,7 @@ def process_softmax_tensors(input_dir, output_dir):
     """
     print(f"🚀 Starting Softmax tensor relayout in: {input_dir}")
     
+    num_slices = 28
     bin_files = glob.glob(os.path.join(input_dir, "*.bin"))
     
     # 保持您原汁原味的文件查找方式不变
@@ -174,8 +144,7 @@ def process_softmax_tensors(input_dir, output_dir):
             continue
 
         num_heads = infer_softmax_params(group_files)
-        slices_per_group = MODEL_PARAMS["slice_per_head"]
-        num_slices = slices_per_group * num_heads
+        slices_per_group = num_slices // num_heads
         print(f"  🧩 Inferred params from filename: heads={num_heads}, slices_per_group={slices_per_group}")
 
         for filepath in group_files:
