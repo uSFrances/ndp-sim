@@ -354,6 +354,7 @@ def _compute_prefill_gemm_local_control_register_updates(
     input_b_prime = operator.inputs.get("B'")
     a_shape = input_a.shape if input_a is not None else None
     b_shape = input_b.shape if input_b is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
@@ -374,7 +375,7 @@ def _compute_prefill_gemm_local_control_register_updates(
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
     if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
 
     return updates
 
@@ -927,6 +928,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     input_b = operator.inputs.get("B")
     a_shape = input_a.shape if input_a is not None else None
     b_shape = input_b.shape if input_b is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     output_d = operator.output
     (d_k, d_m, d_n) = d_shape
@@ -976,10 +978,8 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         })
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    a_base_addr = _resolve_input_base_addr(operator, address_plan, "A")
-    if a_base_addr is not None:
-        updates["rd_stream1.stream_engine.stream.base_addr"] = parse_base_addr(a_base_addr + 16777216)
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(a_base_addr + 16777280)
+    if b_base_addr is not None :
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
     return updates
 
 def _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates(
@@ -1092,6 +1092,7 @@ def _compute_prefill_gemm_local_qkt_control_register_updates(
     a_shape = input_a.shape if input_a is not None else None
     b_shape = input_b.shape if input_b is not None else None
     b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
     (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
@@ -1128,7 +1129,7 @@ def _compute_prefill_gemm_local_qkt_control_register_updates(
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
     if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 128)
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
 
     return updates
 
