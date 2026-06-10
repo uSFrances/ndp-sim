@@ -812,10 +812,22 @@ def write_install_manifest(
                     )
                 slice_base_addr = assignment.per_slice_addresses[source_slice_id]
                 slice_dir = _format_slice_dir(slice_id)
-                payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}"] = {
-                    "base_addr": _format_hex32(slice_base_addr),
-                    "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit.txt",
-                }
+
+                bank_interleave_val = input_spec.bank_interleave if input_spec is not None else 1
+                if bank_interleave_val <= 1:
+                    payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}"] = {
+                        "base_addr": _format_hex32(slice_base_addr),
+                        "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit.txt",
+                    }
+                else:
+                    base_bank = (slice_base_addr >> 23) & 0x3
+                    bank_mask = ~(0x3 << 23)
+                    for bank_off in range(bank_interleave_val):
+                        bank_addr = (slice_base_addr & bank_mask) | ((base_bank + bank_off) << 23)
+                        payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}_{bank_off}"] = {
+                            "base_addr": _format_hex32(bank_addr),
+                            "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit_{bank_off}.txt",
+                        }
 
         output_key = f"{op.op_id}.output.D"
         output_tensor_name = address_plan.operator_io_to_tensor.get(output_key)
@@ -839,13 +851,28 @@ def write_install_manifest(
                 )
             slice_base_addr = output_assignment.per_slice_addresses[source_slice_id]
             slice_dir = _format_slice_dir(slice_id)
-            payload[f"{op.op_id}_matrixD_slice{slice_id}"] = {
-                "base_addr": _format_hex32(slice_base_addr),
-                "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.txt",
-            }
+
+            bank_interleave_val = op.output.bank_interleave
+            if bank_interleave_val <= 1:
+                payload[f"{op.op_id}_matrixD_slice{slice_id}"] = {
+                    "base_addr": _format_hex32(slice_base_addr),
+                    "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.txt",
+                }
+            else:
+                base_bank = (slice_base_addr >> 23) & 0x3
+                bank_mask = ~(0x3 << 23)
+                for bank_off in range(bank_interleave_val):
+                    bank_addr = (slice_base_addr & bank_mask) | ((base_bank + bank_off) << 23)
+                    payload[f"{op.op_id}_matrixD_slice{slice_id}_{bank_off}"] = {
+                        "base_addr": _format_hex32(bank_addr),
+                        "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit_{bank_off}.txt",
+                    }
 
     # Deduplicate config entries: operators of the same type share one payload.
-    seen_config_types: set[str] = set()
+    # Only the *first* operator of each type gets a manifest key so that the
+    # bank exporter does not see multiple entries for the same address range.
+    seen_config_types: dict[str, dict[str, object]] = {}
+    seen_sfu_types: set[str] = set()
     for op in execution_input.operators:
         template = templates.get(op.op_id)
         if template is None:
@@ -854,10 +881,7 @@ def write_install_manifest(
         if config_len <= 0:
             continue
         if op.op_type in seen_config_types:
-            # Reuse the already-emitted config entry.
-            payload[f"{op.op_id}_config"] = payload[f"{op.op_type}_config"]
             continue
-        seen_config_types.add(op.op_type)
 
         config_base_addr = address_plan.operator_config_base_addresses.get(op.op_id)
         if config_base_addr is None:
@@ -874,16 +898,16 @@ def write_install_manifest(
         dst_cfg_path = cfg_pkg_dir / src_cfg_path.name
         _copy_overwrite_writable(src_cfg_path, dst_cfg_path)
         cfg_path = f"install/cfg_pkg/{src_cfg_path.name}"
-        cfg_item = {
+        cfg_item: dict[str, object] = {
             "base_addr": _format_hex32(config_base_addr),
             "path": cfg_path,
         }
-        # Emit one canonical entry keyed by op_type, then alias per-operator.
-        payload[f"{op.op_type}_config"] = cfg_item
+        seen_config_types[op.op_type] = cfg_item
         payload[f"{op.op_id}_config"] = cfg_item
 
         sfu_type = template.config_sfu_type
-        if sfu_type is not None:
+        if sfu_type is not None and sfu_type not in seen_sfu_types:
+            seen_sfu_types.add(sfu_type)
             sfu_len = int(template.sfu_config_length or 0)
             if sfu_len <= 0:
                 raise ValueError(

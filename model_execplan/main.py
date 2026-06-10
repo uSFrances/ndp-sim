@@ -60,8 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bank-output-format",
         choices=["binary", "hex"],
-        default="binary",
-        help="Bank data output format: binary or hex (default: binary)",
+        default="hex",
+        help="Bank data output format: binary or hex (default: hex)",
     )
     parser.add_argument(
         "-e",
