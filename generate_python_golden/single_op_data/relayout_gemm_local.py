@@ -43,8 +43,16 @@ def float32_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', np.float32(f)))[0])[2:].zfill(32)
 
-def convert_to_decimal_txt(bin_path, rows=None, cols=None, dtype=np.float16):
+def dtype_from_filename(filepath):
+    match = re.search(r"_dtype_(f16|f32|float16|float32)", os.path.basename(filepath).lower())
+    if not match:
+        raise ValueError(f"Cannot determine dtype from filename: {filepath}")
+    return np.float16 if match.group(1) in ("f16", "float16") else np.float32
+
+def convert_to_decimal_txt(bin_path, rows=None, cols=None, dtype=None):
     """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）；对于 relayout 后的数据一维展开"""
+    if dtype is None:
+        dtype = dtype_from_filename(bin_path)
     data = np.fromfile(bin_path, dtype=dtype)
     
     if "beforerelayout" not in bin_path:
@@ -66,8 +74,10 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None, dtype=np.float16):
             f.write(",".join(f"{float(v):.17g}" for v in matrix[r]))
             f.write("\n")
 
-def convert_to_128bit_txt(bin_path, rows=None, cols=None, dtype=np.float16):
+def convert_to_128bit_txt(bin_path, rows=None, cols=None, dtype=None):
     """读取 bin 文件并输出为每行 128-bit (8个float16 或 4个float32) 的 txt 文件(二进制格式)"""
+    if dtype is None:
+        dtype = dtype_from_filename(bin_path)
     data = np.fromfile(bin_path, dtype=dtype)
 
     if dtype == np.float16:
@@ -227,7 +237,9 @@ def get_matrix_name(filename):
     if "_out" in filename: return "D"
     return "unknown_matrix"
 
-def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d, dtype=np.float16):
+def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d, dtype=None):
+    if dtype is None:
+        dtype = matrix_2d.dtype
     matrix_2d = np.asarray(matrix_2d, dtype=dtype)
     if matrix_2d.ndim == 1:
         matrix_2d = matrix_2d.reshape(-1, 1)
@@ -313,8 +325,8 @@ def process_gemm_local_tensors(input_dir, output_dir):
             
             shape = tuple(map(int, match.group(1).split('x')))
             
-            # 判断 dtype，只有 attn_scores 组的 out 维持 fp32，其余全为 fp16
-            file_dtype = np.float32 if (is_attn_scores_group and "_out" in filename) else np.float16
+            # 严格读取文件名中的 dtype，不再根据算子组或 in/out 猜测。
+            file_dtype = dtype_from_filename(filename)
             data = np.fromfile(filepath, dtype=file_dtype).reshape(shape, order='F')
             
             op_id = get_op_id(filename)

@@ -205,7 +205,7 @@ def main():
     print(f"已生成: {out_path}")
 
     # 新增：保存 op 到模板文件来源的映射列表
-    mapping_out_path = out_path.with_name(out_path.stem + "_mapping.json")
+    mapping_out_path = out_path.with_name(out_path.stem + "_op_listing.json")
     with mapping_out_path.open("w", encoding="utf-8") as f:
         json.dump(op_mapping, f, ensure_ascii=False, indent=2)
     print(f"已生成映射: {mapping_out_path}")

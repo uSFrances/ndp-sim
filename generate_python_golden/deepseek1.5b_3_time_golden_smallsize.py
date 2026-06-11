@@ -50,6 +50,9 @@ os.makedirs(SUB_OP_DIR, exist_ok=True)
 
 # 追踪当前运行的算子名称前缀
 CURRENT_NODE_PREFIX = ""
+# 当前节点最终输出保存到 TensorStore 时使用的 dtype。
+# subop 的最终输出用它与节点 out 保持一致。
+CURRENT_NODE_STORE_DTYPE = None
 
 def save_io_tensor(name, tensor, is_sub_op=False):
     """根据节点名称，保存其输入/输出张量"""
@@ -399,7 +402,16 @@ def rope(x):
         add_in1[ne0//2:,:,:,:] = mul2_out[0:ne0//2,:,:,:] # x0_sin
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-add_final_in0", add_in0, is_sub_op=True)
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-add_final_in1", add_in1, is_sub_op=True)
-        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-add_final_out", add_out, is_sub_op=True)
+        add_final_out = add_out
+        if CURRENT_NODE_STORE_DTYPE == "fp16":
+            add_final_out = add_out.astype(np.float16)
+        elif CURRENT_NODE_STORE_DTYPE == "fp32":
+            add_final_out = add_out.astype(np.float32)
+        save_io_tensor(
+            f"{CURRENT_NODE_PREFIX}_subop-add_final_out",
+            add_final_out,
+            is_sub_op=True,
+        )
         
     return dst
 
@@ -490,7 +502,16 @@ def soft_max(x, mask=None):
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sub_SFU_out", sub_SFU_out_re, is_sub_op=True)
         # op3 输出：sum_SFU 的结果是倒数
         save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-sum_SFU_out", sum_SFU_out_re, is_sub_op=True)
-        save_io_tensor(f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_out", dst_python, is_sub_op=True)
+        mul_out = dst_python
+        if CURRENT_NODE_STORE_DTYPE == "fp16":
+            mul_out = dst_python.astype(np.float16)
+        elif CURRENT_NODE_STORE_DTYPE == "fp32":
+            mul_out = dst_python.astype(np.float32)
+        save_io_tensor(
+            f"{CURRENT_NODE_PREFIX}_subop-mul_MN_M_out",
+            mul_out,
+            is_sub_op=True,
+        )
 
     return dst_python
 
@@ -708,13 +729,14 @@ class TensorStore:
 
 def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
     def timed_op(name: str, func, *args, store_dtype=None, **kwargs):
-        global CURRENT_NODE_PREFIX
+        global CURRENT_NODE_PREFIX, CURRENT_NODE_STORE_DTYPE
         op_name = func.__name__
         # 拼接：层数 + 节点名 + 算子名
         prefix = f"blk.{layer_id}_{name}_op-{op_name}"
         
         # 激活全局节点追踪以进行 sub_op 保存
         CURRENT_NODE_PREFIX = prefix
+        CURRENT_NODE_STORE_DTYPE = store_dtype
         
         # 1. 自动保存带有名称的输入节点张量
         for i, arg in enumerate(args):
@@ -735,6 +757,7 @@ def run_transformer_layer(store: TensorStore, layer_id: int, token_num: int):
             
         store.set(name, result)
         CURRENT_NODE_PREFIX = ""
+        CURRENT_NODE_STORE_DTYPE = None
 
     def timed_matmul_fp16(name: str, lhs: np.ndarray, rhs: np.ndarray):
         timed_op(
@@ -921,11 +944,12 @@ def run_final_layer(store: TensorStore, token_num: int):
 
     # 此处同样植入带跟踪的 timed_op，替换原来的 store.set
     def timed_op(name: str, func, *args, store_dtype=None, **kwargs):
-        global CURRENT_NODE_PREFIX
+        global CURRENT_NODE_PREFIX, CURRENT_NODE_STORE_DTYPE
         op_name = func.__name__
         prefix = f"blk.{layer_id}_{name}_op-{op_name}"
         
         CURRENT_NODE_PREFIX = prefix
+        CURRENT_NODE_STORE_DTYPE = store_dtype
         for i, arg in enumerate(args):
             if isinstance(arg, np.ndarray): save_io_tensor(f"{prefix}_in{i}", arg)
         result = func(*args, **kwargs)
@@ -934,6 +958,7 @@ def run_final_layer(store: TensorStore, token_num: int):
         if isinstance(result, np.ndarray): save_io_tensor(f"{prefix}_out", result)
         store.set(name, result)
         CURRENT_NODE_PREFIX = ""
+        CURRENT_NODE_STORE_DTYPE = None
 
     def timed_matmul_fp16(name: str, lhs: np.ndarray, rhs: np.ndarray):
         timed_op(
@@ -1152,7 +1177,7 @@ if __name__ == "__main__":
 
     # 加载模型权重（非输入）
     # weight_folder = "/mnt/139_nvme2/liudongyan/workspace/CGRA_SIM/cgra_python/op_lib/LLM_golden/prefill_token8_bs1/llamacpp_cpu/model_weights"
-    weight_folder = os.path.join(base_dir, "model_weights_full")
+    weight_folder = os.path.join(base_dir, "model_weights_small")
     print(f"✅ Loading sliced weights from: {weight_folder}")
     if not os.path.exists(weight_folder):
         print(f"❌ Error: Weight folder '{weight_folder}' not found.")
@@ -1162,7 +1187,7 @@ if __name__ == "__main__":
 
     # 加载输入张量（inp_embd, leaf_12, leaf_395）
     # input_folder = "/Users/jielu/Desktop/CGRA mapping/configuration/LLM_python_golden/0316_python_golden/inputs"
-    input_folder = os.path.join(base_dir, "inputs_full")
+    input_folder = os.path.join(base_dir, "inputs_32")
     print(f"✅ Loading inputs from local path: {input_folder}")
     store.load_from_bin_folder(input_folder)
 
