@@ -205,9 +205,12 @@ class ExecutionPlanPipeline:
             # Apply the updated register baseline to every operator of this type.
             # Also recompute control_register_values so that instance mappings
             # reflect the regenerated physical assignment.
+            # config_length is measured in 64-bit words; the 128b file gives
+            # a more accurate count because it avoids chunk-boundary padding
+            # artefacts that can appear in the 64b representation.
             regen_config_length = _count_non_empty_lines(
-                op_dir / f"{op.op_type}_bitstream_64b.bin"
-            )
+                op_dir / f"{op.op_type}_bitstream_128b.bin"
+            ) * 2
             for op2 in execution_input.operators:
                 if op2.op_type != op.op_type:
                     continue

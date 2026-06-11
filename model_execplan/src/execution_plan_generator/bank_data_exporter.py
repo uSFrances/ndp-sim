@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SLICE_RE = re.compile(r"_slice(\d+)$")
+_SLICE_BANK_RE = re.compile(r"_slice(\d+)(?:_(\d+))?$")
 
 
 @dataclass(frozen=True)
@@ -48,10 +48,18 @@ def _load_manifest(manifest_path: Path) -> dict[str, object]:
 
 
 def _extract_slice_id(entry_key: str) -> int:
-    match = _SLICE_RE.search(entry_key)
+    match = _SLICE_BANK_RE.search(entry_key)
     if match is None:
         raise ValueError(f"Cannot parse slice id from key: {entry_key}")
     return int(match.group(1))
+
+
+def _extract_bank_id(entry_key: str) -> int | None:
+    match = _SLICE_BANK_RE.search(entry_key)
+    if match is None:
+        return None
+    bank_str = match.group(2)
+    return int(bank_str) if bank_str is not None else None
 
 
 def _resolve_slice_id(entry_key: str, base_addr: int) -> int:
@@ -65,31 +73,96 @@ def _resolve_slice_id(entry_key: str, base_addr: int) -> int:
 def _load_matrix_payload_bytes(data_path: Path) -> bytes | None:
     if data_path.is_file():
         if data_path.suffix.lower() == ".txt":
-            return _parse_128bit_txt(data_path)
-        return data_path.read_bytes()
+            return _parse_variable_width_txt(data_path)
+        # Some bitstream files use .bin extension but contain text
+        # (128-bit / 64-bit binary strings).  Auto-detect by peeking at
+        # the first few bytes.
+        raw = data_path.read_bytes()
+        if _is_binary_text(raw):
+            return _parse_bytes_as_variable_width(raw)
+        return raw
 
     # Manifest may point to .txt while data exists as .bin, or vice versa.
     alt_path = data_path.with_suffix(".bin") if data_path.suffix.lower() != ".bin" else data_path.with_suffix(".txt")
     if alt_path.is_file():
         if alt_path.suffix.lower() == ".bin":
-            return alt_path.read_bytes()
-        return _parse_128bit_txt(alt_path)
+            raw = alt_path.read_bytes()
+            if _is_binary_text(raw):
+                return _parse_bytes_as_variable_width(raw)
+            return raw
+        return _parse_variable_width_txt(alt_path)
+    return None
+
+
+def _is_binary_text(data: bytes) -> bool:
+    """Return True if *data* looks like a text file of 0/1 strings."""
+    if not data:
+        return False
+    sample = data[:256].decode("ascii", errors="replace")
+    allowed = set("01\r\n\t ")
+    return all(ch in allowed for ch in sample)
+
+
+def _parse_bytes_as_variable_width(raw: bytes) -> bytes:
+    """Parse bytes containing 0/1 text lines into packed little-endian words."""
+    text = raw.decode("ascii")
+    words: list[bytes] = []
+    detected_width: int | None = None
+    for line in text.splitlines():
+        bits = line.strip()
+        if not bits:
+            continue
+        if any(ch not in "01" for ch in bits):
+            raise ValueError(f"Invalid binary text: {bits[:64]}...")
+        if detected_width is None:
+            detected_width = len(bits)
+            if detected_width not in (64, 128):
+                raise ValueError(f"Unsupported line width {detected_width}")
+        if len(bits) != detected_width:
+            raise ValueError(
+                f"Mixed line widths: expected {detected_width}, got {len(bits)}"
+            )
+        byte_count = detected_width // 8
+        words.append(
+            int(bits, 2).to_bytes(byte_count, byteorder="little", signed=False)
+        )
+    return b"".join(words)
 
     return None
 
 
-def _parse_128bit_txt(txt_path: Path) -> bytes:
+def _parse_variable_width_txt(txt_path: Path) -> bytes:
+    """Parse a binary text file that may contain 64-bit or 128-bit lines.
+
+    SFU coefficient tables use 64-bit lines; regular matrix data uses
+    128-bit lines.  The function auto-detects the width from the first
+    non-empty line and treats all subsequent lines the same way.
+    """
     words: list[bytes] = []
+    detected_width: int | None = None
     with txt_path.open("r", encoding="utf-8") as f:
         for line in f:
             bits = line.strip()
             if not bits:
                 continue
-            if len(bits) != 128 or any(ch not in "01" for ch in bits):
-                raise ValueError(f"Invalid 128-bit binary line in {txt_path}: {bits[:64]}...")
-            # Keep txt binary payloads in the same presentation order; the
-            # downstream writer already emits words in little-endian form.
-            words.append(int(bits, 2).to_bytes(16, byteorder="little", signed=False))
+            if any(ch not in "01" for ch in bits):
+                raise ValueError(
+                    f"Invalid binary line in {txt_path}: {bits[:64]}..."
+                )
+            if detected_width is None:
+                detected_width = len(bits)
+                if detected_width not in (64, 128):
+                    raise ValueError(
+                        f"Unsupported line width {detected_width} in {txt_path}"
+                    )
+            if len(bits) != detected_width:
+                raise ValueError(
+                    f"Mixed line widths in {txt_path}: expected {detected_width}, got {len(bits)}"
+                )
+            byte_count = detected_width // 8
+            words.append(
+                int(bits, 2).to_bytes(byte_count, byteorder="little", signed=False)
+            )
     return b"".join(words)
 
 
@@ -172,10 +245,11 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
             file_bytes = file_bytes + (b"\x00" * pad)
 
         slave, bank, _, _, _ = _decode_addr_fields(base_addr)
-        # if slave != slice_id:
-        #     raise ValueError(
-        #         f"Slice mismatch for {key}: key slice={slice_id}, addr slave={slave}, addr=0x{base_addr:08X}"
-        #     )
+        key_bank = _extract_bank_id(key)
+        if key_bank is not None and key_bank != bank:
+            raise ValueError(
+                f"Bank mismatch for {key}: key bank={key_bank}, addr bank={bank}"
+            )
 
         payloads.append(
             MatrixPayload(
