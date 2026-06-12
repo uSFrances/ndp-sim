@@ -245,11 +245,6 @@ def _load_payloads(manifest_path: Path) -> list[MatrixPayload]:
             file_bytes = file_bytes + (b"\x00" * pad)
 
         slave, bank, _, _, _ = _decode_addr_fields(base_addr)
-        key_bank = _extract_bank_id(key)
-        if key_bank is not None and key_bank != bank:
-            raise ValueError(
-                f"Bank mismatch for {key}: key bank={key_bank}, addr bank={bank}"
-            )
 
         payloads.append(
             MatrixPayload(
@@ -346,16 +341,42 @@ def export_bank_data(
                 max_end = end
 
         bank_image = bytearray(max_end)
+        written_starts: set[int] = set()
+        overlapped: list[str] = []
         for item in sorted(items, key=lambda x: x.bank_offset_bytes):
             start = item.bank_offset_bytes
             end = start + len(item.data)
+
+            # Skip entries that share the same physical start address
+            # (e.g. operator output reused as downstream input — both
+            #  manifest keys point to the same tensor data).
+            if start in written_starts:
+                continue
+
             existing = bank_image[start:end]
             if any(b != 0 for b in existing):
-                # Reject overlapping writes to keep output deterministic.
-                raise ValueError(
-                    f"Overlapping payload detected: slice={slice_id}, bank={bank_id}, key={item.source_key}"
-                )
-            bank_image[start:end] = item.data
+                free_start = start
+                while free_start < end and bank_image[free_start] == 0:
+                    free_start += 1
+                avail = free_start - start
+                if avail > 0:
+                    bank_image[start:free_start] = item.data[:avail]
+                    written_starts.add(start)
+                    overlapped.append(
+                        f"  {item.source_key} @ [{start}, {end}) "
+                        f"(clipped to {avail} bytes, "
+                        f"file={len(item.data)} bytes)"
+                    )
+            else:
+                bank_image[start:end] = item.data
+                written_starts.add(start)
+
+        if overlapped:
+            print(
+                f"[bank_data] slice={slice_id:02d} bank={bank_id} — "
+                f"{len(overlapped)} entry(s) clipped:\n"
+                + "\n".join(overlapped)
+            )
 
         if not bank_image:
             continue

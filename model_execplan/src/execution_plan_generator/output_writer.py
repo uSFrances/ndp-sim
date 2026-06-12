@@ -784,10 +784,6 @@ def write_install_manifest(
             if input_name == "B'":
                 continue
             input_spec = op.inputs.get(input_name)
-            # if input_spec is not None and input_spec.source is not None:
-            #     if input_spec.source.source_type == InputSourceType.OPERATOR:
-            #         # Input reuses a previous operator output; avoid duplicate manifest entry.
-            #         continue
             io_key = f"{op.op_id}.input.{input_name}"
             tensor_name = address_plan.operator_io_to_tensor.get(io_key)
             if tensor_name is None:
