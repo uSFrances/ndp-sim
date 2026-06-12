@@ -943,15 +943,15 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * b_k) if b_k is not None else 0,
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(b_n // 2) if b_n is not None else 0,
-        "se_nse0.n2n.mem_loop":b_k//a_k - 1 if a_k is not None and b_k is not None and a_k != 0 else 0,
+        "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
         "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
-        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 4 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
     }
 
 

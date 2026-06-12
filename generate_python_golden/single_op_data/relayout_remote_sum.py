@@ -39,9 +39,22 @@ def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
-def convert_to_decimal_txt(bin_path, rows=None, cols=None):
+def float16_to_bin(f):
+    return bin(struct.unpack('<H', struct.pack('<e', np.float16(f)))[0])[2:].zfill(16)
+
+def dtype_from_tag(tag):
+    tag = tag.lower()
+    if tag in ("f16", "float16"):
+        return np.float16
+    if tag in ("f32", "float32"):
+        return np.float32
+    raise ValueError(f"Unsupported dtype tag: {tag}")
+
+def convert_to_decimal_txt(bin_path, rows=None, cols=None, file_dtype=None):
     """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）；对于 relayout 后的数据一维展开"""
-    data = np.fromfile(bin_path, dtype=np.float32)
+    if file_dtype is None:
+        raise ValueError(f"file_dtype is required for generated file: {bin_path}")
+    data = np.fromfile(bin_path, dtype=file_dtype)
 
     if "beforerelayout" not in bin_path:
         txt_path = bin_path.replace('.bin', '_decimal_1d.txt')
@@ -62,24 +75,26 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
             f.write("\n")
 
-def convert_to_128bit_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出为每行 128-bit (4个float32) 的 txt 文件(二进制格式)"""
-    data = np.fromfile(bin_path, dtype=np.float32)
-
-    remainder = len(data) % 4
-    if remainder != 0:
-        data = np.concatenate((data, np.zeros(4 - remainder, dtype=np.float32)))
+def convert_to_128bit_txt(bin_path, rows=None, cols=None, file_dtype=None):
+    """按真实 dtype 输出每行 128-bit：8个float16 或4个float32。"""
+    if file_dtype is None:
+        raise ValueError(f"file_dtype is required for generated file: {bin_path}")
+    data = np.fromfile(bin_path, dtype=file_dtype)
+    values_per_line = 8 if file_dtype == np.float16 else 4
+    remainder = len(data) % values_per_line
+    if remainder:
+        data = np.concatenate(
+            (data, np.zeros(values_per_line - remainder, dtype=file_dtype))
+        )
 
     txt_path = bin_path.replace('.bin', '.txt')
     with open(txt_path, 'w') as f:
-        for i in range(0, len(data), 4):
-            str_float0 = float_to_bin(data[i])
-            str_float1 = float_to_bin(data[i + 1])
-            str_float2 = float_to_bin(data[i + 2])
-            str_float3 = float_to_bin(data[i + 3])
-            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
+        converter = float16_to_bin if file_dtype == np.float16 else float_to_bin
+        for i in range(0, len(data), values_per_line):
+            bins = [converter(value) for value in data[i:i + values_per_line]]
+            f.write("".join(reversed(bins)) + "\n")
 
-    convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
+    convert_to_decimal_txt(bin_path, rows=rows, cols=cols, file_dtype=file_dtype)
 
 # ==============================================================================
 # 新增 remote_sum 专用 M8N 规则
@@ -120,14 +135,14 @@ def get_matrix_name(filename):
     return "unknown_matrix"
 
 def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d):
-    matrix_2d = np.asarray(matrix_2d, dtype=np.float32)
+    matrix_2d = np.asarray(matrix_2d)
     if matrix_2d.ndim == 1:
         matrix_2d = matrix_2d.reshape(-1, 1)
     slice_dir = os.path.join(before_install_dir, op_id, f"slice{slice_idx:02d}")
     os.makedirs(slice_dir, exist_ok=True)
     out_path = os.path.join(slice_dir, out_name)
     matrix_2d.reshape(-1, order='C').tofile(out_path)
-    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
+    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1], file_dtype=matrix_2d.dtype)
 
 def parse_tensor_file_info(filename):
     # 关键修复：先去掉 .bin，再按 stem 匹配
@@ -221,8 +236,8 @@ def process_remote_sum_tensors(input_dir, output_dir):
         # in0: (N128, L32, H7, 1)
         # -> 每个 H 切 4 份，每份 (N//4, L)
         # ----------------------------
-        in0_dtype = np.float16 if "f16" in in0_info["dtype"] else np.float32
-        in0_raw = np.fromfile(in0_fp, dtype=in0_dtype).astype(np.float32)
+        in0_dtype = dtype_from_tag(in0_info["dtype"])
+        in0_raw = np.fromfile(in0_fp, dtype=in0_dtype)
         in0_4d = in0_raw.reshape(in0_info["shape"], order='F')
 
         for h_idx in range(H):
@@ -239,14 +254,14 @@ def process_remote_sum_tensors(input_dir, output_dir):
 
                 rel = relayout_in0_M8N(slice_2d)
                 rel.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=slice_2d.shape[0], cols=slice_2d.shape[1])
+                convert_to_128bit_txt(out_path, rows=slice_2d.shape[0], cols=slice_2d.shape[1], file_dtype=rel.dtype)
 
         # ----------------------------
         # out: (N32, L32, H7, 1)
         # -> 每个 H 的 (N, L) 基础块复制给 slice00-03
         # ----------------------------
-        out_dtype = np.float16 if "f16" in out_info["dtype"] else np.float32
-        out_raw = np.fromfile(out_fp, dtype=out_dtype).astype(np.float32)
+        out_dtype = dtype_from_tag(out_info["dtype"])
+        out_raw = np.fromfile(out_fp, dtype=out_dtype)
         out_4d = out_raw.reshape(out_info["shape"], order='F')
 
         for h_idx in range(out_H):
@@ -262,7 +277,7 @@ def process_remote_sum_tensors(input_dir, output_dir):
 
                 rel = relayout_out_M8N(base_slice)
                 rel.tofile(out_path)
-                convert_to_128bit_txt(out_path, rows=base_slice.shape[0], cols=base_slice.shape[1])
+                convert_to_128bit_txt(out_path, rows=base_slice.shape[0], cols=base_slice.shape[1], file_dtype=rel.dtype)
 
         print(f"✅ Finished instance group: {target_prefix} -> {group_output_dir}")
 

@@ -39,9 +39,20 @@ def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
-def convert_to_decimal_txt(bin_path, rows=None, cols=None):
+def float16_to_bin(f):
+    return bin(struct.unpack('<H', struct.pack('<e', np.float16(f)))[0])[2:].zfill(16)
+
+def dtype_from_filename(filepath):
+    match = re.search(r"_dtype_(f16|f32|float16|float32)", os.path.basename(filepath).lower())
+    if not match:
+        raise ValueError(f"Cannot determine dtype from filename: {filepath}")
+    return np.float16 if match.group(1) in ("f16", "float16") else np.float32
+
+def convert_to_decimal_txt(bin_path, rows=None, cols=None, file_dtype=None):
     """读取 bin 文件并输出十进制矩阵 txt；对于 relayout 后的数据一维展开"""
-    data = np.fromfile(bin_path, dtype=np.float32)
+    if file_dtype is None:
+        file_dtype = dtype_from_filename(bin_path)
+    data = np.fromfile(bin_path, dtype=file_dtype)
     
     # 执行过 relayout 后的数据，直接按一维展开输出
     if "beforerelayout" not in bin_path:
@@ -64,24 +75,26 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
             f.write("\n")
 
-def convert_to_128bit_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出为每行 128-bit (4个float32) 的 txt 文件(二进制格式)"""
-    data = np.fromfile(bin_path, dtype=np.float32)
-
-    remainder = len(data) % 4
-    if remainder != 0:
-        data = np.concatenate((data, np.zeros(4 - remainder, dtype=np.float32)))
+def convert_to_128bit_txt(bin_path, rows=None, cols=None, file_dtype=None):
+    """按真实 dtype 输出每行 128-bit：8个float16 或4个float32。"""
+    if file_dtype is None:
+        file_dtype = dtype_from_filename(bin_path)
+    data = np.fromfile(bin_path, dtype=file_dtype)
+    values_per_line = 8 if file_dtype == np.float16 else 4
+    remainder = len(data) % values_per_line
+    if remainder:
+        data = np.concatenate(
+            (data, np.zeros(values_per_line - remainder, dtype=file_dtype))
+        )
 
     txt_path = bin_path.replace('.bin', '.txt')
     with open(txt_path, 'w') as f:
-        for i in range(0, len(data), 4):
-            str_float0 = float_to_bin(data[i])
-            str_float1 = float_to_bin(data[i+1])
-            str_float2 = float_to_bin(data[i+2])
-            str_float3 = float_to_bin(data[i+3])
-            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
+        converter = float16_to_bin if file_dtype == np.float16 else float_to_bin
+        for i in range(0, len(data), values_per_line):
+            bins = [converter(value) for value in data[i:i + values_per_line]]
+            f.write("".join(reversed(bins)) + "\n")
 
-    convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
+    convert_to_decimal_txt(bin_path, rows=rows, cols=cols, file_dtype=file_dtype)
 
 def relayout_slice_M8_N(slice_data):
     """
@@ -129,7 +142,7 @@ def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, slice_d
     # 严格按照当前切片真实的内存排布直接导出
     slice_data.tofile(out_path)
     # 传入真实的物理维度形状用于生成 decimal 文件
-    convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
+    convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1], file_dtype=slice_data.dtype)
 
 def infer_group_params_from_filename(group_files):
     """
@@ -230,7 +243,8 @@ def process_rmsnorm_tensors(
                 shape = (shape[0], 1)
 
             # 严格使用 F-style 还原出直接对应文件名的二维物理视图 (物理N, 物理M)
-            data_2d = np.fromfile(filepath, dtype=np.float32).reshape(shape, order='F')
+            file_dtype = dtype_from_filename(filename)
+            data_2d = np.fromfile(filepath, dtype=file_dtype).reshape(shape, order='F')
 
             op_id = get_op_id(filename)
             matrix_id = get_matrix_name(filename)
@@ -256,7 +270,7 @@ def process_rmsnorm_tensors(
 
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1])
+                    convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1], file_dtype=relayout_data.dtype)
 
             # 2. 统计中间量模式：形状为 (tile_m, inferred_slices)
             elif data_2d.shape == (tile_m, inferred_slices):
@@ -271,7 +285,7 @@ def process_rmsnorm_tensors(
 
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1])
+                    convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1], file_dtype=relayout_data.dtype)
 
             # 3. 归一化广播向量模式：形状为 (tile_m, 1)
             elif data_2d.shape == (tile_m, 1):
@@ -284,7 +298,7 @@ def process_rmsnorm_tensors(
 
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1])
+                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1], file_dtype=relayout_data.dtype)
 
             else:
                 print(f"  ⚠️ Skipping unrecognized shape pattern: {data_2d.shape}")
@@ -341,13 +355,14 @@ def process_rmsnorm_tensors(
             if caseA_candidates:
                 caseA_candidates.sort(key=lambda x: (x[0], x[2]))
                 _, src_fp, src_fn = caseA_candidates[0]
-                src_2d = np.fromfile(src_fp, dtype=np.float32).reshape((total_n, tile_m), order='F')
+                src_dtype = dtype_from_filename(src_fn)
+                src_2d = np.fromfile(src_fp, dtype=src_dtype).reshape((total_n, tile_m), order='F')
 
                 padded_N = next_power_of_two(total_n)
                 if padded_N == total_n:
                     padded = src_2d
                 else:
-                    padded = np.zeros((padded_N, tile_m), dtype=np.float32, order='F')
+                    padded = np.zeros((padded_N, tile_m), dtype=src_2d.dtype, order='F')
                     padded[:total_n, :] = src_2d
 
                 slice_n = padded_N // slices_per_group
@@ -383,7 +398,8 @@ def process_rmsnorm_tensors(
                 data_2d = kv_caseA_sum_matrix
                 print(f"  ♻️ Replaced source for {filename} with {os.path.basename(kv_caseA_sum_bin_path)}")
             else:
-                data_2d = np.fromfile(filepath, dtype=np.float32).reshape(shape, order='F')
+                file_dtype = dtype_from_filename(filename)
+                data_2d = np.fromfile(filepath, dtype=file_dtype).reshape(shape, order='F')
 
             op_id = get_op_id(filename)
             matrix_id = get_matrix_name(filename)
@@ -401,7 +417,7 @@ def process_rmsnorm_tensors(
                 if padded_N == orig_N:
                     padded = data_2d
                 else:
-                    padded = np.zeros((padded_N, phys_M), dtype=np.float32, order='F')
+                    padded = np.zeros((padded_N, phys_M), dtype=data_2d.dtype, order='F')
                     padded[:orig_N, :] = data_2d
 
                 # 按 4 份切分（padded_N 必须能被4整除，这里向下取整分块）
@@ -420,7 +436,7 @@ def process_rmsnorm_tensors(
                         os.makedirs(slice_dir, exist_ok=True)
                         out_path = os.path.join(slice_dir, out_name)
                         relayout_data.tofile(out_path)
-                        convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1])
+                        convert_to_128bit_txt(out_path, rows=slice_nxm.shape[0], cols=slice_nxm.shape[1], file_dtype=relayout_data.dtype)
 
             # 情况 B-special: 被替换后的聚合数据，按列一一映射到每个 head-local slice
             elif (
@@ -436,7 +452,7 @@ def process_rmsnorm_tensors(
                     os.makedirs(slice_dir, exist_ok=True)
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1])
+                    convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1], file_dtype=relayout_data.dtype)
 
             # 情况 B: (tile_m, inferred_slices) -> 每列作为 (M,1)，广播到 28 个 slice（保持原行为）
             elif data_2d.shape == (tile_m, inferred_slices):
@@ -449,7 +465,7 @@ def process_rmsnorm_tensors(
                         os.makedirs(slice_dir, exist_ok=True)
                         out_path = os.path.join(slice_dir, out_name)
                         relayout_data.tofile(out_path)
-                        convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1])
+                        convert_to_128bit_txt(out_path, rows=slice_mx1.shape[0], cols=slice_mx1.shape[1], file_dtype=relayout_data.dtype)
 
             # 情况 C: (tile_m,1) -> 复制到 28 个 slice
             elif data_2d.shape == (tile_m, 1):
@@ -460,7 +476,7 @@ def process_rmsnorm_tensors(
                     os.makedirs(slice_dir, exist_ok=True)
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1])
+                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1], file_dtype=relayout_data.dtype)
 
             else:
                 print(f"    ⚠️ KV-skip unrecognized shape: {data_2d.shape}")

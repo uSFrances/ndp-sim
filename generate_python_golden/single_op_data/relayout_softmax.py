@@ -39,9 +39,20 @@ def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
     return bin(struct.unpack('<I', struct.pack('<f', f))[0])[2:].zfill(32)
 
-def convert_to_decimal_txt(bin_path, rows=None, cols=None):
+def float16_to_bin(f):
+    return bin(struct.unpack('<H', struct.pack('<e', np.float16(f)))[0])[2:].zfill(16)
+
+def dtype_from_filename(filepath):
+    match = re.search(r"_dtype_(f16|f32|float16|float32)", os.path.basename(filepath).lower())
+    if not match:
+        raise ValueError(f"Cannot determine dtype from filename: {filepath}")
+    return np.float16 if match.group(1) in ("f16", "float16") else np.float32
+
+def convert_to_decimal_txt(bin_path, rows=None, cols=None, file_dtype=None):
     """读取 bin 文件并输出十进制矩阵 txt（逗号分隔，按行换行）"""
-    data = np.fromfile(bin_path, dtype=np.float32)
+    if file_dtype is None:
+        file_dtype = dtype_from_filename(bin_path)
+    data = np.fromfile(bin_path, dtype=file_dtype)
 
     # 执行过 relayout 后的数据，直接按一维展开输出
     if "beforerelayout" not in bin_path:
@@ -64,23 +75,26 @@ def convert_to_decimal_txt(bin_path, rows=None, cols=None):
             f.write(",".join(f"{float(v):.10g}" for v in matrix[r]))
             f.write("\n")
 
-def convert_to_128bit_txt(bin_path, rows=None, cols=None):
-    """读取 bin 文件并输出为每行 128-bit (4个float32) 的 txt 文件(二进制格式)"""
-    data = np.fromfile(bin_path, dtype=np.float32)
-    remainder = len(data) % 4
-    if remainder != 0:
-        data = np.concatenate((data, np.zeros(4 - remainder, dtype=np.float32)))
+def convert_to_128bit_txt(bin_path, rows=None, cols=None, file_dtype=None):
+    """按真实 dtype 输出每行 128-bit：8个float16 或4个float32。"""
+    if file_dtype is None:
+        file_dtype = dtype_from_filename(bin_path)
+    data = np.fromfile(bin_path, dtype=file_dtype)
+    values_per_line = 8 if file_dtype == np.float16 else 4
+    remainder = len(data) % values_per_line
+    if remainder:
+        data = np.concatenate(
+            (data, np.zeros(values_per_line - remainder, dtype=file_dtype))
+        )
 
     txt_path = bin_path.replace('.bin', '.txt')
     with open(txt_path, 'w') as f:
-        for i in range(0, len(data), 4):
-            str_float0 = float_to_bin(data[i])
-            str_float1 = float_to_bin(data[i+1])
-            str_float2 = float_to_bin(data[i+2])
-            str_float3 = float_to_bin(data[i+3])
-            f.write(f"{str_float3}{str_float2}{str_float1}{str_float0}\n")
+        converter = float16_to_bin if file_dtype == np.float16 else float_to_bin
+        for i in range(0, len(data), values_per_line):
+            bins = [converter(value) for value in data[i:i + values_per_line]]
+            f.write("".join(reversed(bins)) + "\n")
 
-    convert_to_decimal_txt(bin_path, rows=rows, cols=cols)
+    convert_to_decimal_txt(bin_path, rows=rows, cols=cols, file_dtype=file_dtype)
 
 def relayout_slice_M8_N(slice_data):
     """
@@ -118,18 +132,18 @@ def get_matrix_name(filename):
     return "unknown_matrix"
 
 def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d):
-    matrix_2d = np.asarray(matrix_2d, dtype=np.float32)
+    matrix_2d = np.asarray(matrix_2d)
     if matrix_2d.ndim == 1:
         matrix_2d = matrix_2d.reshape(-1, 1)
     slice_dir = os.path.join(before_install_dir, op_id, f"slice{slice_idx:02d}")
     os.makedirs(slice_dir, exist_ok=True)
     out_path = os.path.join(slice_dir, out_name)
     matrix_2d.reshape(-1, order='C').tofile(out_path)
-    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1])
+    convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1], file_dtype=matrix_2d.dtype)
 
 def split_op1_max_slices(head_data, matrix_id, slices_per_group):
     """op1(max) 专用切片规则"""
-    head_data = np.asarray(head_data, dtype=np.float32)
+    head_data = np.asarray(head_data)
     if head_data.ndim == 1:
         head_data = head_data.reshape(-1, 1)
     return [head_data.copy() for _ in range(slices_per_group)]
@@ -198,11 +212,8 @@ def process_softmax_tensors(input_dir, output_dir):
             else:
                 shape = tuple(shape_dims)
             
-            file_dtype = np.float32
-            if "f16" in filename.lower() or "float16" in filename.lower():
-                file_dtype = np.float16
-            
-            data = np.fromfile(filepath, dtype=file_dtype).astype(np.float32).reshape(shape, order='F')
+            file_dtype = dtype_from_filename(filename)
+            data = np.fromfile(filepath, dtype=file_dtype).reshape(shape, order='F')
             print(f"📦 Processing: {filename} -> {target_prefix}/{op_id}/{out_name} | F-view Shape: {data.shape}")
             
             # ----------------------------------------------------
@@ -224,7 +235,7 @@ def process_softmax_tensors(input_dir, output_dir):
                             os.makedirs(slice_dir, exist_ok=True)
                             out_path = os.path.join(slice_dir, out_name)
                             relayout_data.tofile(out_path)
-                            convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1])
+                            convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1], file_dtype=relayout_data.dtype)
                         continue
 
                     relayout_data = relayout_slice_M8_N(head_data)
@@ -237,7 +248,7 @@ def process_softmax_tensors(input_dir, output_dir):
                         os.makedirs(slice_dir, exist_ok=True)
                         out_path = os.path.join(slice_dir, out_name)
                         relayout_data.tofile(out_path)
-                        convert_to_128bit_txt(out_path, rows=head_data.shape[0], cols=head_data.shape[1])
+                        convert_to_128bit_txt(out_path, rows=head_data.shape[0], cols=head_data.shape[1], file_dtype=relayout_data.dtype)
             
             # ----------------------------------------------------
             # 模式 B：【修复点】完美匹配形如 (32, 7) 的中间状态向量
@@ -261,7 +272,7 @@ def process_softmax_tensors(input_dir, output_dir):
                         os.makedirs(slice_dir, exist_ok=True)
                         out_path = os.path.join(slice_dir, out_name)
                         relayout_data.tofile(out_path)
-                        convert_to_128bit_txt(out_path, rows=head_data.shape[0], cols=head_data.shape[1])
+                        convert_to_128bit_txt(out_path, rows=head_data.shape[0], cols=head_data.shape[1], file_dtype=relayout_data.dtype)
 
             # ----------------------------------------------------
             # 模式 C：全局单头广播数据
@@ -281,7 +292,7 @@ def process_softmax_tensors(input_dir, output_dir):
                     os.makedirs(slice_dir, exist_ok=True)
                     out_path = os.path.join(slice_dir, out_name)
                     relayout_data.tofile(out_path)
-                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1])
+                    convert_to_128bit_txt(out_path, rows=data_2d.shape[0], cols=data_2d.shape[1], file_dtype=relayout_data.dtype)
 
         print(f"✅ Finished instance group: {target_prefix} -> {group_output_dir}")
 

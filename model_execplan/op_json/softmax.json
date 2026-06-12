@@ -97,7 +97,8 @@
         }
       },
       "output": {
-        "shape": [1, "sequence_length", "sequence_length"]
+        "shape": [1, "sequence_length", "sequence_length"],
+        "dtype": "fp16"
       }
     }
   ]

@@ -74,7 +74,8 @@
         }
       },
       "output": {
-        "shape": [1, "sequence_length", "hidden_size//used_slices"]
+        "shape": [1, "sequence_length", "hidden_size//used_slices"],
+        "dtype": "fp16"
       }
     }
   ]
