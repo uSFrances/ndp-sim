@@ -90,6 +90,7 @@ class OperatorTemplate:
     config_sfu_type: str | None = None
     sfu_config_length: int | None = None
     address_plan: AddressPlan | None = None
+    instance_mapping: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

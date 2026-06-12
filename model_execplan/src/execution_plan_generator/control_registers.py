@@ -244,7 +244,14 @@ def _parse_mapping_node_to_instance(node: str, resource: str) -> tuple[str, str]
     return None
 
 
-def _load_operator_instance_mapping(op_type: str) -> dict[str, str]:
+def _load_operator_instance_mapping(op_type: str, mapping_dir: Path | None = None) -> dict[str, str]:
+    if mapping_dir is not None:
+        # Per-operator mapping: load directly, do not cache globally.
+        mapping_path = mapping_dir / "mapping_review.json"
+        if not mapping_path.is_file():
+            return {}
+        return _parse_mapping_review_file(mapping_path)
+
     cached = _MAPPING_REVIEW_CACHE.get(op_type)
     if cached is not None:
         return cached
@@ -254,13 +261,24 @@ def _load_operator_instance_mapping(op_type: str) -> dict[str, str]:
         _MAPPING_REVIEW_CACHE[op_type] = {}
         return _MAPPING_REVIEW_CACHE[op_type]
 
+    instance_mapping = _parse_mapping_review_file(mapping_path)
+
+    # Allow using unindexed wr_stream in register update functions.
+    if "wr_stream" not in instance_mapping and "wr_stream0" in instance_mapping:
+        instance_mapping["wr_stream"] = instance_mapping["wr_stream0"]
+
+    _MAPPING_REVIEW_CACHE[op_type] = instance_mapping
+    return instance_mapping
+
+
+def _parse_mapping_review_file(mapping_path: Path) -> dict[str, str]:
+    """Parse a mapping_review.json file and return logical→physical instance mapping."""
     with mapping_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
 
     node_to_resource = payload.get("node_to_resource")
     if not isinstance(node_to_resource, list):
-        _MAPPING_REVIEW_CACHE[op_type] = {}
-        return _MAPPING_REVIEW_CACHE[op_type]
+        return {}
 
     instance_mapping: dict[str, str] = {}
     for item in node_to_resource:
@@ -281,7 +299,6 @@ def _load_operator_instance_mapping(op_type: str) -> dict[str, str]:
     if "wr_stream" not in instance_mapping and "wr_stream0" in instance_mapping:
         instance_mapping["wr_stream"] = instance_mapping["wr_stream0"]
 
-    _MAPPING_REVIEW_CACHE[op_type] = instance_mapping
     return instance_mapping
 
 
@@ -1193,6 +1210,8 @@ def compute_control_register_updates(
     template: OperatorTemplate,
     address_plan: AddressPlan | None = None,
     apply_instance_mapping: bool = True,
+    mapping_dir: Path | None = None,
+    instance_mapping: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Placeholder for shape-driven control register computation.
 
@@ -1219,7 +1238,12 @@ def compute_control_register_updates(
     if not apply_instance_mapping:
         return updates
 
-    instance_mapping = _load_operator_instance_mapping(operator.op_type)
+    if instance_mapping is None:
+        # Prefer template-stored mapping (per-operator), fall back to cache/path.
+        if template.instance_mapping:
+            instance_mapping = template.instance_mapping
+        else:
+            instance_mapping = _load_operator_instance_mapping(operator.op_type, mapping_dir=mapping_dir)
     return _apply_instance_mapping_to_updates(updates, instance_mapping)
 
 

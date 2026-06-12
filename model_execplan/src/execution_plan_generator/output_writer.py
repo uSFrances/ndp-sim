@@ -864,10 +864,7 @@ def write_install_manifest(
                         "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit_{bank_off}.txt",
                     }
 
-    # Deduplicate config entries: operators of the same type share one payload.
-    # Only the *first* operator of each type gets a manifest key so that the
-    # bank exporter does not see multiple entries for the same address range.
-    seen_config_types: dict[str, dict[str, object]] = {}
+    # Each operator has its own independent config — no dedup by op_type.
     seen_sfu_types: set[str] = set()
     for op in execution_input.operators:
         template = templates.get(op.op_id)
@@ -875,8 +872,6 @@ def write_install_manifest(
             continue
         config_len = int(template.config_length or 0)
         if config_len <= 0:
-            continue
-        if op.op_type in seen_config_types:
             continue
 
         config_base_addr = address_plan.operator_config_base_addresses.get(op.op_id)
@@ -888,8 +883,8 @@ def write_install_manifest(
         src_cfg_path = _resolve_config_bitstream_source(op.op_type, template)
         if src_cfg_path is None:
             raise ValueError(
-                "Missing source bitstream file for operator type "
-                f"{op.op_type}; expected a *bitstream_128b.txt under config/{op.op_type}/"
+                "Missing source bitstream file for operator "
+                f"{op.op_id} ({op.op_type}); expected a *bitstream_128b.* file"
             )
         dst_cfg_path = cfg_pkg_dir / src_cfg_path.name
         _copy_overwrite_writable(src_cfg_path, dst_cfg_path)
@@ -898,7 +893,6 @@ def write_install_manifest(
             "base_addr": _format_hex32(config_base_addr),
             "path": cfg_path,
         }
-        seen_config_types[op.op_type] = cfg_item
         payload[f"{op.op_id}_config"] = cfg_item
 
         sfu_type = template.config_sfu_type

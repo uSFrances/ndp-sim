@@ -209,26 +209,8 @@ class AddressPlanner:
             subword=0,
         )
 
-        seen_config_types: dict[str, int] = {}
-        seen_sfu_types: dict[str, int] = {}
+        # Each operator gets its own independent config address — no dedup by op_type.
         for op in execution_input.operators:
-            if op.op_type in seen_config_types:
-                base_addr = seen_config_types[op.op_type]
-                operator_config_base_addresses[op.op_id] = base_addr
-                operator_config_lengths[op.op_id] = operator_config_lengths.get(
-                    op.op_id, config_lengths_by_op.get(op.op_id, 0) or 0
-                )
-                if op.op_type in seen_sfu_types:
-                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[
-                        op.op_type
-                    ]
-                    operator_sfu_config_lengths[op.op_id] = (
-                        operator_sfu_config_lengths.get(
-                            op.op_id, sfu_config_lengths_by_op.get(op.op_id, 0) or 0
-                        )
-                    )
-                continue
-
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
                 raise AddressPlanningError(
@@ -239,7 +221,6 @@ class AddressPlanner:
                 operator_config_lengths[op.op_id] = 0
             else:
                 operator_config_base_addresses[op.op_id] = config_base
-                seen_config_types[op.op_type] = config_base
                 operator_config_lengths[op.op_id] = config_length_64b
 
                 config_bytes = config_length_64b * 8
@@ -256,7 +237,6 @@ class AddressPlanner:
                 )
             if sfu_config_length_64b > 0:
                 operator_sfu_config_base_addresses[op.op_id] = config_base
-                seen_sfu_types[op.op_type] = config_base
                 operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
                 sfu_config_bytes = sfu_config_length_64b * 8
                 sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
@@ -362,27 +342,8 @@ class AddressPlanner:
             col=0,
             subword=0,
         )
-        seen_config_types: dict[str, int] = {}
-        seen_sfu_types: dict[str, int] = {}
+        # Each operator gets its own independent config address — no dedup by op_type.
         for op in execution_input.operators:
-            if op.op_type in seen_config_types:
-                base_addr = seen_config_types[op.op_type]
-                operator_config_base_addresses[op.op_id] = base_addr
-                operator_config_lengths[op.op_id] = operator_config_lengths.get(
-                    op.op_id, config_lengths_by_op.get(op.op_id, 0) or 0
-                )
-                if op.op_type in seen_sfu_types:
-                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[
-                        op.op_type
-                    ]
-                    operator_sfu_config_lengths[op.op_id] = (
-                        operator_sfu_config_lengths.get(
-                            op.op_id,
-                            sfu_config_lengths_by_op.get(op.op_id, 0) or 0,
-                        )
-                    )
-                continue
-
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
                 raise AddressPlanningError(
@@ -393,7 +354,6 @@ class AddressPlanner:
                 operator_config_lengths[op.op_id] = 0
             else:
                 operator_config_base_addresses[op.op_id] = config_cursor_addr
-                seen_config_types[op.op_type] = config_cursor_addr
                 operator_config_lengths[op.op_id] = config_length_64b
                 config_bytes = config_length_64b * 8
                 reserved_bytes = self._align_up(config_bytes, self.ROW_BYTES)
@@ -409,7 +369,6 @@ class AddressPlanner:
                 )
             if sfu_config_length_64b > 0:
                 operator_sfu_config_base_addresses[op.op_id] = config_cursor_addr
-                seen_sfu_types[op.op_type] = config_cursor_addr
                 operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
                 sfu_config_bytes = sfu_config_length_64b * 8
                 sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
