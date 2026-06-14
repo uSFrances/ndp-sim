@@ -1081,18 +1081,18 @@ def _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
         "iga_lc0.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
-        "iga_lc1.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "iga_lc3.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "iga_lc5.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 32,
-            port2 = 32,
+            port1 = (a_m or 0) * 16,
+            port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (d_m or 0) * 32,
-            port2 = 32,
+            port1 = (d_m or 0) * 16,
+            port2 = 16,
         ),
     }
 
