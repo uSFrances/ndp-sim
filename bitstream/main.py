@@ -149,7 +149,7 @@ Examples:
     parser.add_argument(
         '--heuristic-iterations',
         type=int,
-        default=50000,
+        default=5000,
         help='Maximum iterations for heuristic search (default: 5000)'
     )
     

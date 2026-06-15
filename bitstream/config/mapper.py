@@ -2,6 +2,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 import os
 import time
+import json
+import hashlib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -533,17 +535,17 @@ class Mapper:
             node_metadata = {}
         import random
         import math
-        
+
         # Set random seed if provided
         # if seed is not None:
         #     random.seed(seed)
         # elif self.seed is not None:
         #     random.seed(self.seed)
-        
+
         print(f"[Simulated Annealing] Starting search with {len(connections)} connections")
         print(f"[Simulated Annealing] Parameters: iterations={max_iterations}, T0={initial_temp}, cooling={cooling_rate}, repair_prob={repair_prob}")
-        
-        # Define all structural constraints
+
+        # Define all structural constraints (must be set before cost helpers).
         self.constraints: List[Mapper.Constraint] = [
             self.LCtoLCConstraint(),
             self.LCtoROWLCConstraint(),
@@ -554,7 +556,86 @@ class Mapper:
             self.LCtoStreamConstraint(),
             self.ROWLCtoColLCConstraint()
         ]
-        
+
+        # Helper: compute total penalty for a given mapping dict.
+        def _mapping_cost(mapping: Dict[str, str]) -> float:
+            cost = 0.0
+            full_mapping = self.node_to_resource.copy()
+            full_mapping.update(mapping)
+            for c in connections:
+                src, dst = c["src"], c["dst"]
+                if src not in full_mapping or dst not in full_mapping:
+                    missing_nodes = [n for n in [src, dst] if n not in full_mapping]
+                    cost += 10000.0 * len(missing_nodes)
+                    continue
+                src_res = full_mapping[src]
+                dst_res = full_mapping[dst]
+                src_type, src_idx = self.parse_resource(src_res)
+                dst_type, dst_idx = self.parse_resource(dst_res)
+                for constraint in self.constraints:
+                    cost += constraint.penalty(src_type, src_idx, dst_type, dst_idx)
+            # ROW_LC / COL_LC hardwired correspondence
+            for node in full_mapping:
+                if ".ROW_LC" in node:
+                    group_prefix = node.split(".")[0]
+                    col_lc_node = f"{group_prefix}.COL_LC"
+                    if col_lc_node in full_mapping:
+                        row_lc_res = full_mapping[node]
+                        col_lc_res = full_mapping[col_lc_node]
+                        if row_lc_res.startswith("ROW_LC"):
+                            row_idx = int(row_lc_res[6:])
+                        else:
+                            row_idx = -1
+                        if col_lc_res.startswith("COL_LC"):
+                            col_idx = int(col_lc_res[6:])
+                        else:
+                            col_idx = -1
+                        if row_idx != col_idx:
+                            cost += 10000.0
+            return cost
+
+        # -- mapping cache: avoid re-running search for known-good configs --
+        _cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping_cache")
+        try:
+            _cache_key = hashlib.sha256(
+                json.dumps(
+                    sorted((c["src"], c["dst"]) for c in connections),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()[:16]
+        except Exception:
+            _cache_key = None
+
+        if _cache_key:
+            _cache_path = os.path.join(_cache_dir, f"{_cache_key}.json")
+            if os.path.isfile(_cache_path):
+                try:
+                    with open(_cache_path, "r", encoding="utf-8") as _f:
+                        cached = json.load(_f)
+                    if isinstance(cached, dict) and len(cached) > 0:
+                        # Apply cached mapping via assign_node.
+                        for node, res in cached.items():
+                            self.assign_node(node, res)
+                        test_cost = _mapping_cost({})
+                        if test_cost == 0:
+                            print(
+                                f"[Simulated Annealing] Loaded cached mapping "
+                                f"({len(cached)} nodes) — skipping search."
+                            )
+                            self.last_mapping_cost = 0.0
+                            return self.node_to_resource
+                        else:
+                            print(
+                                f"[Simulated Annealing] Cached mapping is invalid "
+                                f"(cost={test_cost:.2f}), re-running search."
+                            )
+                            # Clear the invalid cached assignments.
+                            for node in cached:
+                                self.assigned_node.pop(node, None)
+                                self.node_to_resource.pop(node, None)
+                except Exception as exc:
+                    print(f"[Simulated Annealing] Failed to load cached mapping: {exc}")
+
         # Collect all nodes participating in connections
         nodes_in_connections = set()
         for c in connections:
@@ -598,54 +679,8 @@ class Mapper:
         
         # Helper function to calculate cost (sum of constraint penalties)
         def calculate_cost(mapping: Dict[str, str]) -> float:
-            cost = 0.0
-            # Ensure cost checks include pre-assigned nodes as well
-            full_mapping = self.node_to_resource.copy()
-            full_mapping.update(mapping)
-            for c in connections:
-                src, dst = c["src"], c["dst"]
-                # Use original node names directly - DO NOT strip suffixes
-                # The mapping table stores full node names like "GROUP0.ROW_LC"
-                
-                # CRITICAL: If either endpoint is missing, add a HUGE penalty
-                # This ensures all nodes must be properly allocated
-                if src not in full_mapping or dst not in full_mapping:
-                    # Missing mapping = severe violation
-                    missing_nodes = [n for n in [src, dst] if n not in full_mapping]
-                    cost += 10000.0 * len(missing_nodes)  # Extreme penalty
-                    continue
-                
-                src_res = full_mapping[src]
-                dst_res = full_mapping[dst]
-                src_type, src_idx = self.parse_resource(src_res)
-                dst_type, dst_idx = self.parse_resource(dst_res)
-
-                for constraint in self.constraints:
-                    cost += constraint.penalty(src_type, src_idx, dst_type, dst_idx)
-            
-            # ADDITIONAL CONSTRAINT: ROW_LC and COL_LC hardwired correspondence
-            # For each GROUP i: ROW_LC i and COL_LC i must map to same physical index
-            for node in full_mapping:
-                if ".ROW_LC" in node:
-                    group_prefix = node.split(".")[0]
-                    col_lc_node = f"{group_prefix}.COL_LC"
-                    if col_lc_node in full_mapping:
-                        row_lc_res = full_mapping[node]
-                        col_lc_res = full_mapping[col_lc_node]
-                        # Extract indices from resources
-                        if row_lc_res.startswith("ROW_LC"):
-                            row_idx = int(row_lc_res[6:])
-                        else:
-                            row_idx = -1
-                        if col_lc_res.startswith("COL_LC"):
-                            col_idx = int(col_lc_res[6:])
-                        else:
-                            col_idx = -1
-                        # They MUST have the same index
-                        if row_idx != col_idx:
-                            cost += 10000.0  # Extreme penalty for mismatch
-            
-            return cost
+            # Delegate to the shared cost helper defined above.
+            return _mapping_cost(mapping)
         
         # Initialize with current allocation - allow randomized start to better explore
         # Start with a mapping that preserves node->resource uniqueness per type
@@ -958,34 +993,23 @@ class Mapper:
         
         if best_cost == 0:
             print(f"[Simulated Annealing] Success: Found valid mapping with 0 violations")
+            # Persist successful mapping to cache for future reuse.
+            try:
+                os.makedirs(_cache_dir, exist_ok=True)
+                with open(_cache_path, "w", encoding="utf-8") as _f:
+                    json.dump(best_mapping, _f, indent=2, ensure_ascii=False)
+                    _f.write("\n")
+                print(f"[Simulated Annealing] Cached mapping ({len(best_mapping)} nodes)")
+            except Exception as exc:
+                print(f"[Simulated Annealing] Failed to cache mapping: {exc}")
         else:
-            print(f"[Simulated Annealing] Warning: Best mapping has total penalty {best_cost:.2f}")
-            # Print which connections are violated
-            print(f"[Simulated Annealing] Constraint violations:")
-            for c in connections:
-                src_orig, dst_orig = c["src"], c["dst"]
-                
-                # Use original node names directly - they should be in best_mapping
-                src = src_orig
-                dst = dst_orig
-                
-                if src in best_mapping and dst in best_mapping:
-                    src_res = best_mapping[src]
-                    dst_res = best_mapping[dst]
-                    src_type, src_idx = self.parse_resource(src_res)
-                    dst_type, dst_idx = self.parse_resource(dst_res)
-                    
-                    for constraint in self.constraints:
-                        if not constraint.check(src_type, src_idx, dst_type, dst_idx):
-                            print(f"  ✗ {src_orig} ({src_res}) -> {dst_orig} ({dst_res}): "
-                                  f"{src_type}{src_idx} -> {dst_type}{dst_idx} violates {constraint.__class__.__name__}")
-                            break
-                else:
-                    # Debug: print missing mappings
-                    if src not in best_mapping:
-                        print(f"  ⚠ Warning: Source node '{src}' not found in mapping")
-                    if dst not in best_mapping:
-                        print(f"  ⚠ Warning: Destination node '{dst}' not found in mapping")
+            error_detail = (
+                f"\n[Simulated Annealing] ERROR: Reached iteration limit "
+                f"({max_iterations}) but mapping violations remain! "
+                f"Best total penalty = {best_cost:.2f}, "
+                f"accepted = {accepted_moves}, rejected = {rejected_moves}"
+            )
+            raise RuntimeError(error_detail)
         
         # NOTE: Removed Post-processing that forcefully changed ROW_LC/COL_LC mappings
         # The hard-wired correspondence constraint is now enforced during the search
@@ -998,6 +1022,13 @@ class Mapper:
     def get(self, node: str) -> Optional[str]:
         """Return the physical resource assigned to a given node."""
         return self.node_to_resource.get(node)
+
+    def assign_node(self, node: str, resource: str) -> None:
+        """Pre-assign a physical resource to a logical node (bypasses allocation)."""
+        self.node_to_resource[node] = resource
+        self.assigned_node[node] = resource
+        if node not in self.nodes:
+            self.nodes.append(node)
     
     def get_last_mapping_cost(self) -> float:
         """Return the cost (penalty) of the last mapping search."""

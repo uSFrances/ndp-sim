@@ -1086,7 +1086,7 @@ def _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates(
         "iga_lc5.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 16,
+            port1 = (d_m or 0) * 16,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
