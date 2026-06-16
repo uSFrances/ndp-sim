@@ -45,7 +45,13 @@ def resolve_io_base_addr_source_slice(
     if router is None:
         router = BUILTIN_SLICE_TYPE_ROUTERS.get(io_type)
     if router is None:
-        return write_slice_id
+        raise ValueError(
+            f"Unknown io_type={io_type!r} for op_type={op_type!r}, "
+            f"io_role={io_role!r}, io_name={io_name!r}. "
+            f"The io_type is not registered in BUILTIN_SLICE_TYPE_ROUTERS "
+            f"(available keys: {sorted(BUILTIN_SLICE_TYPE_ROUTERS.keys())}), "
+            f"nor provided via router_by_op_and_type or router_by_type."
+        )
 
     mapped = router(write_slice_id)
     if not isinstance(mapped, int) or mapped < 0:
