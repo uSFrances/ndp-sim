@@ -806,7 +806,9 @@ def write_install_manifest(
                         f"operator={op.op_id}, input={input_name}, write_slice={slice_id}, "
                         f"source_slice={source_slice_id}"
                     )
-                slice_base_addr = assignment.per_slice_addresses[source_slice_id]
+                # In sca_cfg the slice key (slice_id) should match the address used,
+                # so use slice_id's own address rather than the remapped source slice.
+                slice_base_addr = assignment.per_slice_addresses[slice_id]
                 slice_dir = _format_slice_dir(slice_id)
 
                 bank_interleave_val = input_spec.bank_interleave if input_spec is not None else 1
@@ -845,7 +847,8 @@ def write_install_manifest(
                     "Output manifest base_addr source slice is not available in assignment: "
                     f"operator={op.op_id}, write_slice={slice_id}, source_slice={source_slice_id}"
                 )
-            slice_base_addr = output_assignment.per_slice_addresses[source_slice_id]
+            # In sca_cfg the slice key (slice_id) should match the address used.
+            slice_base_addr = output_assignment.per_slice_addresses[slice_id]
             slice_dir = _format_slice_dir(slice_id)
 
             bank_interleave_val = op.output.bank_interleave
