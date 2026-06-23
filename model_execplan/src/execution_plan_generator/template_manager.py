@@ -166,7 +166,8 @@ class OperatorTemplateManager:
         sfu_file = self._project_root / "config" / "SFU_Coeff" / f"{sfu_type}.txt"
         if not sfu_file.is_file():
             raise ValueError(f"Missing SFU coeff file for type {sfu_type}: {sfu_file}")
-        return self._count_non_empty_lines(sfu_file)
+        # SFU coeff files use 128-bit lines; convert to 64-bit word count.
+        return self._count_non_empty_lines(sfu_file) * 2
 
     def _detect_config_length_from_bitstream64(self, op_type: str) -> int:
         op_dir = self._project_root / "config" / op_type
