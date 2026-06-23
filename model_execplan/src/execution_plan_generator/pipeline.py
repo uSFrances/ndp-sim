@@ -55,14 +55,19 @@ class ExecutionPlanPipeline:
         # First pass: plan addresses with whatever config_lengths are available.
         config_lengths_by_op: dict[str, int] = {}
         sfu_config_lengths_by_op: dict[str, int] = {}
+        sfu_types_by_op: dict[str, str] = {}
         for op in execution_input.operators:
             template = templates.get(op.op_id)
             config_lengths_by_op[op.op_id] = int((template.config_length if template else 0) or 0)
             sfu_config_lengths_by_op[op.op_id] = int((template.sfu_config_length if template else 0) or 0)
+            sfu_type = (template.config_sfu_type if template else None) or ""
+            if sfu_type:
+                sfu_types_by_op[op.op_id] = sfu_type
         address_plan = self._address_planner.plan(
             execution_input,
             config_lengths_by_op=config_lengths_by_op,
             sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+            sfu_types_by_op=sfu_types_by_op,
         )
 
         # Regenerate bitstreams per-operator into output/<plan>/ so each
@@ -81,6 +86,7 @@ class ExecutionPlanPipeline:
             execution_input,
             config_lengths_by_op=config_lengths_by_op,
             sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+            sfu_types_by_op=sfu_types_by_op,
         )
 
         artifact = self._instruction_generator.generate(execution_input, address_plan, templates)

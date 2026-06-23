@@ -62,6 +62,7 @@ class AddressPlanner:
         execution_input: ExecutionPlanInput,
         config_lengths_by_op: dict[str, int] | None = None,
         sfu_config_lengths_by_op: dict[str, int] | None = None,
+        sfu_types_by_op: dict[str, str] | None = None,
     ) -> AddressPlan:
         interleave = self._resolve_plan_interleave(execution_input)
 
@@ -70,12 +71,14 @@ class AddressPlanner:
                 execution_input,
                 config_lengths_by_op=config_lengths_by_op,
                 sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+                sfu_types_by_op=sfu_types_by_op,
             )
         return self._plan_interleaved(
             execution_input,
             interleave=interleave,
             config_lengths_by_op=config_lengths_by_op,
             sfu_config_lengths_by_op=sfu_config_lengths_by_op,
+            sfu_types_by_op=sfu_types_by_op,
         )
 
     # ------------------------------------------------------------------
@@ -108,6 +111,7 @@ class AddressPlanner:
         interleave: int,
         config_lengths_by_op: dict[str, int] | None,
         sfu_config_lengths_by_op: dict[str, int] | None,
+        sfu_types_by_op: dict[str, str] | None = None,
     ) -> AddressPlan:
         num_groups = self._group_count(interleave)
         group_cursors = [_AddressCursor() for _ in range(num_groups)]
@@ -210,6 +214,9 @@ class AddressPlanner:
         )
 
         # Each operator gets its own independent config address — no dedup by op_type.
+        # SFU configs however are static files shared by sfu_type.
+        sfu_types_by_op = sfu_types_by_op or {}
+        seen_sfu_types: dict[str, int] = {}
         for op in execution_input.operators:
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
@@ -236,13 +243,21 @@ class AddressPlanner:
                     f"got {sfu_config_length_64b}."
                 )
             if sfu_config_length_64b > 0:
-                operator_sfu_config_base_addresses[op.op_id] = config_base
-                operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
-                sfu_config_bytes = sfu_config_length_64b * 8
-                sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
-                config_base = self._align_up(
-                    config_base + sfu_reserved_bytes, self.ROW_BYTES
-                )
+                sfu_type = sfu_types_by_op.get(op.op_id, "")
+                if sfu_type and sfu_type in seen_sfu_types:
+                    # Share SFU address with the first operator of this sfu_type.
+                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[sfu_type]
+                    operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
+                else:
+                    operator_sfu_config_base_addresses[op.op_id] = config_base
+                    operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
+                    if sfu_type:
+                        seen_sfu_types[sfu_type] = config_base
+                    sfu_config_bytes = sfu_config_length_64b * 8
+                    sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
+                    config_base = self._align_up(
+                        config_base + sfu_reserved_bytes, self.ROW_BYTES
+                    )
             else:
                 operator_sfu_config_lengths[op.op_id] = 0
 
@@ -264,6 +279,7 @@ class AddressPlanner:
         execution_input: ExecutionPlanInput,
         config_lengths_by_op: dict[str, int] | None,
         sfu_config_lengths_by_op: dict[str, int] | None,
+        sfu_types_by_op: dict[str, str] | None = None,
     ) -> AddressPlan:
         cursor = _AddressCursor()
         assignments: dict[str, AddressAssignment] = {}
@@ -343,6 +359,9 @@ class AddressPlanner:
             subword=0,
         )
         # Each operator gets its own independent config address — no dedup by op_type.
+        # SFU configs however are static files shared by sfu_type.
+        sfu_types_by_op = sfu_types_by_op or {}
+        seen_sfu_types: dict[str, int] = {}
         for op in execution_input.operators:
             config_length_64b = int(config_lengths_by_op.get(op.op_id, 0) or 0)
             if config_length_64b < 0:
@@ -368,13 +387,21 @@ class AddressPlanner:
                     f"got {sfu_config_length_64b}."
                 )
             if sfu_config_length_64b > 0:
-                operator_sfu_config_base_addresses[op.op_id] = config_cursor_addr
-                operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
-                sfu_config_bytes = sfu_config_length_64b * 8
-                sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
-                config_cursor_addr = self._align_up(
-                    config_cursor_addr + sfu_reserved_bytes, self.ROW_BYTES
-                )
+                sfu_type = sfu_types_by_op.get(op.op_id, "")
+                if sfu_type and sfu_type in seen_sfu_types:
+                    # Share SFU address with the first operator of this sfu_type.
+                    operator_sfu_config_base_addresses[op.op_id] = seen_sfu_types[sfu_type]
+                    operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
+                else:
+                    operator_sfu_config_base_addresses[op.op_id] = config_cursor_addr
+                    operator_sfu_config_lengths[op.op_id] = sfu_config_length_64b
+                    if sfu_type:
+                        seen_sfu_types[sfu_type] = config_cursor_addr
+                    sfu_config_bytes = sfu_config_length_64b * 8
+                    sfu_reserved_bytes = self._align_up(sfu_config_bytes, self.ROW_BYTES)
+                    config_cursor_addr = self._align_up(
+                        config_cursor_addr + sfu_reserved_bytes, self.ROW_BYTES
+                    )
             else:
                 operator_sfu_config_lengths[op.op_id] = 0
 
