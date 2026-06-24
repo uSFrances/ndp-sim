@@ -607,7 +607,7 @@ def _compute_prefill_add_fp32MN_fp32MN_fp16MN_control_register_updates(
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (d_n or 0) * 32,
+            port1 = (d_n // 2 or 0) * 32,
             port2 = 32,
         ),
     }
