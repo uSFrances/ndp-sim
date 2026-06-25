@@ -66,7 +66,7 @@ def load_config(config_file='./data/gemm_config_reference_aligned.json'):
     with open(config_file) as f:
         return json.load(f)
 
-def init_modules(cfg, use_direct_mapping=False, use_heuristic_search=True, heuristic_iterations=5000, heuristic_restarts=1, seed=None):
+def init_modules(cfg, use_direct_mapping=False, use_heuristic_search=True, heuristic_iterations=5000, heuristic_restarts=1, seed=None, output_dir=None):
     """Initialize all hardware modules from config and perform resource mapping.
     
     Args:
@@ -186,7 +186,7 @@ def init_modules(cfg, use_direct_mapping=False, use_heuristic_search=True, heuri
             
             # Perform heuristic search and get the cost of the best mapping found
             # Pass seed to search for reproducibility
-            mapping_cost = NodeGraph.get().heuristic_search_mapping(max_iterations=heuristic_iterations, seed=seed)
+            mapping_cost = NodeGraph.get().heuristic_search_mapping(max_iterations=heuristic_iterations, seed=seed, output_dir=output_dir)
             
             # Check if mapping is valid (cost == 0 means no constraint violations)
             if mapping_cost == 0:
@@ -214,7 +214,7 @@ def init_modules(cfg, use_direct_mapping=False, use_heuristic_search=True, heuri
     
     return modules
 
-def build_entries(modules):
+def build_entries(modules, output_dir: str | None = None):
     """
     Build bitstream entries in physical resource order.
     Uses mapper's direct module lookup for efficient access.

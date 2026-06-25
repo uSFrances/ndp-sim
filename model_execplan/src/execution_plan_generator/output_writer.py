@@ -852,10 +852,15 @@ def write_install_manifest(
             slice_dir = _format_slice_dir(slice_id)
 
             bank_interleave_val = op.output.bank_interleave
+            # Per-bank byte count, matching address-planner integer division.
+            per_bank_bytes = output_assignment.size_bytes // max(bank_interleave_val, 1)
+            # Number of 128-bit (16-byte) words per bank, ceiling division.
+            length_128b = (per_bank_bytes + 15) // 16
             if bank_interleave_val <= 1:
                 payload[f"{op.op_id}_matrixD_slice{slice_id}"] = {
                     "base_addr": _format_hex32(slice_base_addr),
                     "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit.txt",
+                    "length": length_128b,
                 }
             else:
                 base_bank = (slice_base_addr >> 23) & 0x3
@@ -865,6 +870,7 @@ def write_install_manifest(
                     payload[f"{op.op_id}_matrixD_slice{slice_id}_{bank_off}"] = {
                         "base_addr": _format_hex32(bank_addr),
                         "path": f"install/{op.op_id}/{slice_dir}/matrix_D_linearized_128bit_{bank_off}.txt",
+                        "length": length_128b,
                     }
 
     # Each operator has its own independent config — no dedup by op_type.
@@ -920,7 +926,21 @@ def write_install_manifest(
             }
 
     manifest_path = output_dir / "sca_cfg.json"
-    manifest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # Exclude matrixD entries from the main manifest; they go to sca_cfg_D.json instead.
+    payload_main = {k: v for k, v in payload.items() if "_matrixD_" not in k}
+    manifest_path.write_text(json.dumps(payload_main, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # Emit a separate file containing only matrixD (output) entries.
+    payload_d: dict[str, object] = {
+        k: v for k, v in payload.items() if "_matrixD_" in k
+    }
+    if payload_d:
+        manifest_d_path = output_dir / "sca_cfg_D.json"
+        manifest_d_path.write_text(
+            json.dumps(payload_d, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     return manifest_path
 
 
