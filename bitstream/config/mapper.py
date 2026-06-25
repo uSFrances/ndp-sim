@@ -514,7 +514,8 @@ class Mapper:
     def search(self, connections: List[Dict[str, str]], max_iterations: int = 5000, 
                         initial_temp: float = 100.0, cooling_rate: float = 0.995,
                         node_metadata: Optional[Dict[str, Dict]] = None,
-                        repair_prob: float = 0.2, seed: Optional[int] = None) -> Optional[Dict[str, str]]:
+                        repair_prob: float = 0.2, seed: Optional[int] = None,
+                        output_dir: Optional[str] = None) -> Optional[Dict[str, str]]:
         """
         Perform simulated annealing search to find a valid mapping for large graphs.
         Uses probabilistic optimization to escape local minima and find better solutions.
@@ -991,6 +992,10 @@ class Mapper:
                 # print(f"[Simulated Annealing] Final results: best_cost={best_cost}, "
             #   f"accepted={accepted_moves}, rejected={rejected_moves}")
         
+        # Always store the best mapping found (even with violations).
+        self.node_to_resource = best_mapping
+        self.last_mapping_cost = best_cost
+
         if best_cost == 0:
             print(f"[Simulated Annealing] Success: Found valid mapping with 0 violations")
             # Persist successful mapping to cache for future reuse.
@@ -1003,21 +1008,69 @@ class Mapper:
             except Exception as exc:
                 print(f"[Simulated Annealing] Failed to cache mapping: {exc}")
         else:
+            # Gather per-connection violation details for diagnosis.
+            violation_msgs: list[str] = []
+            for c in connections:
+                src_orig, dst_orig = c["src"], c["dst"]
+                if src_orig in best_mapping and dst_orig in best_mapping:
+                    src_res = best_mapping[src_orig]
+                    dst_res = best_mapping[dst_orig]
+                    src_type, src_idx = self.parse_resource(src_res)
+                    dst_type, dst_idx = self.parse_resource(dst_res)
+                    total_penalty = 0.0
+                    for constraint in self.constraints:
+                        p = constraint.penalty(src_type, src_idx, dst_type, dst_idx)
+                        if p > 0:
+                            violation_msgs.append(
+                                f"  {src_orig} ({src_res}) -> {dst_orig} ({dst_res}): "
+                                f"violates {constraint.__class__.__name__} (penalty={p:.1f})"
+                            )
+                        total_penalty += p
+                    # Also check ROW_LC/COL_LC hardwired correspondence
+                    if ".ROW_LC" in src_orig:
+                        group_prefix = src_orig.split(".")[0]
+                        col_node = f"{group_prefix}.COL_LC"
+                        if col_node in best_mapping:
+                            r_res = src_res
+                            c_res = best_mapping[col_node]
+                            if r_res.startswith("ROW_LC") and c_res.startswith("COL_LC"):
+                                r_idx = int(r_res[6:])
+                                c_idx = int(c_res[6:])
+                                if r_idx != c_idx:
+                                    violation_msgs.append(
+                                        f"  {src_orig} ({r_res}) <-> {col_node} ({c_res}): "
+                                        f"ROW_LC/COL_LC index mismatch (row={r_idx}, col={c_idx})"
+                                    )
+                else:
+                    if src_orig not in best_mapping:
+                        violation_msgs.append(f"  Source node '{src_orig}' not found in mapping")
+                    if dst_orig not in best_mapping:
+                        violation_msgs.append(f"  Destination node '{dst_orig}' not found in mapping")
+
             error_detail = (
                 f"\n[Simulated Annealing] ERROR: Reached iteration limit "
                 f"({max_iterations}) but mapping violations remain! "
                 f"Best total penalty = {best_cost:.2f}, "
-                f"accepted = {accepted_moves}, rejected = {rejected_moves}"
+                f"violations = {len(violation_msgs)}, "
+                f"accepted = {accepted_moves}, rejected = {rejected_moves}\n"
             )
+            if violation_msgs:
+                error_detail += "Constraint violations:\n" + "\n".join(violation_msgs)
+
+            # Attempt to save placement visualization for debugging.
+            try:
+                if output_dir:
+                    _placement_path = os.path.join(output_dir, "placement_failed.png")
+                else:
+                    _placement_path = os.path.join(
+                        os.path.dirname(_cache_dir), "placement_failed.png"
+                    )
+                visualize_mapping(self, connections, save_path=_placement_path)
+                error_detail += f"\nPlacement saved to: {_placement_path}"
+            except Exception as exc:
+                error_detail += f"\nFailed to save placement: {exc}"
+
             raise RuntimeError(error_detail)
-        
-        # NOTE: Removed Post-processing that forcefully changed ROW_LC/COL_LC mappings
-        # The hard-wired correspondence constraint is now enforced during the search
-        # via the ROW_LC/COL_LC index matching in calculate_cost()
-        
-        self.node_to_resource = best_mapping
-        self.last_mapping_cost = best_cost  # Store cost for later access
-        return best_mapping
 
     def get(self, node: str) -> Optional[str]:
         """Return the physical resource assigned to a given node."""
@@ -1141,7 +1194,8 @@ class NodeGraph:
         result = self.mapping.direct_mapping()
         print(f"[Success] Direct mapping completed with {len(result)} nodes")
     
-    def heuristic_search_mapping(self, max_iterations: int = 5000, seed: Optional[int] = None):
+    def heuristic_search_mapping(self, max_iterations: int = 5000, seed: Optional[int] = None,
+                                  output_dir: Optional[str] = None):
         """Use simulated annealing to find a valid mapping for large graphs.
         
         Args:
@@ -1155,7 +1209,8 @@ class NodeGraph:
         for c in self.connections:
             print(f"  Connection: {c['src']} -> {c['dst']}")
         result = self.mapping.search(self.connections, max_iterations=max_iterations, 
-                                              node_metadata=self.node_metadata, seed=seed)
+                                              node_metadata=self.node_metadata, seed=seed,
+                                              output_dir=output_dir)
         if result is None or len(result) == 0:
             print("[Warning] Heuristic search failed, keeping initial allocation")
             return float('inf')

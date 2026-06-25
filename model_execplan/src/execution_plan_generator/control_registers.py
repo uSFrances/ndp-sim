@@ -1150,6 +1150,37 @@ def _compute_prefill_gemm_local_qkt_control_register_updates(
 
     return updates
 
+def _compute_prefill_gemv_local_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for gemv_local control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    input_b_prime = operator.inputs.get("B'")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
+    (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+
+
+    updates: dict[str, int] = {
+        "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
+        "iga_lc2.dram_loop_configs.end": b_k // 2 if b_k is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_m // 4 if a_m is not None else 0,
+    }
+    address_plan = template.address_plan
+    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+    if b_base_addr is not None:
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 16777216)
+
+    return updates
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -1179,6 +1210,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_mul_fp32MN_fp32MN_fp32MN": _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_add_V_fp16MN_fp32N_fp16MN": _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates,
     "prefill_gemm_local_qkt": _compute_prefill_gemm_local_qkt_control_register_updates,
+    "prefill_gemv_local": _compute_prefill_gemv_local_control_register_updates,
 }
 
 

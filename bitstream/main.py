@@ -14,7 +14,7 @@ from bitstream.parse import (
     load_config, init_modules, build_entries, generate_bitstream,
     write_bitstream, dump_modules_detailed, dump_mapping_review
 )
-# python ndp-sim/bitstream/main.py --visualize-placement -c ndp-sim/model_execplan/config/prefill_gemm_ring_4slice/prefill_gemm_ring_4slice.json -o ./model_execplan/config/prefill_gemm_ring_4slice
+# python bitstream\main.py --visualize-placement -c jsons\prefill_gemv_local.json -o ./model_execplan/config/prefill_gemv_local
 
 def main():
     """Main entry point for bitstream CLI."""
@@ -244,7 +244,8 @@ Examples:
                              use_heuristic_search=args.heuristic_search,
                              heuristic_iterations=args.heuristic_iterations,
                              heuristic_restarts=args.heuristic_restarts,
-                             seed=args.seed)
+                             seed=args.seed,
+                             output_dir=str(output_dir))
 
         # Always emit mapping review JSON after mapping is complete.
         mapping_review_path = output_dir / 'mapping_review.json'
@@ -276,7 +277,7 @@ Examples:
         # Step 5: Build bitstream entries and generate bitstream
         if args.verbose:
             print("[5/6] Building bitstream entries and generating bitstream...")
-        entries = build_entries(modules)
+        entries = build_entries(modules, output_dir=str(output_dir))
         bitstream = generate_bitstream(entries, config_mask)
         
         # Step 5.5: Generate parsed bitstream and binary dump (default enabled)
