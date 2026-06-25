@@ -892,8 +892,8 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         "iga_lc2.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
         "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc7.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc8.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc7.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc8.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
             port1 = (a_n or 0) * 16,
