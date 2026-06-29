@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .hardware import HardwareSpec
 
@@ -10,7 +10,14 @@ class AddressTransform:
     logical_bit_labels: List[str]
     physical_bit_labels: List[str]
     permutation: List[int]
+    layout_permutation: Optional[List[int]] = None
+    physical_permutation: Optional[List[int]] = None
+    composed_permutation: Optional[List[int]] = None
+    transform_role: str = "input"
+    transform_source: str = "identity"
     interleave_bank_count: int = 1
+    placement_policy: str = "identity"
+    mode: str = "baseline"
 
     @classmethod
     def identity(
@@ -25,7 +32,14 @@ class AddressTransform:
             logical_bit_labels=labels,
             physical_bit_labels=list(labels),
             permutation=list(range(len(labels))),
+            layout_permutation=list(range(len(labels))),
+            physical_permutation=list(range(len(labels))),
+            composed_permutation=list(range(len(labels))),
+            transform_role="identity",
+            transform_source="identity",
             interleave_bank_count=interleave_bank_count,
+            placement_policy="identity",
+            mode="baseline" if name == "identity" else name,
         )
 
     @classmethod
@@ -34,20 +48,14 @@ class AddressTransform:
         edge_result: Mapping[str, object],
         mode: str,
         hw: HardwareSpec,
+        transform_role: str = "input",
     ) -> "AddressTransform":
-        logical_labels = list(edge_result.get("consumer_visible_outer_bits") or [])
-        producer_labels = list(edge_result.get("producer_visible_outer_bits") or logical_labels)
-        if mode == "baseline":
-            return cls.identity(logical_labels, name="baseline_identity")
-        permutation = list(edge_result.get("permutation") or list(range(hw.remap_bits)))
-        transform = cls(
-            name=f"{mode}_remap",
-            logical_bit_labels=logical_labels,
-            physical_bit_labels=producer_labels,
-            permutation=permutation,
-            interleave_bank_count=(hw.bank_count_per_slice if mode == "remap_interleave" else 1),
+        return build_transform_from_edge_result(
+            edge_result=edge_result,
+            mode=mode,
+            hw=hw,
+            transform_role=transform_role,
         )
-        return transform
 
     def apply(self, logical_addr: int, hw: HardwareSpec) -> int:
         logical_addr = int(logical_addr)
@@ -76,12 +84,116 @@ class AddressTransform:
             matrix.append(row_values)
         return {
             "name": self.name,
+            "mode": self.mode,
+            "placement_policy": self.placement_policy,
             "logical_bit_labels": list(self.logical_bit_labels),
             "physical_bit_labels": list(self.physical_bit_labels),
             "permutation": list(self.permutation),
+            "layout_permutation": list(self.layout_permutation or self.permutation),
+            "physical_permutation": list(self.physical_permutation or self.permutation),
+            "composed_permutation": list(self.composed_permutation or self.permutation),
+            "transform_role": self.transform_role,
+            "transform_source": self.transform_source,
             "matrix": matrix,
             "interleave_bank_count": self.interleave_bank_count,
         }
+
+
+def build_transform_from_edge_result(
+    edge_result: Mapping[str, object],
+    mode: str,
+    hw: HardwareSpec,
+    transform_role: str = "input",
+) -> AddressTransform:
+    is_output = transform_role == "output"
+    logical_labels = list(
+        edge_result.get("producer_visible_outer_bits" if is_output else "consumer_visible_outer_bits") or []
+    )
+    if mode == "baseline":
+        identity = list(range(hw.remap_bits))
+        return AddressTransform(
+            name=f"baseline_{transform_role}_identity",
+            logical_bit_labels=logical_labels,
+            physical_bit_labels=list(logical_labels),
+            permutation=identity,
+            layout_permutation=identity,
+            physical_permutation=identity,
+            composed_permutation=identity,
+            transform_role=transform_role,
+            transform_source="identity",
+            placement_policy="identity",
+            mode=mode,
+        )
+
+    layout_permutation = list(
+        edge_result.get("internal_layout_permutation")
+        or edge_result.get("layout_permutation")
+        or edge_result.get("internal_permutation")
+        or edge_result.get("permutation")
+        or []
+    )
+    physical_permutation = list(
+        edge_result.get("internal_physical_permutation")
+        or edge_result.get("physical_permutation")
+        or list(range(hw.remap_bits))
+    )
+    composed_permutation = list(
+        edge_result.get("internal_composed_permutation")
+        or edge_result.get("composed_permutation")
+        or edge_result.get("internal_permutation")
+        or edge_result.get("permutation")
+        or []
+    )
+    output_permutation = list(
+        edge_result.get("internal_output_permutation")
+        or edge_result.get("output_permutation")
+        or composed_permutation
+    )
+    input_permutation = list(
+        edge_result.get("internal_input_permutation")
+        or edge_result.get("input_permutation")
+        or physical_permutation
+    )
+    if not layout_permutation:
+        layout_permutation = list(range(hw.remap_bits))
+    if not composed_permutation:
+        composed_permutation = list(layout_permutation)
+    placement_policy = str(edge_result.get("physical_placement_policy", "preserve_layout_only"))
+    interleave_bank_count = 1
+    selected_permutation = output_permutation if is_output else input_permutation
+    selected_policy = placement_policy
+    transform_source = "solver"
+    if mode == "layout_remap":
+        selected_permutation = layout_permutation if is_output else list(range(hw.remap_bits))
+        selected_policy = "preserve_layout_only"
+        transform_source = "P_layout" if is_output else "identity"
+    elif mode == "oracle_interleave":
+        selected_permutation = output_permutation if is_output else input_permutation
+        selected_policy = "oracle_interleave"
+        interleave_bank_count = hw.bank_count_per_slice
+        transform_source = "oracle"
+    else:
+        transform_source = "P_out" if is_output else "P_in"
+    physical_labels = _dram_bit_labels(hw)
+    selected_labels = _selected_physical_labels(
+        physical_labels=physical_labels,
+        permutation=selected_permutation,
+        visible_bit_count=len(logical_labels),
+    )
+    return AddressTransform(
+        name=f"{mode}_{transform_role}_remap",
+        logical_bit_labels=logical_labels,
+        physical_bit_labels=selected_labels,
+        permutation=selected_permutation,
+        layout_permutation=layout_permutation,
+        physical_permutation=physical_permutation,
+        composed_permutation=composed_permutation,
+        transform_role=transform_role,
+        transform_source=transform_source,
+        interleave_bank_count=interleave_bank_count,
+        placement_policy=selected_policy,
+        mode=mode,
+    )
 
 
 def decode_physical_address(physical_addr: int, hw: HardwareSpec) -> Dict[str, int]:
@@ -135,3 +247,28 @@ def encode_physical_address(
 def _interleave_logical_addr(logical_addr: int, bank_count: int) -> int:
     shift = max(1, (max(1, bank_count) - 1).bit_length())
     return ((logical_addr // max(1, bank_count)) << shift) | (logical_addr % max(1, bank_count))
+
+
+def _selected_physical_labels(
+    *,
+    physical_labels: Sequence[str],
+    permutation: Sequence[int],
+    visible_bit_count: int,
+) -> List[str]:
+    labels: List[str] = []
+    for logical_idx in range(visible_bit_count):
+        mapped = int(permutation[logical_idx]) if logical_idx < len(permutation) else logical_idx
+        if 0 <= mapped < len(physical_labels):
+            labels.append(str(physical_labels[mapped]))
+        else:
+            labels.append(f"bit_{mapped}")
+    return labels
+
+
+def _dram_bit_labels(hw: HardwareSpec) -> List[str]:
+    labels: List[str] = []
+    labels.extend(f"col_bit_{idx}" for idx in range(hw.column_bits))
+    labels.extend(f"row_bit_{idx}" for idx in range(hw.row_bits))
+    labels.extend(f"bank_bit_{idx}" for idx in range(hw.bank_bits))
+    labels.extend(f"slice_bit_{idx}" for idx in range(hw.slave_bits))
+    return labels[: hw.remap_bits]

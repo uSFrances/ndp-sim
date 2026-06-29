@@ -768,10 +768,26 @@ REFERENCE_CASE = {
 }
 
 
+def build_case_summary(graph_relpath: str, *, label_suffix: str = ""):
+    graph_path = Path(graph_relpath)
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    hw = HardwareSpec()
+    report = analyze_graph_performance(graph, hw, include_request_traces=False)
+    roofline_summary = build_roofline_summary(report, mode="baseline", graph_name=graph_path.stem)
+    roof_op = dict(roofline_summary["operators"][0])
+    base_label = f"M={graph['shape_bindings']['M']},N={graph['shape_bindings']['N']},K={graph['shape_bindings']['K']}"
+    roof_op["label"] = f"{base_label}{label_suffix}"
+    return roof_op
+
+
 def slide_summary_table(prs, ctx):
     current = dict(ctx["roof_op"])
     current["label"] = f"M={ctx['graph']['shape_bindings']['M']},N={ctx['graph']['shape_bindings']['N']},K={ctx['graph']['shape_bindings']['K']}"
-    cases = [REFERENCE_CASE, current]
+    case_28 = build_case_summary(
+        "examples/graphs/ring_gemm/ring_gemm_bias_28slices.json",
+        label_suffix=" (28 slices)",
+    )
+    cases = [REFERENCE_CASE, current, case_28]
     metrics = [
         ("latency_cycles", lambda c: f"{int(c['latency_cycles'])}"),
         ("hardware_measured_cycles", lambda c: f"{int(c['hardware_measured_cycles'])}" if c.get("hardware_measured_cycles") is not None else "N/A"),
@@ -787,19 +803,21 @@ def slide_summary_table(prs, ctx):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_title(slide, "ring_gemm 单算子性能表", "不同 size 对比；指标口径对齐 export_op_performance_summary.py / roofline compact CSV")
     add_box(slide, Inches(0.72), Inches(1.02), Inches(11.9), Inches(0.62),
-            "对象：ring_gemm_fp16_fp16_fp16_0  |  mode=baseline  |  同地址映射思路下的两组 size 对比",
+            "对象：ring_gemm_fp16_fp16_fp16_0  |  mode=baseline  |  同地址映射思路下的三组 case 对比",
             fill=LIGHT_GREEN, line=GREEN, font_size=15, bold=True)
 
     x0 = Inches(0.82)
     y0 = Inches(1.82)
-    c0 = Inches(4.9)
-    c1 = Inches(3.1)
-    c2 = Inches(3.1)
-    row_h = Inches(0.39)
+    c0 = Inches(4.25)
+    c1 = Inches(2.4)
+    c2 = Inches(2.4)
+    c3 = Inches(2.4)
+    row_h = Inches(0.37)
 
     add_box(slide, x0, y0, c0, row_h, "metric", fill=LIGHT_BLUE, line=BLUE, font_size=13, bold=True)
     add_box(slide, x0 + c0, y0, c1, row_h, cases[0]["label"], fill=LIGHT_BLUE, line=BLUE, font_size=12, bold=True)
     add_box(slide, x0 + c0 + c1, y0, c2, row_h, cases[1]["label"], fill=LIGHT_BLUE, line=BLUE, font_size=12, bold=True)
+    add_box(slide, x0 + c0 + c1 + c2, y0, c3, row_h, cases[2]["label"], fill=LIGHT_BLUE, line=BLUE, font_size=11, bold=True)
 
     for idx, (metric, formatter) in enumerate(metrics, start=1):
         y = y0 + row_h * idx
@@ -807,16 +825,20 @@ def slide_summary_table(prs, ctx):
         add_box(slide, x0, y, c0, row_h, metric, fill=fill, line=GRAY, font_size=12, align=PP_ALIGN.LEFT)
         add_box(slide, x0 + c0, y, c1, row_h, formatter(cases[0]), fill=fill, line=GRAY, font_size=12)
         add_box(slide, x0 + c0 + c1, y, c2, row_h, formatter(cases[1]), fill=fill, line=GRAY, font_size=12)
+        add_box(slide, x0 + c0 + c1 + c2, y, c3, row_h, formatter(cases[2]), fill=fill, line=GRAY, font_size=12)
 
-    add_box(slide, Inches(0.92), Inches(5.95), Inches(3.1), Inches(0.78),
+    add_box(slide, Inches(0.88), Inches(5.78), Inches(2.9), Inches(0.9),
             "旧 size 结论\nmemory-bound，但已优于 measured\nerror = -4.76%",
             fill=LIGHT_RED, line=RED, font_size=14, bold=True)
-    add_box(slide, Inches(4.28), Inches(5.95), Inches(3.45), Inches(0.78),
+    add_box(slide, Inches(3.98), Inches(5.78), Inches(3.15), Inches(0.9),
             f"新 size 结论\nlatency={int(current['latency_cycles'])}, measured={int(current['hardware_measured_cycles'])}\nerror = {fmt_percent_delta(current.get('latency_cycles'), current.get('hardware_measured_cycles'))}",
             fill=LIGHT_ORANGE, line=ORANGE, font_size=14, bold=True)
-    add_box(slide, Inches(7.95), Inches(5.95), Inches(4.0), Inches(0.78),
-            "对比观察\n大 K 场景下 analytical/measured 已非常接近\ncompute utilization 明显提升，bandwidth utilization 变化较小",
+    add_box(slide, Inches(7.33), Inches(5.78), Inches(2.35), Inches(0.9),
+            f"28-slice 结论\nlatency={int(case_28['latency_cycles'])}, measured={int(case_28['hardware_measured_cycles'])}\nerror = {fmt_percent_delta(case_28.get('latency_cycles'), case_28.get('hardware_measured_cycles'))}",
             fill=LIGHT_PURPLE, line=PURPLE, font_size=13, bold=True)
+    add_box(slide, Inches(9.92), Inches(5.78), Inches(2.0), Inches(0.9),
+            "对比观察\n28-slice global ring 下\ncompute 利用率更高，但最终仍是 memory-bound",
+            fill=LIGHT_GREEN, line=GREEN, font_size=12, bold=True)
     add_footer(slide, "Slide 1 · 单算子性能对比表")
 
 

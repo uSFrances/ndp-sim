@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .graph import load_graph_file
-from .performance import analyze_graph_performance, load_performance_config
+from .performance import MODE_ALIASES, analyze_graph_performance, load_runtime_config
 
 
 def generate_roofline_artifacts(
@@ -13,11 +13,12 @@ def generate_roofline_artifacts(
     mode: str = "remap",
     explicit_output: Optional[str] = None,
 ) -> Dict[str, object]:
-    hardware, perf_cfg = load_performance_config(config_path)
+    hardware, perf_cfg, solver_cfg = load_runtime_config(config_path)
     payload = analyze_graph_performance(
         load_graph_file(graph_path),
         hardware,
         perf_cfg,
+        solver_cfg,
         include_request_traces=False,
     )
     summary = build_roofline_summary(payload, mode=mode, graph_name=Path(graph_path).stem)
@@ -65,13 +66,14 @@ def build_roofline_summary(
     mode: str,
     graph_name: str,
 ) -> Dict[str, object]:
+    canonical_mode = MODE_ALIASES.get(mode, mode)
     hardware = dict(performance_payload["hardware"])
     derived = dict(hardware.get("derived", {}))
     bandwidth = float(derived["peak_memory_bandwidth_bytes_per_cycle"])
     general_peak = float(derived["general_peak_ops_per_cycle"])
     gemm_peak = float(derived["gemm_peak_ops_per_cycle"])
 
-    mode_payload = dict(performance_payload["modes"])[mode]
+    mode_payload = dict(performance_payload["modes"])[canonical_mode]
     mode_total_latency = float(mode_payload["total_latency_cycles"])
     op_breakdown = list(mode_payload["op_breakdown"])
     operators: List[Dict[str, object]] = []
@@ -149,7 +151,7 @@ def build_roofline_summary(
     operators.sort(key=lambda item: float(item["achieved_ops_per_cycle"]), reverse=True)
     return {
         "graph_name": graph_name,
-        "mode": mode,
+        "mode": canonical_mode,
         "mode_total_latency_cycles": mode_total_latency,
         "hardware": {
             "peak_memory_bandwidth_bytes_per_cycle": bandwidth,
