@@ -374,7 +374,8 @@ def process_rmsnorm_tensors(
                         end = start + slice_n
                         slice_nxm = padded[start:end, :]  # (N_slice, 32)
                         global_idx = head_idx * slices_per_group + i
-                        kv_caseA_sum_matrix[:, global_idx] = np.sum(slice_nxm, axis=0, dtype=np.float32)
+                        slice_square = np.square(slice_nxm.astype(np.float32, copy=False))
+                        kv_caseA_sum_matrix[:, global_idx] = np.sum(slice_square, axis=0, dtype=np.float32)
 
                 kv_caseA_sum_matrix.reshape(-1, order='F').tofile(kv_caseA_sum_bin_path)
                 print(f"  🧮 KV replacement source generated from CaseA: {src_fn} -> {kv_caseA_sum_bin_path}")
