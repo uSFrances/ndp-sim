@@ -8,11 +8,11 @@ SliceRouter = Callable[[int], int]
 
 BUILTIN_SLICE_TYPE_ROUTERS: dict[str, SliceRouter] = {
     # Keep existing names for backward compatibility.
-    "rope_slice_xor2": lambda slice_id: slice_id ^ 0b10,
+    "rope_slice_xor2": lambda slice_id: slice_id ^ 0b11,
     "slice4": lambda slice_id: slice_id - slice_id % 4,
     # Generic reusable strategies for any operator/input/output tensor.
     "slice0": lambda _slice_id: 0,
-    "slice_xor2": lambda slice_id: slice_id ^ 0b10,
+    "slice_xor2": lambda slice_id: slice_id ^ 0b11,
 }
 
 
