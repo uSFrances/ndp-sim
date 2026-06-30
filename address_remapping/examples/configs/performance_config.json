@@ -48,5 +48,114 @@
       "slice_write_buffer_depth": 32,
       "scheduler_epoch_cycles": 64
     }
+  },
+  "solver": {
+    "bank_interleave": {
+      "gemm_local_fp16_fp16_fp16": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "gemm_local_qkt_fp16_fp16_fp32": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "ring_gemm_fp16_fp16_fp16": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_add_V_fp16MN_fp32N_fp16MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mul_fp32MN_fp32N_fp16MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_add_fp16MN_fp32N_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_add_fp32MN_fp16MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_add_fp32MN_fp32MN_fp16MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_add_fp32MN_fp32MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mac_SFU": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_max": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mul_fp32MN_fp16MN_fp16MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mul_fp32MN_fp32MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mul_fp32MN_fp32M_fp16MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_mul_fp32MN_fp32M_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_remote_sum_Mfp32_Mfp32": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_remote_sum_fp32MN_fp32MN_2d": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_silu_fp16MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_sub_SFU_fp32MN_fp32MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_sum_rec_fp32MN_fp32MN": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      },
+      "prefill_summac": {
+        "inA": 1,
+        "inB": 1,
+        "out": 1
+      }
+    }
   }
 }

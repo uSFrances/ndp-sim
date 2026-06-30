@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List
 
-from .hardware import HardwareSpec
+from .hardware import HardwareSpec, SolverConfig
 from .layout import LayoutSpec
 from .model_parser import expand_model_spec
 from .solver import EdgeSolveResult, solve_edge
@@ -74,8 +74,13 @@ class TensorSpec:
 
 
 
-def solve_graph(graph_spec: Dict[str, object], hw_cfg: HardwareSpec = None) -> List[EdgeSolveResult]:
+def solve_graph(
+    graph_spec: Dict[str, object],
+    hw_cfg: HardwareSpec = None,
+    solver_cfg: SolverConfig | None = None,
+) -> List[EdgeSolveResult]:
     hardware = hw_cfg or HardwareSpec()
+    solver_config = solver_cfg or SolverConfig()
     expanded = expand_model_spec(graph_spec) if "model" in graph_spec else graph_spec
     ops = {
         op_name: OpSpec.from_dict(str(op_name), op_data)
@@ -143,6 +148,14 @@ def solve_graph(graph_spec: Dict[str, object], hw_cfg: HardwareSpec = None) -> L
                     tensor_name=tensor_name,
                     producer_axis_aliases=producer_axis_aliases,
                     consumer_axis_aliases=consumer_axis_aliases,
+                    bank_interleave_count=solver_config.bank_interleave_count(
+                        ops[consumer].op_type,
+                        consumer_port,
+                    ),
+                    producer_port=producer_port,
+                    consumer_port=consumer_port,
+                    producer_op_type=ops[producer].op_type,
+                    consumer_op_type=ops[consumer].op_type,
                 ),
                 edge=edge,
                 ops=ops,

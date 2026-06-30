@@ -1,0 +1,14 @@
+{
+    "hidden_size": 1536,
+    "intermediate_size": 8960,
+    "num_attention_heads": 12,
+    "num_key_value_heads": 2,
+    "head_dim": 128,
+    "num_hidden_layers": 28,
+    "sequence_length": 8,
+    "slice_per_head": 4,
+    "used_slices": 28,
+    "kv_padding": 512,
+    "target_op": "all"
+}
+

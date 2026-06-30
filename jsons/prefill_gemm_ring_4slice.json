@@ -270,7 +270,7 @@
             "nbr_enable": 1,
             "buf_full_last_index": 3,
             "buffer_life_time": 4,
-            "mode": 1,
+            "mode": 0,
             "mask": [
                 1,
                 1,
@@ -288,7 +288,7 @@
             "nbr_enable": 1,
             "buf_full_last_index": 3,
             "buffer_life_time": 4,
-            "mode": 1,
+            "mode": 0,
             "mask": [
                 1,
                 1,
@@ -306,7 +306,7 @@
             "nbr_enable": 0,
             "buf_full_last_index": 3,
             "buffer_life_time": 4,
-            "mode": 0,
+            "mode": 1,
             "mask": [
                 1,
                 1,
@@ -324,7 +324,7 @@
             "nbr_enable": 0,
             "buf_full_last_index": 3,
             "buffer_life_time": 4,
-            "mode": 0,
+            "mode": 1,
             "mask": [
                 1,
                 1,

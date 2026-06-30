@@ -1,0 +1,256 @@
+GAME-CHANGING PERFORMANCE & EFFICIENCY
+Snapdragon® X Elite generates game-changing performance and 
+efficiency. With a 4nm System-on-a-Chip architecture, the best-
+in-class 12-core Qualcomm Oryon™ CPU optimizes demanding 
+workloads and features up to Dual-Core Boost for incredibly fast 
+responsiveness. The premium integrated Qualcomm® Adreno™ GPU 
+delivers stunning graphics for immersive entertainment. Snapdragon 
+X Elite supports this supercharged performance with low-power 
+consumption for up to multi-day battery life on a single charge1. 
+BUILT FOR AI
+Snapdragon X Elite features the industry-leading Qualcomm® AI 
+Engine with an integrated Qualcomm® Hexagon™ NPU, delivering 
+transformative experiences for creativity, video conferencing, 
+security, and productivity assistants. Snapdragon X Elite is capable 
+of running Generative AI LLM models over 13B parameters on-device 
+with blazing-fast speeds. It also includes the updated Micro NPU 
+inside the ultra-low power Qualcomm® Sensing Hub for enhanced 
+security, login experience, and privacy, including the ability to 
+wake the device when in sleep mode. Sensitive data can stay on 
+your laptop for increased security with intelligence at the edge. 
+The Qualcomm AI Engine supports Windows Studio Effects and 
+many other AI-accelerated applications and experiences, to make 
+possibilities endless. 
+SMARTER USER EXPERIENCES
+Bring mobile experiences directly to your PC. Stream, download, 
+and sync from virtually anywhere with lightning-fast 5G and Wi-Fi 
+7 with HBS Multi-Link for seamless, jitter-free cloud connectivity. 
+Snapdragon Seamless™ experience allows you to easily switch 
+between your favorite devices for smooth and dynamic experiences. 
+Immerse yourself in lossless audio for high-fidelity music and 
+entertainment with your wireless headphones with the Snapdragon 
+Sound™ Technology Suite. Snapdragon X Elite is also backed by 
+intelligent security features that help protect your PC from chip to 
+cloud, including the Qualcomm® Secure Processing Unit running 
+Microsoft Pluton TPM, total memory encryption, and Microsoft 
+Secured-Core PC support.
+PERFORMANCE  
+REBORN
+DCN 87-71417-1 Rev C
+1 	 Battery life varies significantly based on device, setting, usage, and other factors.
+2	 Source: Geekbench, WL Extreme, NPU TOPS
+Your laptop performance is 
+reborn with the Snapdragon 
+X Elite Platform. Built for AI, 
+Snapdragon X Elite is the 
+most powerful, intelligent, 
+and power efficient processor 
+ever created for Windows in 
+its class2. With cutting-edge 
+responsiveness, navigate 
+demanding multitasking 
+workloads across productivity, 
+creativity, immersive 
+entertainment, and more.
+Snapdragon® X Elite: SKU Comparison Table
+Qualcomm Oryon™ CPU
+Qualcomm® 
+Adreno™ GPU
+Qualcomm® 
+Hexagon™ NPU
+Memory
+Platform
+Part Number
+Cores
+Total  
+Cache
+Max Multithread
+Frequency
+Dual Core
+Boost
+TFLOPs
+NPU TOPS
+Memory 
+Type
+Transfer 
+Rate
+Snapdragon X Elite
+X1E-84-100
+12
+42 MB
+3.8 GHz
+4.2 GHz
+4.6
+45
+LPDDR5x
+8448 MT/s
+Snapdragon X Elite
+X1E-80-100
+12
+42 MB
+3.4 GHz
+4.0 GHz
+3.8
+45
+LPDDR5x
+8448 MT/s
+Snapdragon X Elite
+X1E-78-100
+12
+42 MB
+3.4 GHz
+None
+3.8
+45
+LPDDR5x
+8448 MT/s
+
+*Battery life varies significantly with settings, usage, and other factors.
+Snapdragon and Qualcomm branded products are products of Qualcomm Technologies, Inc. and/or its subsidiaries.
+Camera
+Image Signal Processor Name:  
+Qualcomm Spectra™ ISP
+•	 Dual 18-bit ISPs
+•	 Always-Sensing ISP
+Dual Camera: 2x 36 MP
+Single Camera: Up to 64 MP
+Video Capture: 4K HDR
+General Audio
+Audio Technology: Qualcomm Aqstic™ Audio 
+technology, Qualcomm® aptX™ Audio
+Cellular Modem-RF 
+Snapdragon X65 5G Modem-RF System
+Peak Download Speed: 10 Gbps
+Peak Upload Speed: 3.5 Gbps
+Cellular Modem-RF Specs: 1,000 MHz bandwidth 
+(mmWave), 300 MHz bandwidth (sub-6 GHz)
+Performance Enhancement Technologies: 
+Qualcomm® Smart Transmit™ technology, 
+Qualcomm® Wideband Envelope Tracking, 
+Qualcomm® AI-Enhanced Signal Boost adaptive 
+antenna tuning, Qualcomm® 5G PowerSave
+Cellular Technology: 5G NR, mmWave, sub-6 GHz, 
+Dynamic Spectrum Sharing (DSS), LTE, CBRS, 
+HSPA, WCDMA 
+M.2. Interface: 5G M.2. card over PCIe Gen 3
+Wi-Fi/Bluetooth®
+Wi-Fi/Bluetooth System: Qualcomm® FastConnect™ 
+7800 Mobile Connectivity System
+Generations: Wi-Fi 7, Wi-Fi 6E, Wi-Fi 6
+Standards: 802.11be, 802.11ax, 802.11ac, 802.11n, 
+802.11g, 802.11b, 802.11a
+Spectral Bands: 6 GHz, 5 GHz, 2.4 GHz
+Spatial Streams: Up to 4
+Peak QAM: 4K QAM
+Features: Passpoint, 8x8 Sounding, TDLS, Wi-Fi 
+QoS Management, Wi-Fi Optimized Connectivity, 
+Wi-Fi Location, OFDMA (UL/DL), Miracast, Target 
+Wake Time, Voice-Enterprise, MU-MIMO (UL/
+DL), Multi-Link Operation (MLO), High Band 
+Simultaneous (HBS)
+Bluetooth 
+•	 Specification Version: Bluetooth 5.4 
+•	 Bluetooth Connection Technology: Bluetooth LE
+M.2. Interface: WiFi M.2. card over PCIe Gen 3
+USB
+USB Specification Version: USB4
+Interface Type: 3x USB-C
+•	 3x USB4, 2x USB3.2 Gen2, 1x eUSB2
+Best-in-class CPU with high performance  
+and remarkable power efficiency 
+Delivers exceptional energy savings and  
+up to multiple days of battery life*
+Up to Dual-Core Boost for  
+incredibly fast responsiveness
+Industry-leading Qualcomm® AI Engine, with 
+up to 45 TOPS AI performance
+Best-in-class processing across CPU, GPU, 
+NPU, and Micro NPU
+•	 Qualcomm Oryon CPU
+•	 Adreno GPU
+•	 Hexagon NPU
+•	 Qualcomm Sensing Hub
+On-device AI for transformative intelligent 
+experiences, including support for Generative 
+AI at 30 tokens per second
+Premium integrated GPU delivers stunning 
+graphics performance
+Lightning-fast downloading, streaming, 
+and syncing of files with 5G and Wi-Fi 7 
+connectivity, including HBS Multi-Link 
+for minimized latency and jitter-free 
+entertainment
+Enterprise-grade security for enhanced 
+protection from chip to cloud
+Support for AV1 encode and decode for up to 
+4K HDR video streaming
+Immersive, lossless audio for high-fidelity 
+music and entertainment with your wireless 
+headphones with Snapdragon Sound™ 
+Technology Suite
+Support for up to three external UHD monitors 
+running at 60 Hz, delivering snappier and 
+smoother display experiences
+LPDDR5x memory with 135 GB/s bandwidth 
+for faster AI experiences and efficient 
+multitasking 
+Advanced MIPI camera support for high-
+quality imaging and intelligent features, such 
+as auto-framing, background blur, and facial 
+authentication at lower power consumption
+FEATURES
+SPECIFICATIONS
+CPU
+Qualcomm® Oryon™ CPU
+•	 64-bit architecture
+•	 12 cores, up to 3.8 GHz
+•	 Total Cache: 42 MB 
+Max Multithread Frequency
+•	 X1E-84-100: 3.8 GHz
+•	 X1E-80-100: 3.4 GHz
+•	 X1E-78-100: 3.4 GHz
+Single and Dual-Core Boost
+•	 X1E-84-100: Up to 4.2 GHz
+•	 X1E-80-100: Up to 4.0 GHz
+•	 X1E-78-100: None
+GPU
+Qualcomm® Adreno™ GPU 
+•	 X1E-84-100: Up to 4.6 TFLOPs
+•	 X1E-80-100: Up to 3.8 TFLOPs
+•	 X1E-78-100: Up to 3.8 TFLOPs
+API Support: DX12
+NPU
+Qualcomm® Hexagon™ NPU
+TOPS: Up to 45 TOPS
+Micro NPU: Dual Micro NPU on the Qualcomm® 
+Sensing Hub
+Memory
+Memory Type: LPDDR5x
+Transfer Rate: 8448 MT/s
+Capacity: Up to 64 GB
+Bandwidth: 135 GB/s
+Bit Width: 16-bit
+Number of Channels: 8
+Storage
+SD: SD v3.0
+SSD/NVMe Interface: NVMe SSD over PCIe Gen 4
+UFS: UFS 4.0
+Process
+Process Node: 4nm
+Display
+Display Processing Unit (DPU) Name:  
+Adreno DPU
+Max. On-Device Display Resolution: eDP v1.4b, up to 
+UHD120 HDR10
+Max. External Display Resolution: DP v1.4 - 3 
+displays, up to UHD60 HDR10, 2 displays 5K60
+VPU
+Video Processing Unit (VPU) Name:  
+Adreno VPU
+Encode: 4K60 10-bit encode – H.264,  
+HEVC (H.265), AV1
+Decode: 4K120 10-bit decode – H.264,  
+HEVC (H.265), VP9, AV1
+Concurrency: 4K60 decode – H.264,  
+HEVC (H.265), VP9, AV1 / 2x 4K30 encode –  
+H.264, HEVC (H.265), AV1

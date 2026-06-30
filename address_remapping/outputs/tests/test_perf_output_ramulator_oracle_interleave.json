@@ -1,0 +1,5 @@
+{
+  "mode": "oracle_interleave",
+  "request_count": 5248,
+  "source_output": "H:\\dev\\projects\\ndp-sim\\address_remapping\\outputs\\tests\\test_perf_output.json"
+}

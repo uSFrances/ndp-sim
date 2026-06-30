@@ -506,7 +506,7 @@ def _compute_prefill_mul_fp32MN_fp32M_fp16MN_control_register_updates(
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (d_n or 0) * 32,
+            port1 = (d_n // 2 or 0) * 32,
             port2 = 32,
         ),
     }
@@ -567,7 +567,7 @@ def _compute_prefill_add_fp32MN_fp16MN_fp32MN_control_register_updates(
         ),
         "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (b_n or 0) * 32,
+            port1 = (b_n // 2 or 0) * 32,
             port2 = 32,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
@@ -637,12 +637,12 @@ def _compute_prefill_mul_fp32MN_fp16MN_fp16MN_control_register_updates(
         ),
         "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (b_n or 0) * 32,
+            port1 = (b_n // 2 or 0) * 32,
             port2 = 32,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (d_n or 0) * 32,
+            port1 = (d_n // 2 or 0) * 32,
             port2 = 32,
         ),
     }
@@ -663,7 +663,7 @@ def _compute_prefill_silu_fp16MN_fp32MN_control_register_updates(
         "iga_lc2.dram_loop_configs.end": d_n if d_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
+            port1 = (a_n // 2 or 0) * 32,
             port2 = 32,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
@@ -892,8 +892,8 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         "iga_lc2.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
         "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc7.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc8.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc7.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc8.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
             port1 = (a_n or 0) * 16,

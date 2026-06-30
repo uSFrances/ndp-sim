@@ -1,0 +1,181 @@
+{
+  "params": {
+    "hidden_size": 896,
+    "intermediate_size": 1792,
+    "num_attention_heads": 7,
+    "num_key_value_heads": 1,
+    "head_dim": 128,
+    "num_hidden_layers": 1,
+    "sequence_length": 32,
+    "slice_per_head": 4,
+    "used_slices": 28,
+    "kv_padding": 256,
+    "target_op": "all"
+  },
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [
+            "hidden_size//used_slices",
+            "sequence_length",
+            1
+          ],
+          "remapping": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            0,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ],
+          "source": "external",
+          "base_addr": "0x00000000",
+          "dtype": "fp16",
+          "write_reg_hint": null
+        },
+        "B": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            0,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ],
+          "source": {
+            "type": "external"
+          },
+          "base_addr": "0x1000000",
+          "write_reg_hint": null,
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": [
+            "hidden_size",
+            1,
+            "intermediate_size//used_slices"
+          ],
+          "remapping": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            0,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+          ],
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          },
+          "base_addr": "0x1c800"
+        }
+      },
+      "output": {
+        "shape": [
+          1,
+          "sequence_length",
+          "intermediate_size//used_slices"
+        ],
+        "remapping": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          0,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ],
+        "base_addr": "0x1000040"
+      }
+    }
+  ]
+}

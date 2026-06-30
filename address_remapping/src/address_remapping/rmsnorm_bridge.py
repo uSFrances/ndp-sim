@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 from typing import Dict, List, Mapping, Sequence
 
 from .graph import load_graph_file, solve_graph
-from .hardware import HardwareSpec
+from .hardware import HardwareSpec, SolverConfig
+from .json_format import render_json
+from .layout import LayoutSpec
 from .model_parser import evaluate_expr
 from .registry import RegisteredOp, build_default_registry
-from .solver import EdgeSolveResult
+from .solver import (
+    EdgeSolveResult,
+    solve_edge,
+    solve_external_input_physical_remap,
+    solve_terminal_output_physical_remap,
+)
 
 
 EXTERNAL_TO_CANONICAL_OP = {
@@ -41,6 +49,21 @@ EXTERNAL_PORT_OVERRIDES = {}
 RING_GEMM_EXTERNAL_TYPE = "prefill_gemm_ring_4slice"
 LOCAL_GEMM_EXTERNAL_TYPE = "prefill_gemm_local"
 LOCAL_GEMM_EXTERNAL_TYPES = {LOCAL_GEMM_EXTERNAL_TYPE, "prefill_gemm_local_qkt"}
+
+
+def _remote_sum_fp32mn_input_default_remapping(hardware: HardwareSpec) -> List[int]:
+    remap = list(range(hardware.remap_bits))
+    if hardware.remap_bits < 26:
+        return remap
+    remap[1:21] = list(range(6, 26))
+    remap[21:26] = list(range(1, 6))
+    return remap
+
+
+DEFAULT_INPUT_REMAPPING_BUILDERS = {
+    ("prefill_remote_sum_fp32MN_fp32MN", "A"): _remote_sum_fp32mn_input_default_remapping,
+    ("prefill_remote_sum_4slice_fp32MN_fp32MN", "A"): _remote_sum_fp32mn_input_default_remapping,
+}
 
 
 class RmsNormBridgeError(ValueError):
@@ -349,11 +372,13 @@ def normalize_graph_spec(
 def fill_external_remapping(
     payload: Mapping[str, object],
     hw_cfg: HardwareSpec | None = None,
+    solver_cfg: SolverConfig | None = None,
     registry: Mapping[str, RegisteredOp] | None = None,
 ) -> Dict[str, object]:
     filled, _results = fill_external_remapping_with_results(
         payload,
         hw_cfg=hw_cfg,
+        solver_cfg=solver_cfg,
         registry=registry,
     )
     return filled
@@ -362,11 +387,13 @@ def fill_external_remapping(
 def fill_external_remapping_with_results(
     payload: Mapping[str, object],
     hw_cfg: HardwareSpec | None = None,
+    solver_cfg: SolverConfig | None = None,
     registry: Mapping[str, RegisteredOp] | None = None,
 ) -> tuple[Dict[str, object], List[EdgeSolveResult]]:
     hardware = hw_cfg or HardwareSpec()
+    solver_config = solver_cfg or SolverConfig()
     expanded = build_expanded_graph_from_external_execplan(payload, registry=registry)
-    results = solve_graph(expanded, hardware)
+    results = solve_graph(expanded, hardware, solver_config)
     result_by_key = {
         (
             str(edge["producer"]),
@@ -386,21 +413,62 @@ def fill_external_remapping_with_results(
         for operator in operators
         if isinstance(operator, dict) and str(operator.get("id", "")).strip()
     }
-    output_remappings: Dict[str, List[int]] = {}
+    expanded_ops = {
+        str(op_id): dict(op_data)
+        for op_id, op_data in dict(expanded.get("ops", {})).items()
+    }
+    output_remappings: Dict[str, Dict[str, object]] = {}
     output_writeregs: Dict[str, Dict[str, object]] = {}
     output_write_reg_hints: Dict[str, str] = {}
+    producers_with_consumers = {str(edge["producer"]) for edge in expanded.get("edges", []) if isinstance(edge, Mapping)}
 
     for operator in operators:
         op_id = str(operator["id"])
         external_type = str(operator.get("type", "")).strip()
+        canonical_type = _canonical_operator_type(external_type, build_default_registry())
         external_to_internal_ports = _external_to_internal_ports(external_type)
         inputs = operator.get("inputs", {})
-        for external_port, input_data in dict(inputs).items():
+        if not isinstance(inputs, Mapping):
+            raise RmsNormBridgeError(f"Operator '{op_id}' must define an 'inputs' mapping.")
+        filtered_inputs = _filtered_external_inputs(external_type, inputs)
+        for external_port, input_data in dict(filtered_inputs).items():
             if not isinstance(input_data, dict):
                 continue
+            internal_port = external_to_internal_ports.get(external_port)
+            if internal_port is None:
+                raise RmsNormBridgeError(
+                    f"Operator '{op_id}' uses unsupported external input port '{external_port}'."
+                )
             source = _normalize_source_ref(input_data.get("source"))
+            default_input_remapping = _default_input_remapping(
+                external_type=external_type,
+                external_port=external_port,
+                hardware=hardware,
+            )
+            input_bank_interleave = solver_config.bank_interleave_count(
+                canonical_type,
+                internal_port,
+            )
             if _is_external_source(source):
-                input_data["remapping"] = None
+                external_payload = _external_input_remapping_payload(
+                    expanded_ops=expanded_ops,
+                    op_id=op_id,
+                    internal_port=internal_port,
+                    hardware=hardware,
+                    solver_config=solver_config,
+                )
+                input_remapping = list(external_payload["input_remapping"])
+                if default_input_remapping is not None:
+                    input_remapping = _compose_exported_remappings(
+                        base_remapping=default_input_remapping,
+                        overlay_remapping=input_remapping,
+                    )
+                input_data["remapping"] = input_remapping
+                _annotate_port_bank_interleave(input_data, input_bank_interleave)
+                input_data.pop("input_remapping", None)
+                input_data.pop("layout_remapping", None)
+                input_data.pop("physical_remapping", None)
+                input_data.pop("bank_interleave_count", None)
                 if _uses_input_write_reg_hint_field(external_type, input_data):
                     input_data["write_reg_hint"] = _fixed_input_write_reg_hint(
                         external_type=external_type,
@@ -409,11 +477,6 @@ def fill_external_remapping_with_results(
                 input_data.pop("writereg", None)
                 continue
 
-            internal_port = external_to_internal_ports.get(external_port)
-            if internal_port is None:
-                raise RmsNormBridgeError(
-                    f"Operator '{op_id}' uses unsupported external input port '{external_port}'."
-                )
             key = (str(source), op_id, internal_port)
             result = result_by_key.get(key)
             if result is None:
@@ -473,28 +536,86 @@ def fill_external_remapping_with_results(
             else:
                 input_data.pop("writereg", None)
 
-            input_data["remapping"] = None
+            producer_op_id = str(source)
+            current_payload = {
+                "remapping": _result_permutation_field(
+                    result,
+                    "output_permutation",
+                    fallback=result.permutation,
+                ),
+                "output_remapping": _result_permutation_field(
+                    result,
+                    "output_permutation",
+                    fallback=result.permutation,
+                ),
+                "input_remapping": _result_permutation_field(
+                    result,
+                    "input_permutation",
+                    fallback=list(range(hardware.remap_bits)),
+                ),
+                "layout_remapping": _result_permutation_field(
+                    result,
+                    "layout_permutation",
+                    fallback=result.permutation,
+                ),
+                "physical_remapping": _result_permutation_field(
+                    result,
+                    "physical_permutation",
+                    fallback=list(range(hardware.remap_bits)),
+                ),
+                "total_remapping": _result_permutation_field(
+                    result,
+                    "output_permutation",
+                    fallback=result.permutation,
+                ),
+                "bank_interleave_count": _result_bank_interleave_count(result),
+            }
+            input_remapping = list(current_payload["input_remapping"])
+            if default_input_remapping is not None:
+                    input_remapping = _compose_exported_remappings(
+                        base_remapping=default_input_remapping,
+                        overlay_remapping=input_remapping,
+                    )
+            input_data["remapping"] = input_remapping
+            _annotate_port_bank_interleave(input_data, input_bank_interleave)
+            input_data.pop("input_remapping", None)
+            input_data.pop("layout_remapping", None)
+            input_data.pop("physical_remapping", None)
+            input_data.pop("bank_interleave_count", None)
 
-            if result.permutation == default_permutation:
+            if current_payload["remapping"] == default_permutation:
                 continue
 
-            producer_op_id = str(source)
             previous = output_remappings.get(producer_op_id)
-            if previous is not None and previous != result.permutation:
+            if previous is not None and previous != current_payload:
                 raise RmsNormBridgeError(
                     f"Producer '{producer_op_id}' feeds multiple consumers requiring different remappings; "
                     "cannot encode a single output.remapping in the external payload."
                 )
-            output_remappings[producer_op_id] = list(result.permutation)
+            output_remappings[producer_op_id] = current_payload
 
-    for producer_op_id, permutation in output_remappings.items():
+    for producer_op_id, remapping_payload in output_remappings.items():
         operator = operator_by_id.get(producer_op_id)
         if operator is None:
             raise RmsNormBridgeError(f"Missing producer operator '{producer_op_id}' while filling remapping output.")
         output = operator.get("output")
         if not isinstance(output, dict):
             raise RmsNormBridgeError(f"Operator '{producer_op_id}' must define an 'output' mapping.")
-        output["remapping"] = list(permutation)
+        output["remapping"] = list(remapping_payload["remapping"])
+        _annotate_port_bank_interleave(
+            output,
+            solver_config.bank_interleave_count(
+                _canonical_operator_type(str(operator.get("type", "")).strip(), build_default_registry()),
+                "out",
+            )
+            if isinstance(operator := operator_by_id.get(producer_op_id), dict)
+            else 1,
+        )
+        output.pop("output_remapping", None)
+        output.pop("layout_remapping", None)
+        output.pop("physical_remapping", None)
+        output.pop("total_remapping", None)
+        output.pop("bank_interleave_count", None)
     for producer_op_id, writereg in output_writeregs.items():
         operator = operator_by_id.get(producer_op_id)
         if operator is None:
@@ -512,6 +633,41 @@ def fill_external_remapping_with_results(
             raise RmsNormBridgeError(f"Operator '{producer_op_id}' must define an 'output' mapping.")
         output["write_reg_hint"] = write_reg_hint
 
+    for operator in operators:
+        if not isinstance(operator, dict):
+            continue
+        op_id = str(operator.get("id", "")).strip()
+        if not op_id or op_id in producers_with_consumers:
+            continue
+        output = operator.get("output")
+        if not isinstance(output, dict):
+            continue
+        if output.get("remapping") is not None:
+            _annotate_port_bank_interleave(
+                output,
+                solver_config.bank_interleave_count(
+                    _canonical_operator_type(str(operator.get("type", "")).strip(), build_default_registry()),
+                    "out",
+                ),
+            )
+            continue
+        terminal_payload = _terminal_output_remapping_payload(
+            expanded_ops=expanded_ops,
+            op_id=op_id,
+            hardware=hardware,
+            solver_config=solver_config,
+        )
+        output["remapping"] = list(terminal_payload["output_remapping"])
+        _annotate_port_bank_interleave(
+            output,
+            solver_config.bank_interleave_count(
+                _canonical_operator_type(str(operator.get("type", "")).strip(), build_default_registry()),
+                "out",
+            ),
+        )
+
+    _mirror_auxiliary_input_remappings(filled)
+
     return filled, results
 
 
@@ -520,6 +676,146 @@ def _write_reg_belongs_on_producer_output(external_type: str, external_port: str
         external_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
         and external_port == "A"
     )
+
+
+def _external_input_remapping_payload(
+    *,
+    expanded_ops: Mapping[str, Mapping[str, object]],
+    op_id: str,
+    internal_port: str,
+    hardware: HardwareSpec,
+    solver_config: SolverConfig,
+) -> Dict[str, object]:
+    op_data = expanded_ops.get(op_id)
+    if not isinstance(op_data, Mapping):
+        raise RmsNormBridgeError(f"Missing normalized operator '{op_id}' while solving external input remapping.")
+    op_type = str(op_data.get("op_type", "")).strip()
+    if not op_type:
+        raise RmsNormBridgeError(f"Operator '{op_id}' is missing canonical op_type metadata.")
+
+    inputs = op_data.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise RmsNormBridgeError(f"Operator '{op_id}' must define normalized input metadata.")
+    input_spec = inputs.get(internal_port)
+    if not isinstance(input_spec, Mapping):
+        raise RmsNormBridgeError(
+            f"Operator '{op_id}' is missing normalized input metadata for port '{internal_port}'."
+        )
+
+    layout_obj = input_spec.get("layout")
+    if isinstance(layout_obj, LayoutSpec):
+        layout = layout_obj
+    elif isinstance(layout_obj, Mapping):
+        layout = LayoutSpec.from_dict(dict(layout_obj))
+    else:
+        raise RmsNormBridgeError(
+            f"Operator '{op_id}' port '{internal_port}' is missing a valid layout for external remapping."
+        )
+
+    resolved_shape_raw = input_spec.get("resolved_shape")
+    if not isinstance(resolved_shape_raw, Mapping):
+        raise RmsNormBridgeError(
+            f"Operator '{op_id}' port '{internal_port}' is missing resolved_shape for external remapping."
+        )
+    shape_bindings = {str(axis): int(value) for axis, value in dict(resolved_shape_raw).items()}
+    bank_interleave_count = solver_config.bank_interleave_count(op_type, internal_port)
+    result = solve_external_input_physical_remap(
+        consumer_layout=layout,
+        shape_bindings=shape_bindings,
+        hw_cfg=hardware,
+        consumer=op_id,
+        tensor_name=f"{op_id}__{internal_port}__external",
+        bank_interleave_count=bank_interleave_count,
+        consumer_port=internal_port,
+        consumer_op_type=op_type,
+    )
+    identity = list(range(hardware.remap_bits))
+    if result.status != "ok":
+        return {
+            "input_remapping": list(identity),
+            "layout_remapping": list(identity),
+            "physical_remapping": list(identity),
+            "bank_interleave_count": 1,
+        }
+    return {
+        "input_remapping": _result_permutation_field(
+            result,
+            "input_permutation",
+            fallback=identity,
+        ),
+        "layout_remapping": _result_permutation_field(
+            result,
+            "layout_permutation",
+            fallback=identity,
+        ),
+        "physical_remapping": _result_permutation_field(
+            result,
+            "physical_permutation",
+            fallback=identity,
+        ),
+        "bank_interleave_count": _result_bank_interleave_count(result),
+    }
+
+
+def _terminal_output_remapping_payload(
+    *,
+    expanded_ops: Mapping[str, Mapping[str, object]],
+    op_id: str,
+    hardware: HardwareSpec,
+    solver_config: SolverConfig,
+) -> Dict[str, object]:
+    op_data = expanded_ops.get(op_id)
+    if not isinstance(op_data, Mapping):
+        raise RmsNormBridgeError(f"Missing normalized operator '{op_id}' while solving terminal output remapping.")
+    op_type = str(op_data.get("op_type", "")).strip()
+    if not op_type:
+        raise RmsNormBridgeError(f"Operator '{op_id}' is missing canonical op_type metadata.")
+
+    outputs = op_data.get("outputs")
+    if not isinstance(outputs, Mapping):
+        raise RmsNormBridgeError(f"Operator '{op_id}' must define normalized output metadata.")
+    output_spec = outputs.get("out")
+    if not isinstance(output_spec, Mapping):
+        raise RmsNormBridgeError(f"Operator '{op_id}' is missing normalized output metadata for port 'out'.")
+
+    layout_obj = output_spec.get("layout")
+    if isinstance(layout_obj, LayoutSpec):
+        layout = layout_obj
+    elif isinstance(layout_obj, Mapping):
+        layout = LayoutSpec.from_dict(dict(layout_obj))
+    else:
+        raise RmsNormBridgeError(f"Operator '{op_id}' output is missing a valid layout for terminal remapping.")
+
+    resolved_shape_raw = output_spec.get("resolved_shape")
+    if not isinstance(resolved_shape_raw, Mapping):
+        raise RmsNormBridgeError(f"Operator '{op_id}' output is missing resolved_shape for terminal remapping.")
+    shape_bindings = {str(axis): int(value) for axis, value in dict(resolved_shape_raw).items()}
+
+    bank_interleave_count = solver_config.bank_interleave_count(op_type, "out")
+    result = solve_terminal_output_physical_remap(
+        producer_layout=layout,
+        shape_bindings=shape_bindings,
+        hw_cfg=hardware,
+        producer=op_id,
+        tensor_name=f"{op_id}__out",
+        bank_interleave_count=bank_interleave_count,
+        producer_port="out",
+        producer_op_type=op_type,
+    )
+    identity = list(range(hardware.remap_bits))
+    if result.status != "ok":
+        return {
+            "output_remapping": list(identity),
+            "bank_interleave_count": 1,
+        }
+    return {
+        "output_remapping": _result_permutation_field(
+            result,
+            "output_permutation",
+            fallback=identity,
+        ),
+        "bank_interleave_count": _result_bank_interleave_count(result),
+    }
 
 
 def _write_reg_hint_belongs_on_producer_output(external_type: str, external_port: str) -> bool:
@@ -542,25 +838,125 @@ def _fixed_input_write_reg_hint(external_type: str, external_port: str) -> str |
     return None
 
 
+def _default_input_remapping(
+    *,
+    external_type: str,
+    external_port: str,
+    hardware: HardwareSpec,
+) -> List[int] | None:
+    builder = DEFAULT_INPUT_REMAPPING_BUILDERS.get((external_type, external_port))
+    if builder is None:
+        return None
+    return [int(bit) for bit in builder(hardware)]
+
+
+def _compose_exported_remappings(
+    *,
+    base_remapping: Sequence[int],
+    overlay_remapping: Sequence[int],
+) -> List[int]:
+    if len(base_remapping) != len(overlay_remapping):
+        raise RmsNormBridgeError(
+            "Cannot compose remappings with different widths in external bridge output."
+        )
+    return [int(base_remapping[int(old_index)]) for old_index in overlay_remapping]
+
+
+def _mirror_auxiliary_input_remappings(payload: Mapping[str, object]) -> None:
+    operators = payload.get("operators")
+    if not isinstance(operators, list):
+        return
+    for operator in operators:
+        if not isinstance(operator, dict):
+            continue
+        external_type = str(operator.get("type", "")).strip()
+        mirror_ports = _auxiliary_input_port_mirrors(external_type)
+        if not mirror_ports:
+            continue
+        inputs = operator.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for mirror_port, canonical_port in mirror_ports.items():
+            mirror_input = inputs.get(mirror_port)
+            canonical_input = inputs.get(canonical_port)
+            if not isinstance(mirror_input, dict) or not isinstance(canonical_input, dict):
+                continue
+            canonical_remapping = canonical_input.get("remapping")
+            if isinstance(canonical_remapping, list):
+                mirror_input["remapping"] = [int(bit) for bit in canonical_remapping]
+            if "bank_interleave" in canonical_input:
+                _annotate_port_bank_interleave(
+                    mirror_input,
+                    int(canonical_input["bank_interleave"]),
+                )
+
+
+def _auxiliary_input_port_mirrors(external_type: str) -> Dict[str, str]:
+    if external_type == RING_GEMM_EXTERNAL_TYPE or external_type in LOCAL_GEMM_EXTERNAL_TYPES:
+        return {"B'": "B"}
+    return {}
+
+
+def _annotate_port_bank_interleave(port_data: Dict[str, object], bank_interleave: int) -> None:
+    existing = dict(port_data)
+    existing.pop("bank_interleave", None)
+    reordered: Dict[str, object] = {}
+    inserted = False
+    for key, value in existing.items():
+        if key == "shape" and not inserted:
+            reordered["bank_interleave"] = int(bank_interleave)
+            inserted = True
+        reordered[key] = value
+    if not inserted:
+        reordered = {"bank_interleave": int(bank_interleave), **reordered}
+    port_data.clear()
+    port_data.update(reordered)
+
+
 def fill_external_rmsnorm_remapping(
     payload: Mapping[str, object],
     hw_cfg: HardwareSpec | None = None,
+    solver_cfg: SolverConfig | None = None,
     registry: Mapping[str, RegisteredOp] | None = None,
 ) -> Dict[str, object]:
-    return fill_external_remapping(payload, hw_cfg=hw_cfg, registry=registry)
+    return fill_external_remapping(payload, hw_cfg=hw_cfg, solver_cfg=solver_cfg, registry=registry)
+
+
+def _result_permutation_field(
+    result: EdgeSolveResult,
+    field_name: str,
+    fallback: Sequence[int],
+) -> List[int]:
+    exported = result.to_dict() if callable(getattr(result, "to_dict", None)) else None
+    value = exported.get(field_name) if isinstance(exported, Mapping) else None
+    if value is None:
+        value = getattr(result, field_name, None)
+    if isinstance(value, (list, tuple)):
+        return [int(item) for item in value]
+    return [int(item) for item in fallback]
+
+
+def _result_bank_interleave_count(result: EdgeSolveResult) -> int:
+    value = getattr(result, "bank_interleave_count", 1)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return 1
 
 
 def fill_external_remapping_file(
     input_path: str,
     output_path: str | None = None,
     hw_cfg: HardwareSpec | None = None,
+    solver_cfg: SolverConfig | None = None,
     registry: Mapping[str, RegisteredOp] | None = None,
 ) -> Path:
     payload = load_graph_file(input_path)
-    filled = fill_external_remapping(payload, hw_cfg=hw_cfg, registry=registry)
+    filled = fill_external_remapping(payload, hw_cfg=hw_cfg, solver_cfg=solver_cfg, registry=registry)
     destination = Path(output_path) if output_path else default_rmsnorm_output_path(input_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(filled, indent=2) + "\n", encoding="utf-8")
+    destination.write_text(render_json(filled) + "\n", encoding="utf-8")
     return destination
 
 
@@ -568,12 +964,14 @@ def fill_external_rmsnorm_remapping_file(
     input_path: str,
     output_path: str | None = None,
     hw_cfg: HardwareSpec | None = None,
+    solver_cfg: SolverConfig | None = None,
     registry: Mapping[str, RegisteredOp] | None = None,
 ) -> Path:
     return fill_external_remapping_file(
         input_path,
         output_path=output_path,
         hw_cfg=hw_cfg,
+        solver_cfg=solver_cfg,
         registry=registry,
     )
 
@@ -645,6 +1043,22 @@ def _map_external_execplan_shape(
                 f"Operator '{op_id}' port '{port_name}' expects mac_SFU input shape [factor, 1, M], got {list(dims)}."
             )
         return {"M": "M"}, {"M": int(dims[2])}
+
+    if external_type == "prefill_remote_sum_4slice_fp32MN_fp32MN" and axes == ["M", "N"]:
+        if len(dims) != 3:
+            raise RmsNormBridgeError(
+                f"Operator '{op_id}' port '{port_name}' expects remote_sum_4slice shape [1, *, M*N], got {list(dims)}."
+            )
+        if int(dims[1]) == int(dims[2]):
+            return {"M": "M", "N": "N"}, {"M": int(dims[1]), "N": int(dims[2])}
+        square_extent = int(dims[2])
+        side = math.isqrt(square_extent)
+        if side * side != square_extent:
+            raise RmsNormBridgeError(
+                f"Operator '{op_id}' port '{port_name}' expects remote_sum_4slice flattened area to be a perfect square, "
+                f"got {square_extent}."
+            )
+        return {"M": "M", "N": "N"}, {"M": side, "N": side}
 
     if len(axes) == 2 and axes[0] == "M":
         if len(dims) != 3:
@@ -937,6 +1351,8 @@ def _evaluate_external_dim(dim: object, values: Mapping[str, int]) -> int:
 
 
 def _normalize_source_ref(source: object) -> object:
+    if isinstance(source, str) and source.strip() == "external":
+        return {"type": "external"}
     if _is_external_source(source):
         return source
     if isinstance(source, Mapping):

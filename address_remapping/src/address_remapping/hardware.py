@@ -159,6 +159,44 @@ class PerformanceConfig:
 
 
 @dataclass(frozen=True)
+class SolverConfig:
+    bank_interleave: Dict[str, Dict[str, int]] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Optional[Mapping[str, object]]) -> "SolverConfig":
+        if not data:
+            return cls()
+        if not isinstance(data.get("bank_interleave", {}), Mapping):
+            raise ValueError("solver.bank_interleave must be a mapping.")
+
+        normalized: Dict[str, Dict[str, int]] = {}
+        for op_type, port_values in dict(data.get("bank_interleave", {})).items():
+            if not isinstance(port_values, Mapping):
+                raise ValueError(f"solver.bank_interleave.{op_type} must be a mapping.")
+            normalized_ports: Dict[str, int] = {}
+            for port_name, raw_count in dict(port_values).items():
+                count = int(raw_count)
+                if count not in {1, 2, 4}:
+                    raise ValueError(
+                        f"solver.bank_interleave.{op_type}.{port_name} must be one of 1, 2, or 4."
+                    )
+                normalized_ports[str(port_name)] = count
+            normalized[str(op_type)] = normalized_ports
+        return cls(bank_interleave=normalized)
+
+    def bank_interleave_count(self, op_type: str, port_name: str) -> int:
+        return int(self.bank_interleave.get(str(op_type), {}).get(str(port_name), 1))
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "bank_interleave": {
+                op_type: {port_name: int(count) for port_name, count in ports.items()}
+                for op_type, ports in self.bank_interleave.items()
+            }
+        }
+
+
+@dataclass(frozen=True)
 class HardwareSpec:
     address_space: AddressSpaceSpec = field(default_factory=AddressSpaceSpec)
     clocks: ClockDomainSpec = field(default_factory=ClockDomainSpec)

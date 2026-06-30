@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .addressing import AddressTransform, compose_physical_address, decode_physical_address, encode_physical_address
 from .graph import load_graph_file, solve_graph
-from .hardware import HardwareSpec, PerformanceConfig
+from .hardware import HardwareSpec, PerformanceConfig, SolverConfig
 from .layout import LayoutError, LayoutSpec
 from .model_parser import expand_model_spec
 from .rmsnorm_bridge import normalize_graph_spec
@@ -20,9 +20,28 @@ from .solver import (
 
 
 MODE_BASELINE = "baseline"
-MODE_REMAP = "remap"
-MODE_REMAP_INTERLEAVE = "remap_interleave"
-ALL_MODES = (MODE_BASELINE, MODE_REMAP, MODE_REMAP_INTERLEAVE)
+MODE_LAYOUT_REMAP = "layout_remap"
+MODE_LAYOUT_REMAP_BANK_AWARE = "layout_remap_bank_aware"
+MODE_ORACLE_INTERLEAVE = "oracle_interleave"
+
+# Backward-compatible aliases for callers and older tests/docs.
+MODE_REMAP = MODE_LAYOUT_REMAP
+MODE_REMAP_INTERLEAVE = MODE_ORACLE_INTERLEAVE
+
+ALL_MODES = (
+    MODE_BASELINE,
+    MODE_LAYOUT_REMAP,
+    MODE_LAYOUT_REMAP_BANK_AWARE,
+    MODE_ORACLE_INTERLEAVE,
+)
+MODE_ALIASES = {
+    MODE_BASELINE: MODE_BASELINE,
+    "remap": MODE_LAYOUT_REMAP,
+    MODE_LAYOUT_REMAP: MODE_LAYOUT_REMAP,
+    "remap_interleave": MODE_ORACLE_INTERLEAVE,
+    MODE_LAYOUT_REMAP_BANK_AWARE: MODE_LAYOUT_REMAP_BANK_AWARE,
+    MODE_ORACLE_INTERLEAVE: MODE_ORACLE_INTERLEAVE,
+}
 
 
 @dataclass(frozen=True)
@@ -148,31 +167,51 @@ def load_performance_config(path: Optional[str]) -> Tuple[HardwareSpec, Performa
     return hardware, perf
 
 
+def load_runtime_config(path: Optional[str]) -> Tuple[HardwareSpec, PerformanceConfig, SolverConfig]:
+    if not path:
+        return HardwareSpec(), PerformanceConfig(), SolverConfig()
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    hardware, perf = load_performance_config(path)
+    solver_values = payload.get("solver", {})
+    if solver_values and not isinstance(solver_values, Mapping):
+        raise ValueError("config.solver must be a mapping.")
+    solver_cfg = SolverConfig.from_dict(dict(solver_values) if solver_values else None)
+    return hardware, perf, solver_cfg
+
+
 def analyze_graph_performance(
     graph_spec: Mapping[str, object],
     hardware: Optional[HardwareSpec] = None,
     perf_cfg: Optional[PerformanceConfig] = None,
+    solver_cfg: Optional[SolverConfig] = None,
     include_request_traces: bool = False,
+    selected_modes: Optional[Sequence[str]] = None,
+    focus_edge: Optional[str] = None,
+    emit_edge_report: bool = False,
 ) -> Dict[str, object]:
     hw = hardware or HardwareSpec()
     perf = perf_cfg or PerformanceConfig()
+    solver = solver_cfg or SolverConfig()
     _validate_perf_config(hw, perf)
 
     normalized_graph = normalize_graph_spec(graph_spec, require_base_addrs=True)
     expanded = expand_model_spec(normalized_graph) if "model" in normalized_graph else dict(normalized_graph)
-    solve_results = solve_graph(dict(expanded), hw)
+    solve_results = solve_graph(dict(expanded), hw, solver)
     edges = list(expanded["edges"])
     edge_results_by_consumer_port = {
         (str(edge["consumer"]), str(edge["consumer_port"])): result
         for edge, result in zip(edges, solve_results)
     }
+    edge_results_by_producer_port = _index_output_edge_results(edges, solve_results)
 
+    active_modes = _normalize_modes(selected_modes)
     modes: Dict[str, Dict[str, object]] = {}
     baseline_latency: Optional[float] = None
-    for mode in ALL_MODES:
+    for mode in active_modes:
         mode_report = _analyze_mode(
             expanded,
             edge_results_by_consumer_port,
+            edge_results_by_producer_port,
             mode,
             hw,
             perf,
@@ -193,6 +232,8 @@ def analyze_graph_performance(
         mode_name: _build_mode_summary(mode_report, true_roofline)
         for mode_name, mode_report in modes.items()
     }
+    cross_mode_comparison = _build_cross_mode_comparison(modes)
+    _attach_benefit_breakdown(mode_summaries, cross_mode_comparison)
     overview = _build_overview(
         graph_name=str(graph_spec.get("name", "graph")),
         graph_summary={
@@ -208,21 +249,26 @@ def analyze_graph_performance(
         modes=modes,
         true_roofline=true_roofline,
     )
-    return {
+    payload = {
         "overview": overview,
         "mode_summaries": mode_summaries,
         "hardware": _serialize_hardware(hw),
         "performance_config": perf.to_dict(),
+        "solver_config": solver.to_dict(),
+        "selected_modes": list(active_modes),
         "graph_summary": {
             "op_count": len(expanded["ops"]),
             "edge_count": len(expanded["edges"]),
             "tensor_count": len(expanded.get("tensors", {})),
         },
         "true_roofline": true_roofline,
+        "cross_mode_comparison": cross_mode_comparison,
         "modes": modes,
         "summary_markdown": summary_markdown,
     }
-
+    if emit_edge_report or focus_edge:
+        payload["edge_mode_comparison"] = _build_edge_mode_comparison(modes, focus_edge=focus_edge)
+    return payload
 
 def write_performance_outputs(
     input_path: str,
@@ -325,9 +371,33 @@ def render_ramulator_trace_lines(
     return lines
 
 
+def _index_output_edge_results(
+    edges: Sequence[Mapping[str, object]],
+    solve_results: Sequence[EdgeSolveResult],
+) -> Dict[Tuple[str, str], EdgeSolveResult]:
+    by_output: Dict[Tuple[str, str], EdgeSolveResult] = {}
+    conflicting_outputs: set[Tuple[str, str]] = set()
+    for edge, result in zip(edges, solve_results):
+        key = (
+            str(edge["producer"]),
+            str(edge.get("producer_port", edge.get("producer_tensor", "out"))),
+        )
+        if key in conflicting_outputs:
+            continue
+        existing = by_output.get(key)
+        if existing is None:
+            by_output[key] = result
+            continue
+        if list(existing.output_permutation or existing.permutation) != list(result.output_permutation or result.permutation):
+            conflicting_outputs.add(key)
+            by_output.pop(key, None)
+    return by_output
+
+
 def _analyze_mode(
     expanded: Mapping[str, object],
     edge_results_by_consumer_port: Mapping[Tuple[str, str], EdgeSolveResult],
+    edge_results_by_producer_port: Mapping[Tuple[str, str], EdgeSolveResult],
     mode: str,
     hw: HardwareSpec,
     perf: PerformanceConfig,
@@ -345,6 +415,7 @@ def _analyze_mode(
             op_name=str(op_name),
             op_data=dict(op_data),
             edge_results_by_consumer_port=edge_results_by_consumer_port,
+            edge_results_by_producer_port=edge_results_by_producer_port,
             mode=mode,
             hw=hw,
             perf=perf,
@@ -397,6 +468,7 @@ def _analyze_op(
     op_name: str,
     op_data: Mapping[str, object],
     edge_results_by_consumer_port: Mapping[Tuple[str, str], EdgeSolveResult],
+    edge_results_by_producer_port: Mapping[Tuple[str, str], EdgeSolveResult],
     mode: str,
     hw: HardwareSpec,
     perf: PerformanceConfig,
@@ -409,6 +481,7 @@ def _analyze_op(
     per_stream_requests: List[List[PhysicalRequest]] = []
     pre_stages: List[Dict[str, object]] = []
     all_read_requests: List[PhysicalRequest] = []
+    input_requests_by_port: Dict[str, List[PhysicalRequest]] = {}
 
     for port_name, port_data in dict(op_data["inputs"]).items():
         role, ag_ids = _classify_input_stream(op_type, str(port_name))
@@ -450,18 +523,22 @@ def _analyze_op(
             hw=hw,
             perf=perf,
         )
+        _attach_transform_metadata(stream_reports, requests)
         streams.extend(stream_reports)
         per_stream_requests.append(list(requests))
         all_read_requests.extend(requests)
+        input_requests_by_port[str(port_name)] = list(requests)
         edge_breakdown.extend(_edge_reports_from_streams(stream_reports))
 
     output_port_name = next(iter(op_data["outputs"]))
     output_data = dict(op_data["outputs"][output_port_name])
     output_tensor_name = _find_output_tensor_name(op_name, output_data)
     output_base_addr = _require_tensor_base_addr(output_tensor_name, tensors)
+    output_edge_result = edge_results_by_producer_port.get((op_name, str(output_port_name)))
     write_requests = _requests_from_output_tensor(
         tensor_name=output_tensor_name,
         output_data=output_data,
+        edge_result=output_edge_result,
         mode=mode,
         hw=hw,
         perf=perf,
@@ -477,6 +554,7 @@ def _analyze_op(
         hw=hw,
         perf=perf,
     )
+    _attach_transform_metadata(writeback_reports, write_requests)
     streams.extend(writeback_reports)
     per_stream_requests.append(list(write_requests))
 
@@ -491,6 +569,7 @@ def _analyze_op(
             streams=streams,
             edge_breakdown=edge_breakdown,
             per_stream_requests=per_stream_requests,
+            input_requests_by_port=input_requests_by_port,
             pre_stages=pre_stages,
             write_stream=write_stream,
             hw=hw,
@@ -589,6 +668,7 @@ def _analyze_ring_gemm_op(
     streams: Sequence[Mapping[str, object]],
     edge_breakdown: Sequence[Mapping[str, object]],
     per_stream_requests: Sequence[Sequence[PhysicalRequest]],
+    input_requests_by_port: Mapping[str, Sequence[PhysicalRequest]],
     pre_stages: Sequence[Mapping[str, object]],
     write_stream: Optional[Mapping[str, object]],
     hw: HardwareSpec,
@@ -602,8 +682,31 @@ def _analyze_ring_gemm_op(
         for stream_requests in per_stream_requests
         for request in stream_requests
     ]
-    local_a_requests = [request for request in request_trace if request.role == "A"]
-    b_requests = [request for request in request_trace if request.role == "B"]
+    local_a_requests = list(input_requests_by_port.get("inA", ()))
+    b_ping_requests = list(input_requests_by_port.get("inB", ()))
+    b_pong_requests = list(input_requests_by_port.get("B'", ()))
+    if not b_ping_requests:
+        b_ping_requests = [request for request in request_trace if request.role == "B"]
+    if not b_pong_requests:
+        # Compatibility fallback for older graphs that only expose one B stream.
+        b_pong_requests = [
+            PhysicalRequest(
+                request_id=request.request_id,
+                tensor_name=f"{request.tensor_name}:compat_pong",
+                edge_name=request.edge_name.replace(":inB", ":B'"),
+                ag_id="ag2",
+                role=request.role,
+                logical_addr=request.logical_addr,
+                base_addr=request.base_addr,
+                address_transform=dict(request.address_transform),
+                physical_addr=request.physical_addr,
+                slice_id=request.slice_id,
+                bank_id=request.bank_id,
+                row_id=request.row_id,
+                col_id=request.col_id,
+            )
+            for request in b_ping_requests
+        ]
     write_requests = [request for request in request_trace if request.role == "writeback"]
 
     geometry = _ring_gemm_execution_geometry(op_data, hw)
@@ -650,10 +753,15 @@ def _analyze_ring_gemm_op(
         geometry.a_buffer_tile_count,
         "ring_gemm local A buffer tiles",
     )
-    b_template_tile_requests = _split_requests_exact(
-        b_requests,
+    b_ping_template_tile_requests = _split_requests_exact(
+        b_ping_requests,
         geometry.b_buffer_tile_count,
-        "ring_gemm B buffer tiles",
+        "ring_gemm B ping buffer tiles",
+    )
+    b_pong_template_tile_requests = _split_requests_exact(
+        b_pong_requests,
+        geometry.b_buffer_tile_count,
+        "ring_gemm B pong buffer tiles",
     )
     output_writeback_tile_requests = _split_requests_exact(
         write_requests,
@@ -662,18 +770,22 @@ def _analyze_ring_gemm_op(
     )
     # Expand template tiles into real execution-time load events using the ring_gemm loop nest.
     # This is where footprint requests become execution-realistic requests.
-    a_load_event_requests, b_load_event_requests = _expand_ring_gemm_load_events(
+    a_load_event_requests, b_ping_load_event_requests, b_pong_load_event_requests = _expand_ring_gemm_load_events(
         a_template_tile_requests=a_template_tile_requests,
-        b_template_tile_requests=b_template_tile_requests,
+        b_ping_template_tile_requests=b_ping_template_tile_requests,
+        b_pong_template_tile_requests=b_pong_template_tile_requests,
         geometry=geometry,
     )
     current_mode = str(streams[0]["mode"]) if streams else MODE_BASELINE
     expanded_a_requests = [request for group in a_load_event_requests for request in group]
-    expanded_b_requests = [request for group in b_load_event_requests for request in group]
+    expanded_b_ping_requests = [request for group in b_ping_load_event_requests for request in group]
+    expanded_b_pong_requests = [request for group in b_pong_load_event_requests for request in group]
     tensor_name_a = local_a_requests[0].tensor_name if local_a_requests else "inA"
-    tensor_name_b = b_requests[0].tensor_name if b_requests else "inB"
+    tensor_name_b_ping = b_ping_requests[0].tensor_name if b_ping_requests else "inB"
+    tensor_name_b_pong = b_pong_requests[0].tensor_name if b_pong_requests else "B'"
     edge_name_a = f"{tensor_name_a}->{op_name}:inA"
-    edge_name_b = f"{tensor_name_b}->{op_name}:inB"
+    edge_name_b_ping = f"{tensor_name_b_ping}->{op_name}:inB"
+    edge_name_b_pong = f"{tensor_name_b_pong}->{op_name}:B'"
     write_edge_name = (
         f"{write_requests[0].edge_name.rsplit(':', 1)[0]}"
         if write_requests and ":" in write_requests[0].edge_name
@@ -689,11 +801,21 @@ def _analyze_ring_gemm_op(
         hw=hw,
         perf=perf,
     )
-    b_streams = _build_stream_reports(
-        requests=expanded_b_requests,
-        ag_ids=("ag1", "ag2"),
-        tensor_name=tensor_name_b,
-        edge_name=edge_name_b,
+    b_ping_streams = _build_stream_reports(
+        requests=expanded_b_ping_requests,
+        ag_ids=("ag1",),
+        tensor_name=tensor_name_b_ping,
+        edge_name=edge_name_b_ping,
+        role="B",
+        mode=current_mode,
+        hw=hw,
+        perf=perf,
+    )
+    b_pong_streams = _build_stream_reports(
+        requests=expanded_b_pong_requests,
+        ag_ids=("ag2",),
+        tensor_name=tensor_name_b_pong,
+        edge_name=edge_name_b_pong,
         role="B",
         mode=current_mode,
         hw=hw,
@@ -709,7 +831,7 @@ def _analyze_ring_gemm_op(
         hw=hw,
         perf=perf,
     )
-    streams = [*a_streams, *b_streams, *writeback_reports]
+    streams = [*a_streams, *b_ping_streams, *b_pong_streams, *writeback_reports]
     edge_breakdown = _edge_reports_from_streams(streams)
     write_stream = writeback_reports[0] if writeback_reports else None
     write_cycles = float(write_stream["adjusted_stream_cycles"]) if write_stream is not None else 0.0
@@ -717,7 +839,8 @@ def _analyze_ring_gemm_op(
 
     ring_bank_timeline, ring_microtile_timeline, ring_timeline_cycles, pure_ring_transfer_bound_cycles, pure_ring_transfer_total_cycles, compute_pipeline_completion = _simulate_ring_microtile_timeline(
         a_load_event_requests=a_load_event_requests,
-        b_load_event_requests=b_load_event_requests,
+        b_ping_load_event_requests=b_ping_load_event_requests,
+        b_pong_load_event_requests=b_pong_load_event_requests,
         output_writeback_tile_requests=output_writeback_tile_requests,
         geometry=geometry,
         per_pe_micro_op_compute_cycles=per_pe_micro_op_compute_cycles,
@@ -726,6 +849,7 @@ def _analyze_ring_gemm_op(
     )
     memory_access_bound_cycles = float(ring_bank_timeline["memory_timeline_cycles"])
     ag_issue_bound_cycles = max((float(stream["issue_cycles"]) for stream in streams), default=0.0)
+    last_writeback_completion_cycle = float(ring_microtile_timeline["last_writeback_completion_cycle"])
     ping_pong_startup_cycles = local_a_read_cycles
     ping_pong_steady_cycles = 0.0
     if geometry.a_buffer_tile_count > 0:
@@ -740,7 +864,7 @@ def _analyze_ring_gemm_op(
     )
     latency = max(
         compute_pipeline_completion,
-        memory_access_bound_cycles,
+        last_writeback_completion_cycle,
         ag_issue_bound_cycles,
         ring_timeline_cycles,
     )
@@ -782,7 +906,9 @@ def _analyze_ring_gemm_op(
         "output_tile_n": geometry.output_tile_n,
         "pe_micro_ops_per_output_tile": geometry.pe_micro_ops_per_output_tile,
         "a_load_event_count": len(a_load_event_requests),
-        "b_load_event_count": len(b_load_event_requests),
+        "b_load_event_count": len(ring_microtile_timeline["global_b_event_ready_cycles"]),
+        "b_ping_load_event_count": len(b_ping_load_event_requests),
+        "b_pong_load_event_count": len(b_pong_load_event_requests),
         "local_a_read_cycles": local_a_read_cycles,
         "per_tile_compute_cycles": math.ceil(per_output_tile_work_ops / max(1, peak_compute_ops)),
         "per_tile_ring_a_transfer_cycles": math.ceil(geometry.a_buffer_bytes / ring_bandwidth_bytes_per_cycle) if ring_participants > 1 and geometry.a_buffer_bytes else 0.0,
@@ -794,6 +920,9 @@ def _analyze_ring_gemm_op(
         "ring_ready_bound_cycles": ring_timeline_cycles,
         "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
         "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
+        "global_b_event_ready_lag_cycles": float(ring_microtile_timeline["global_b_event_ready_lag_cycles"]),
+        "pe_visible_bubble_cycles": float(ring_microtile_timeline["pe_visible_bubble_cycles"]),
+        "completion_tail_cycles": float(ring_microtile_timeline["completion_tail_cycles"]),
         "true_roofline": true_roofline,
         "analytical_model": {
             "estimated_latency_cycles": latency,
@@ -804,6 +933,9 @@ def _analyze_ring_gemm_op(
             "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
             "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
             "ring_transfer_bound_cycles": ring_timeline_cycles,
+            "global_b_event_ready_lag_cycles": float(ring_microtile_timeline["global_b_event_ready_lag_cycles"]),
+            "pe_visible_bubble_cycles": float(ring_microtile_timeline["pe_visible_bubble_cycles"]),
+            "completion_tail_cycles": float(ring_microtile_timeline["completion_tail_cycles"]),
             "lower_bound_cycles": lower_bound,
             "latency_to_lower_bound_ratio": (latency / lower_bound) if lower_bound else None,
         },
@@ -821,9 +953,9 @@ def _analyze_ring_gemm_op(
         "ring_bank_timeline": ring_bank_timeline,
         "streams": list(streams),
         "edge_breakdown": list(edge_breakdown),
-        "address_transforms": _collect_unique_transforms_from_requests([*expanded_a_requests, *expanded_b_requests, *write_requests]),
+        "address_transforms": _collect_unique_transforms_from_requests([*expanded_a_requests, *expanded_b_ping_requests, *expanded_b_pong_requests, *write_requests]),
         "pre_stages": list(pre_stages),
-        "request_trace": [*expanded_a_requests, *expanded_b_requests, *write_requests],
+        "request_trace": [*expanded_a_requests, *expanded_b_ping_requests, *expanded_b_pong_requests, *write_requests],
     }
 
 
@@ -840,7 +972,12 @@ def _requests_from_edge_result(
     consumer_bits = list(result.consumer_visible_outer_bits or [])
     if not consumer_bits:
         return []
-    address_transform = AddressTransform.from_edge_result(result.to_dict(), mode, hw)
+    address_transform = AddressTransform.from_edge_result(
+        result.to_dict(),
+        mode,
+        hw,
+        transform_role="input",
+    )
     return _materialize_requests(
         tensor_name=tensor_name,
         edge_name=f"{result.producer}->{result.consumer}:{tensor_name}",
@@ -885,6 +1022,7 @@ def _requests_from_source_tensor(
 def _requests_from_output_tensor(
     tensor_name: str,
     output_data: Mapping[str, object],
+    edge_result: Optional[EdgeSolveResult],
     mode: str,
     hw: HardwareSpec,
     perf: PerformanceConfig,
@@ -892,6 +1030,24 @@ def _requests_from_output_tensor(
 ) -> List[PhysicalRequest]:
     dtype = str(output_data["layout"].dtype)
     resolved_shape = {str(k): int(v) for k, v in dict(output_data["resolved_shape"]).items()}
+    if edge_result is not None and list(edge_result.producer_visible_outer_bits or []):
+        address_transform = AddressTransform.from_edge_result(
+            edge_result.to_dict(),
+            mode,
+            hw,
+            transform_role="output",
+        )
+        return _materialize_requests(
+            tensor_name=tensor_name,
+            edge_name=f"{tensor_name}:writeback",
+            logical_labels=list(edge_result.producer_visible_outer_bits or []),
+            address_transform=address_transform,
+            base_addr=base_addr,
+            hw=hw,
+            perf=perf,
+            role="writeback",
+            ag_ids=("ag4",),
+        )
     num_requests = _num_requests_from_shape(dtype, resolved_shape, hw)
     return _materialize_sequential_requests(
         tensor_name=tensor_name,
@@ -1028,6 +1184,19 @@ def _build_stream_reports(
             )
         )
     return reports
+
+
+def _attach_transform_metadata(
+    stream_reports: Sequence[Dict[str, object]],
+    requests: Sequence[PhysicalRequest],
+) -> None:
+    transform = dict(requests[0].address_transform) if requests else {}
+    for report in stream_reports:
+        report["address_transform"] = dict(transform)
+        report["placement_policy"] = str(transform.get("placement_policy", "identity"))
+        report["transform_mode"] = str(transform.get("mode", report.get("mode", MODE_BASELINE)))
+        report["transform_role"] = str(transform.get("transform_role", "input"))
+        report["transform_source"] = str(transform.get("transform_source", "identity"))
 
 
 def _request_phase(role: str) -> str:
@@ -1171,12 +1340,15 @@ def _clone_physical_request(request: PhysicalRequest, request_id: int) -> Physic
 
 def _expand_ring_gemm_load_events(
     a_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
-    b_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
+    b_ping_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
+    b_pong_template_tile_requests: Sequence[Sequence[PhysicalRequest]],
     geometry: _RingGemmExecutionGeometry,
-) -> Tuple[List[List[PhysicalRequest]], List[List[PhysicalRequest]]]:
+) -> Tuple[List[List[PhysicalRequest]], List[List[PhysicalRequest]], List[List[PhysicalRequest]]]:
     a_load_event_requests: List[List[PhysicalRequest]] = []
-    b_load_event_requests: List[List[PhysicalRequest]] = []
+    b_ping_load_event_requests: List[List[PhysicalRequest]] = []
+    b_pong_load_event_requests: List[List[PhysicalRequest]] = []
     next_request_id = 0
+    global_b_event_idx = 0
 
     for output_tile_m_idx in range(geometry.output_tile_count_m):
         for output_tile_n_idx in range(geometry.output_tile_count_n):
@@ -1193,14 +1365,23 @@ def _expand_ring_gemm_load_events(
             # even when the underlying geometry template tile is identical.
             for k_tile_idx in range(geometry.total_k_tiles_per_output_tile):
                 template_idx = output_tile_n_idx * geometry.total_k_tiles_per_output_tile + k_tile_idx
+                template_tile = (
+                    b_ping_template_tile_requests[template_idx]
+                    if global_b_event_idx % 2 == 0
+                    else b_pong_template_tile_requests[template_idx]
+                )
                 event_requests = [
                     _clone_physical_request(request, next_request_id + offset)
-                    for offset, request in enumerate(b_template_tile_requests[template_idx])
+                    for offset, request in enumerate(template_tile)
                 ]
                 next_request_id += len(event_requests)
-                b_load_event_requests.append(event_requests)
+                if global_b_event_idx % 2 == 0:
+                    b_ping_load_event_requests.append(event_requests)
+                else:
+                    b_pong_load_event_requests.append(event_requests)
+                global_b_event_idx += 1
 
-    return a_load_event_requests, b_load_event_requests
+    return a_load_event_requests, b_ping_load_event_requests, b_pong_load_event_requests
 
 
 def _group_requests_by_bank_row(requests: Sequence[PhysicalRequest]) -> List[List[PhysicalRequest]]:
@@ -1742,7 +1923,8 @@ def _run_ring_bank_event_loop(
 
 def _simulate_ring_microtile_timeline(
     a_load_event_requests: Sequence[Sequence[PhysicalRequest]],
-    b_load_event_requests: Sequence[Sequence[PhysicalRequest]],
+    b_ping_load_event_requests: Sequence[Sequence[PhysicalRequest]],
+    b_pong_load_event_requests: Sequence[Sequence[PhysicalRequest]],
     output_writeback_tile_requests: Sequence[Sequence[PhysicalRequest]],
     geometry: _RingGemmExecutionGeometry,
     per_pe_micro_op_compute_cycles: float,
@@ -1751,7 +1933,8 @@ def _simulate_ring_microtile_timeline(
 ) -> Tuple[Dict[str, object], Dict[str, object], float, float, float]:
     all_requests = [
         *[request for tile_requests in a_load_event_requests for request in tile_requests],
-        *[request for tile_requests in b_load_event_requests for request in tile_requests],
+        *[request for tile_requests in b_ping_load_event_requests for request in tile_requests],
+        *[request for tile_requests in b_pong_load_event_requests for request in tile_requests],
         *[request for tile_requests in output_writeback_tile_requests for request in tile_requests],
     ]
     if not all_requests:
@@ -1767,11 +1950,25 @@ def _simulate_ring_microtile_timeline(
             "microtile_count_per_participant": len(a_load_event_requests),
             "total_compute_microtiles": geometry.total_coarse_compute_events,
             "a_load_event_count": len(a_load_event_requests),
-            "b_load_event_count": len(b_load_event_requests),
+            "b_load_event_count": 0,
+            "b_ping_load_event_count": 0,
+            "b_pong_load_event_count": 0,
             "ping_pong_assignment": [],
             "local_load_ready_cycles": [],
             "ring_ready_cycles": [],
             "b_ready_cycles": [],
+            "b_ping_ready_cycles": [],
+            "b_pong_ready_cycles": [],
+            "global_b_event_ready_cycles": [],
+            "global_b_event_buffer_assignment": [],
+            "ideal_b_event_ready_cycles": [],
+            "global_b_event_ready_lag_cycles": 0.0,
+            "pe_visible_bubble_cycles": 0.0,
+            "bubble_event_indices": [],
+            "last_b_event_ready_cycle": 0.0,
+            "last_a_read_completion_cycle": 0.0,
+            "last_writeback_completion_cycle": 0.0,
+            "completion_tail_cycles": 0.0,
             "compute_start_cycles": [],
             "compute_end_cycles": [],
             "final_write_release_cycle": 0.0,
@@ -1821,13 +2018,25 @@ def _simulate_ring_microtile_timeline(
     a_event_ready_cycles: Dict[int, float] = {} # 每个 A load event 实际什么时候读完 ready
 
     a_timeline_tiles: List[Dict[str, object]] = []
-    b_timeline_tiles: List[Dict[str, object]] = []
+    b_ping_timeline_tiles: List[Dict[str, object]] = []
+    b_pong_timeline_tiles: List[Dict[str, object]] = []
     coarse_local_load_ready_cycles: List[float] = []
     coarse_ring_ready_cycles: List[float] = []
     coarse_b_ready_cycles: List[float] = []
     coarse_compute_start_cycles: List[float] = []
     coarse_compute_end_cycles: List[float] = []
     coarse_ping_pong_assignment: List[str] = []
+    b_ping_ready_cycles: List[float] = []
+    b_pong_ready_cycles: List[float] = []
+    global_b_event_ready_cycles: List[float] = []
+    bubble_event_indices: List[int] = []
+    pe_visible_bubble_cycles = 0.0
+    b_ping_event_ready_by_idx: Dict[int, float] = {}
+    b_pong_event_ready_by_idx: Dict[int, float] = {}
+    b_ping_event_group_keys: Dict[int, str] = {}
+    b_pong_event_group_keys: Dict[int, str] = {}
+    b_ping_event_release_by_idx: Dict[int, float] = {}
+    b_pong_event_release_by_idx: Dict[int, float] = {}
 
     pe_micro_op_start_cycles: List[float] = []
     pe_micro_op_end_cycles: List[float] = []
@@ -1873,16 +2082,31 @@ def _simulate_ring_microtile_timeline(
             }
         )
 
-    def _load_b_tile(b_event_idx: int) -> Tuple[float, str]:
-        slot_name = "ping" if b_event_idx % 2 == 0 else "pong"
-        group_key = f"b:{b_event_idx}"
+    def _enqueue_b_tile(
+        b_event_idx: int,
+        event_requests: Sequence[Sequence[PhysicalRequest]],
+        *,
+        slot_name: str,
+        group_prefix: str,
+        group_key_by_idx: Dict[int, str],
+    ) -> str:
+        if b_event_idx >= len(event_requests):
+            raise ValueError(f"ring_gemm {group_prefix} event index {b_event_idx} exceeds available events.")
+        group_key = f"{group_prefix}:{b_event_idx}"
+        if b_event_idx in group_key_by_idx:
+            return group_key_by_idx[b_event_idx]
         release_cycle = b_slot_free_cycles[slot_name]
+        group_key_by_idx[b_event_idx] = group_key
+        if group_prefix == "b_ping":
+            b_ping_event_release_by_idx[b_event_idx] = release_cycle
+        else:
+            b_pong_event_release_by_idx[b_event_idx] = release_cycle
         if group_key not in group_total_requests:
-            group_total_requests[group_key] = len(b_load_event_requests[b_event_idx])
+            group_total_requests[group_key] = len(event_requests[b_event_idx])
             group_completed_requests[group_key] = 0
         future_reads.extend(
             _TimedPhysicalRequest(request=request, release_cycle=release_cycle, group_key=group_key)
-            for request in sorted(b_load_event_requests[b_event_idx], key=lambda request: request.request_id)
+            for request in sorted(event_requests[b_event_idx], key=lambda request: request.request_id)
         )
         _run_ring_bank_event_loop(
             bank_states,
@@ -1895,9 +2119,46 @@ def _simulate_ring_microtile_timeline(
             hw,
             runtime_state,
         )
-        # B ready means the full load event has completed.
+        return group_key
+
+    def _ensure_b_tile_loaded(
+        b_event_idx: int,
+        event_requests: Sequence[Sequence[PhysicalRequest]],
+        *,
+        slot_name: str,
+        timeline_tiles: List[Dict[str, object]],
+        group_prefix: str,
+        group_key_by_idx: Dict[int, str],
+        ready_by_idx: Dict[int, float],
+    ) -> float:
+        if b_event_idx in ready_by_idx:
+            return ready_by_idx[b_event_idx]
+        group_key = _enqueue_b_tile(
+            b_event_idx,
+            event_requests,
+            slot_name=slot_name,
+            group_prefix=group_prefix,
+            group_key_by_idx=group_key_by_idx,
+        )
+        _run_ring_bank_event_loop(
+            bank_states,
+            future_reads,
+            future_writes,
+            completion_by_group,
+            group_total_requests,
+            group_completed_requests,
+            [group_key],
+            hw,
+            runtime_state,
+        )
+        release_cycle = (
+            b_ping_event_release_by_idx.get(b_event_idx, b_slot_free_cycles[slot_name])
+            if group_prefix == "b_ping"
+            else b_pong_event_release_by_idx.get(b_event_idx, b_slot_free_cycles[slot_name])
+        )
         ready_cycle = completion_by_group.get(group_key, release_cycle)
-        b_timeline_tiles.append(
+        ready_by_idx[b_event_idx] = ready_cycle
+        timeline_tiles.append(
             {
                 "tile_index": b_event_idx,
                 "buffer": slot_name,
@@ -1905,7 +2166,24 @@ def _simulate_ring_microtile_timeline(
                 "load_ready_cycle": ready_cycle,
             }
         )
-        return ready_cycle, slot_name
+        return ready_cycle
+
+    if b_ping_load_event_requests:
+        _enqueue_b_tile(
+            0,
+            b_ping_load_event_requests,
+            slot_name="ping",
+            group_prefix="b_ping",
+            group_key_by_idx=b_ping_event_group_keys,
+        )
+    if b_pong_load_event_requests:
+        _enqueue_b_tile(
+            0,
+            b_pong_load_event_requests,
+            slot_name="pong",
+            group_prefix="b_pong",
+            group_key_by_idx=b_pong_event_group_keys,
+        )
 
     for output_tile_m_idx in range(geometry.output_tile_count_m):
         for output_tile_n_idx in range(geometry.output_tile_count_n):
@@ -1940,13 +2218,39 @@ def _simulate_ring_microtile_timeline(
                 pure_ring_transfer_bound_cycles = max(pure_ring_transfer_bound_cycles, pure_ring_delay_cycle)
                 if ring_hop_idx > 0:
                     pure_ring_transfer_total_cycles += per_a_buffer_ring_transfer_cycles
-                b_event_idx = b_event_base_idx + k_tile_idx
-                b_ready_cycle, b_slot_name = _load_b_tile(b_event_idx)
+                global_b_event_idx = b_event_base_idx + k_tile_idx
+                if global_b_event_idx % 2 == 0:
+                    b_event_idx = global_b_event_idx // 2
+                    b_slot_name = "ping"
+                    b_ready_cycle = _ensure_b_tile_loaded(
+                        b_event_idx,
+                        b_ping_load_event_requests,
+                        slot_name=b_slot_name,
+                        timeline_tiles=b_ping_timeline_tiles,
+                        group_prefix="b_ping",
+                        group_key_by_idx=b_ping_event_group_keys,
+                        ready_by_idx=b_ping_event_ready_by_idx,
+                    )
+                    b_ping_ready_cycles.append(b_ready_cycle)
+                else:
+                    b_event_idx = global_b_event_idx // 2
+                    b_slot_name = "pong"
+                    b_ready_cycle = _ensure_b_tile_loaded(
+                        b_event_idx,
+                        b_pong_load_event_requests,
+                        slot_name=b_slot_name,
+                        timeline_tiles=b_pong_timeline_tiles,
+                        group_prefix="b_pong",
+                        group_key_by_idx=b_pong_event_group_keys,
+                        ready_by_idx=b_pong_event_ready_by_idx,
+                    )
+                    b_pong_ready_cycles.append(b_ready_cycle)
 
                 coarse_local_load_ready_cycles.append(a_ready_cycle)
                 coarse_ring_ready_cycles.append(ring_ready_cycle)
                 coarse_b_ready_cycles.append(b_ready_cycle)
-                coarse_ping_pong_assignment.append("ping" if a_event_idx % 2 == 0 else "pong")
+                coarse_ping_pong_assignment.append(b_slot_name)
+                global_b_event_ready_cycles.append(b_ready_cycle)
 
                 output_psum_slot = "ping" if output_tile_idx % 2 == 0 else "pong"
                 # One coarse event = one output tile consuming one K-slice:
@@ -1960,6 +2264,10 @@ def _simulate_ring_microtile_timeline(
                     b_ready_cycle,
                     psum_slot_free_cycles[output_psum_slot] if k_tile_idx == 0 else 0.0,
                 )
+                bubble_cycles = max(0.0, b_ready_cycle - pe_available_cycle)
+                pe_visible_bubble_cycles += bubble_cycles
+                if bubble_cycles > 0:
+                    bubble_event_indices.append(global_b_event_idx)
                 coarse_compute_start_cycles.append(coarse_start)
                 current_cycle = coarse_start
                 for pe_m_idx in range(geometry.b_reuse_factor):
@@ -1981,6 +2289,23 @@ def _simulate_ring_microtile_timeline(
                 coarse_compute_end_cycles.append(current_cycle)
                 pe_available_cycle = current_cycle
                 b_slot_free_cycles[b_slot_name] = max(b_slot_free_cycles[b_slot_name], current_cycle)
+                next_same_slot_event_idx = b_event_idx + 1
+                if b_slot_name == "ping" and next_same_slot_event_idx < len(b_ping_load_event_requests):
+                    _enqueue_b_tile(
+                        next_same_slot_event_idx,
+                        b_ping_load_event_requests,
+                        slot_name="ping",
+                        group_prefix="b_ping",
+                        group_key_by_idx=b_ping_event_group_keys,
+                    )
+                if b_slot_name == "pong" and next_same_slot_event_idx < len(b_pong_load_event_requests):
+                    _enqueue_b_tile(
+                        next_same_slot_event_idx,
+                        b_pong_load_event_requests,
+                        slot_name="pong",
+                        group_prefix="b_pong",
+                        group_key_by_idx=b_pong_event_group_keys,
+                    )
                 if ring_hop_idx == geometry.a_ring_hops_per_local_a_tile - 1:
                     a_slot_name = "ping" if a_event_idx % 2 == 0 else "pong"
                     a_slot_free_cycles[a_slot_name] = max(a_slot_free_cycles[a_slot_name], current_cycle)
@@ -2041,6 +2366,29 @@ def _simulate_ring_microtile_timeline(
     )
 
     memory_timeline_cycles = max((state.cycles for state in bank_states.values()), default=0.0)
+    compute_event_stride_cycles = per_pe_micro_op_compute_cycles * geometry.pe_micro_ops_per_output_tile
+    ideal_b_event_ready_cycles: List[float] = []
+    if global_b_event_ready_cycles:
+        first_ideal_ready = global_b_event_ready_cycles[0]
+        ideal_b_event_ready_cycles = [
+            first_ideal_ready + idx * compute_event_stride_cycles
+            for idx in range(len(global_b_event_ready_cycles))
+        ]
+    global_b_event_ready_lag_cycles = (
+        max(0.0, global_b_event_ready_cycles[-1] - ideal_b_event_ready_cycles[-1])
+        if global_b_event_ready_cycles and ideal_b_event_ready_cycles
+        else 0.0
+    )
+    last_b_event_ready_cycle = max(global_b_event_ready_cycles, default=0.0)
+    last_a_read_completion_cycle = max(a_event_ready_cycles.values(), default=0.0)
+    last_writeback_completion_cycle = max(
+        (
+            completion_by_group.get(f"w:{output_tile_idx}", 0.0)
+            for output_tile_idx in range(len(output_writeback_tile_requests))
+        ),
+        default=0.0,
+    )
+    completion_tail_cycles = max(0.0, last_writeback_completion_cycle - last_b_event_ready_cycle)
     bank_timeline = _bank_timeline_summary(
         bank_states,
         forced_drain_count=int(runtime_state["forced_drain_count"]),
@@ -2056,13 +2404,27 @@ def _simulate_ring_microtile_timeline(
         "microtile_count_per_participant": len(a_load_event_requests),
         "total_compute_microtiles": geometry.total_coarse_compute_events,
         "a_load_event_count": len(a_load_event_requests),
-        "b_load_event_count": len(b_load_event_requests),
+        "b_load_event_count": len(global_b_event_ready_cycles),
+        "b_ping_load_event_count": len(b_ping_load_event_requests),
+        "b_pong_load_event_count": len(b_pong_load_event_requests),
         "ping_pong_assignment": coarse_ping_pong_assignment,
         "local_load_ready_cycles": coarse_local_load_ready_cycles,
         "ring_ready_cycles": coarse_ring_ready_cycles,
         "pure_ring_transfer_bound_cycles": pure_ring_transfer_bound_cycles,
         "pure_ring_transfer_total_cycles": pure_ring_transfer_total_cycles,
         "b_ready_cycles": coarse_b_ready_cycles,
+        "b_ping_ready_cycles": b_ping_ready_cycles,
+        "b_pong_ready_cycles": b_pong_ready_cycles,
+        "global_b_event_ready_cycles": global_b_event_ready_cycles,
+        "global_b_event_buffer_assignment": coarse_ping_pong_assignment,
+        "ideal_b_event_ready_cycles": ideal_b_event_ready_cycles,
+        "global_b_event_ready_lag_cycles": global_b_event_ready_lag_cycles,
+        "pe_visible_bubble_cycles": pe_visible_bubble_cycles,
+        "bubble_event_indices": bubble_event_indices,
+        "last_b_event_ready_cycle": last_b_event_ready_cycle,
+        "last_a_read_completion_cycle": last_a_read_completion_cycle,
+        "last_writeback_completion_cycle": last_writeback_completion_cycle,
+        "completion_tail_cycles": completion_tail_cycles,
         "compute_start_cycles": coarse_compute_start_cycles,
         "compute_end_cycles": coarse_compute_end_cycles,
         "final_write_release_cycle": max((tile["release_cycle"] for tile in output_writeback_tiles), default=0.0),
@@ -2072,9 +2434,11 @@ def _simulate_ring_microtile_timeline(
             "tiles": a_timeline_tiles,
         },
         "b_buffer_timeline": {
-            "tile_count": len(b_load_event_requests),
+            "tile_count": len(global_b_event_ready_cycles),
             "tile_bytes": geometry.b_buffer_bytes,
-            "tiles": b_timeline_tiles,
+            "tiles": [*b_ping_timeline_tiles, *b_pong_timeline_tiles],
+            "ping_tiles": b_ping_timeline_tiles,
+            "pong_tiles": b_pong_timeline_tiles,
         },
         "pe_compute_timeline": {
             "micro_op_count": len(pe_micro_op_end_cycles),
@@ -2095,7 +2459,7 @@ def _simulate_ring_microtile_timeline(
             "tiles": output_writeback_tiles,
         },
     }
-    return bank_timeline, microtile_timeline, ring_link_completion_cycles, pure_ring_transfer_bound_cycles, pure_ring_transfer_total_cycles, pe_available_cycle
+    return bank_timeline, microtile_timeline, ring_link_completion_cycles, pure_ring_transfer_bound_cycles, pure_ring_transfer_total_cycles, max(pe_available_cycle, last_writeback_completion_cycle)
 
 
 def _analyze_request_stream(
@@ -2109,6 +2473,7 @@ def _analyze_request_stream(
     perf: PerformanceConfig,
 ) -> Dict[str, object]:
     bank_sequence = [request.bank_id for request in requests]
+    row_sequence = [request.row_id for request in requests]
     bank_transitions = sum(
         1 for left, right in zip(bank_sequence, bank_sequence[1:]) if left != right
     )
@@ -2155,6 +2520,20 @@ def _analyze_request_stream(
     )
     hidden_fraction = round_robin_score * fifo_factor * bank_spread_factor
     raw_bank_max = max(bank_cycles.values(), default=0.0)
+    max_bank_load = max((len(rows) for rows in per_bank_rows.values()), default=0)
+    avg_bank_load = (len(requests) / active_banks) if active_banks else 0.0
+    bank_load_variance = (
+        sum((len(rows) - avg_bank_load) ** 2 for rows in per_bank_rows.values()) / active_banks
+        if active_banks
+        else 0.0
+    )
+    row_switch_count = int(
+        sum(stats["misses"] for stats in bank_stats.values())
+    )
+    row_hit_count = int(
+        sum(stats["hits"] for stats in bank_stats.values())
+    )
+    total_row_events = row_hit_count + row_switch_count + int(sum(stats["empty"] for stats in bank_stats.values()))
     issue_cycles = math.ceil(len(requests) / max(1, hw.ag_issue_rate))
     exposed_row_switch_cycles = row_switch_penalty * (1.0 - hidden_fraction)
     adjusted_cycles = max(raw_bank_max, issue_cycles) + exposed_row_switch_cycles
@@ -2172,13 +2551,30 @@ def _analyze_request_stream(
         "bank_transition_count": bank_transitions,
         "round_robin_score": round_robin_score,
         "active_banks": active_banks,
+        "unique_banks_touched": active_banks,
+        "bank_parallelism_utilization": (
+            active_banks / max(1, hw.bank_count_per_slice)
+            if requests
+            else 0.0
+        ),
         "bank_cycles": {str(k): v for k, v in bank_cycles.items()},
         "bank_stats": {str(k): v for k, v in bank_stats.items()},
+        "bank_conflict_cycles": max(0.0, len(requests) * hw.request_latency_cycles - raw_bank_max),
+        "max_bank_load": max_bank_load,
+        "bank_load_stddev": math.sqrt(bank_load_variance),
+        "row_switch_count": row_switch_count,
+        "row_hit_rate": (row_hit_count / total_row_events) if total_row_events else None,
         "raw_bank_max_cycles": raw_bank_max,
         "row_switch_penalty_cycles": row_switch_penalty,
         "row_switch_hiding_gain": row_switch_penalty * hidden_fraction,
         "exposed_row_switch_cycles": exposed_row_switch_cycles,
         "adjusted_stream_cycles": adjusted_cycles,
+        "effective_memory_bw_bytes_per_cycle": (
+            (len(requests) * (hw.block_bits // 8)) / adjusted_cycles
+            if adjusted_cycles
+            else None
+        ),
+        "row_sequence_sample": row_sequence[:16],
         "sample_requests": [request.to_dict() for request in requests[:8]],
     }
 
@@ -2194,10 +2590,25 @@ def _edge_reports_from_streams(stream_reports: Sequence[Mapping[str, object]]) -
                 "ag_id": str(stream["ag_id"]),
                 "request_count": int(stream["request_count"]),
                 "active_banks": int(stream["active_banks"]),
+                "unique_banks_touched": int(stream["unique_banks_touched"]),
+                "bank_parallelism_utilization": float(stream["bank_parallelism_utilization"]),
+                "placement_policy": str(stream.get("placement_policy", "identity")),
+                "transform_mode": str(stream.get("transform_mode", stream["mode"])),
+                "transform_role": str(stream.get("transform_role", "input")),
+                "transform_source": str(stream.get("transform_source", "identity")),
+                "address_transform": dict(stream.get("address_transform", {})),
                 "round_robin_score": float(stream["round_robin_score"]),
+                "bank_conflict_cycles": float(stream["bank_conflict_cycles"]),
+                "max_bank_load": int(stream["max_bank_load"]),
+                "bank_load_stddev": float(stream["bank_load_stddev"]),
+                "row_switch_count": int(stream["row_switch_count"]),
+                "row_hit_rate": stream["row_hit_rate"],
                 "row_switch_penalty_cycles": float(stream["row_switch_penalty_cycles"]),
                 "adjusted_stream_cycles": float(stream["adjusted_stream_cycles"]),
+                "effective_memory_bw_bytes_per_cycle": stream["effective_memory_bw_bytes_per_cycle"],
+                "bank_stats": dict(stream["bank_stats"]),
                 "bank_sequence_sample": list(stream["bank_sequence_sample"]),
+                "row_sequence_sample": list(stream["row_sequence_sample"]),
             }
         )
     return reports
@@ -2244,7 +2655,9 @@ def _classify_input_stream(op_type: str, port_name: str) -> Tuple[str, Tuple[str
         if port_name == "inA":
             return "A", ("ag0",)
         if port_name == "inB":
-            return "B", ("ag1", "ag2")
+            return "B", ("ag1",)
+        if port_name == "B'":
+            return "B", ("ag2",)
     if port_name == "inA":
         return "A", ("ag0",)
     if port_name == "inB":
@@ -2671,24 +3084,32 @@ def _render_summary_markdown(
     true_roofline: Mapping[str, object],
 ) -> str:
     baseline = modes[MODE_BASELINE]
-    remap = modes[MODE_REMAP]
-    interleave = modes[MODE_REMAP_INTERLEAVE]
-    return (
+    lines = [
         f"# Performance Summary: {graph_name}\n\n"
-        f"- Cycle domain: `slice-cycle`\n"
-        f"- Memory timing domain: `bank-cycle`\n"
-        f"- True roofline cycles: {float(true_roofline['roofline_cycles']):.2f} cycles\n"
-        f"- True compute-bound cycles: {float(true_roofline['compute_bound_cycles']):.2f} cycles\n"
-        f"- True bandwidth-bound cycles: {float(true_roofline['bandwidth_bound_cycles']):.2f} cycles\n"
-        f"- Baseline latency: {baseline['total_latency_cycles']:.2f} cycles\n"
-        f"- Remap latency: {remap['total_latency_cycles']:.2f} cycles\n"
-        f"- Remap + Interleave latency: {interleave['total_latency_cycles']:.2f} cycles\n"
-        f"- Remap speedup vs baseline: {remap['speedup_vs_baseline']:.4f}x\n"
-        f"- Remap + Interleave speedup vs baseline: {interleave['speedup_vs_baseline']:.4f}x\n"
-        f"- Baseline / analytical lower bound: {baseline['analytical_model']['latency_to_lower_bound_ratio']:.4f}\n"
-        f"- Remap / analytical lower bound: {remap['analytical_model']['latency_to_lower_bound_ratio']:.4f}\n"
-        f"- Remap + Interleave / analytical lower bound: {interleave['analytical_model']['latency_to_lower_bound_ratio']:.4f}\n"
+    ]
+    lines.extend(
+        [
+            f"- Cycle domain: `slice-cycle`",
+            f"- Memory timing domain: `bank-cycle`",
+            f"- True roofline cycles: {float(true_roofline['roofline_cycles']):.2f} cycles",
+            f"- True compute-bound cycles: {float(true_roofline['compute_bound_cycles']):.2f} cycles",
+            f"- True bandwidth-bound cycles: {float(true_roofline['bandwidth_bound_cycles']):.2f} cycles",
+            f"- Baseline latency: {baseline['total_latency_cycles']:.2f} cycles",
+        ]
     )
+    for mode_name in ALL_MODES:
+        if mode_name == MODE_BASELINE or mode_name not in modes:
+            continue
+        mode = modes[mode_name]
+        pretty_name = mode_name.replace("_", " ")
+        lines.append(f"- {pretty_name} latency: {mode['total_latency_cycles']:.2f} cycles")
+        lines.append(f"- {pretty_name} speedup vs baseline: {mode['speedup_vs_baseline']:.4f}x")
+    for mode_name, mode in modes.items():
+        lines.append(
+            f"- {mode_name} / analytical lower bound: "
+            f"{mode['analytical_model']['latency_to_lower_bound_ratio']:.4f}"
+        )
+    return "\n".join(lines)
 
 
 def _default_performance_output_path(input_path: str) -> Path:
@@ -2752,6 +3173,12 @@ def _build_mode_summary(
         "software_relayout_total_bytes": sum(
             int(op["total_bytes"]) for op in op_breakdown if op.get("kind") == "relayout"
         ),
+        "total_bank_conflict_cycles": sum(float(edge.get("bank_conflict_cycles", 0.0)) for edge in mode_report["edge_breakdown"]),
+        "total_row_switch_cycles": sum(float(edge.get("row_switch_penalty_cycles", 0.0)) for edge in mode_report["edge_breakdown"]),
+        "mean_bank_parallelism_utilization": (
+            sum(float(edge.get("bank_parallelism_utilization", 0.0)) for edge in mode_report["edge_breakdown"])
+            / max(1, len(mode_report["edge_breakdown"]))
+        ),
         "top_ops_by_latency": [
             {
                 "stage_name": op.get("stage_name", op.get("op_name")),
@@ -2762,6 +3189,88 @@ def _build_mode_summary(
             }
             for op in top_ops
         ],
+    }
+
+
+def _normalize_modes(selected_modes: Optional[Sequence[str]]) -> Tuple[str, ...]:
+    if not selected_modes:
+        return ALL_MODES
+    normalized: List[str] = []
+    for mode in selected_modes:
+        canonical = MODE_ALIASES.get(str(mode))
+        if canonical is None:
+            raise ValueError(f"Unsupported performance mode '{mode}'.")
+        if canonical not in normalized:
+            normalized.append(canonical)
+    if MODE_BASELINE not in normalized:
+        normalized.insert(0, MODE_BASELINE)
+    return tuple(normalized)
+
+
+def _build_cross_mode_comparison(modes: Mapping[str, Mapping[str, object]]) -> Dict[str, object]:
+    def _delta(left: str, right: str) -> Optional[Dict[str, float]]:
+        if left not in modes or right not in modes:
+            return None
+        left_cycles = float(modes[left]["total_latency_cycles"])
+        right_cycles = float(modes[right]["total_latency_cycles"])
+        return {
+            "from_mode": left,
+            "to_mode": right,
+            "latency_delta_cycles": left_cycles - right_cycles,
+            "speedup": (left_cycles / right_cycles) if right_cycles else None,
+        }
+
+    return {
+        "gain_from_layout_compatibility": _delta(MODE_BASELINE, MODE_LAYOUT_REMAP),
+        "gain_from_bank_aware_placement": _delta(MODE_LAYOUT_REMAP, MODE_LAYOUT_REMAP_BANK_AWARE),
+        "gain_vs_oracle_gap": _delta(MODE_LAYOUT_REMAP_BANK_AWARE, MODE_ORACLE_INTERLEAVE),
+    }
+
+
+def _attach_benefit_breakdown(
+    mode_summaries: Mapping[str, Dict[str, object]],
+    cross_mode_comparison: Mapping[str, object],
+) -> None:
+    for mode_name, summary in mode_summaries.items():
+        benefit = {
+            "gain_from_layout_compatibility": None,
+            "gain_from_bank_aware_placement": None,
+            "gain_vs_oracle_gap": None,
+        }
+        if mode_name == MODE_LAYOUT_REMAP:
+            benefit["gain_from_layout_compatibility"] = cross_mode_comparison.get("gain_from_layout_compatibility")
+        elif mode_name == MODE_LAYOUT_REMAP_BANK_AWARE:
+            benefit["gain_from_bank_aware_placement"] = cross_mode_comparison.get("gain_from_bank_aware_placement")
+        elif mode_name == MODE_ORACLE_INTERLEAVE:
+            benefit["gain_vs_oracle_gap"] = cross_mode_comparison.get("gain_vs_oracle_gap")
+        summary["benefit_breakdown"] = benefit
+
+
+def _build_edge_mode_comparison(
+    modes: Mapping[str, Mapping[str, object]],
+    focus_edge: Optional[str] = None,
+) -> Dict[str, object]:
+    by_edge: Dict[str, Dict[str, object]] = defaultdict(dict)
+    for mode_name, mode_payload in modes.items():
+        for edge in mode_payload.get("edge_breakdown", []):
+            edge_name = str(edge["edge_name"])
+            if focus_edge and edge_name != focus_edge:
+                continue
+            by_edge[edge_name][mode_name] = {
+                "request_count": int(edge["request_count"]),
+                "placement_policy": edge.get("placement_policy"),
+                "active_banks": int(edge["active_banks"]),
+                "unique_banks_touched": int(edge.get("unique_banks_touched", edge["active_banks"])),
+                "bank_parallelism_utilization": float(edge.get("bank_parallelism_utilization", 0.0)),
+                "bank_conflict_cycles": float(edge.get("bank_conflict_cycles", 0.0)),
+                "row_switch_count": int(edge.get("row_switch_count", 0)),
+                "row_switch_penalty_cycles": float(edge["row_switch_penalty_cycles"]),
+                "max_bank_load": int(edge.get("max_bank_load", 0)),
+                "effective_memory_bw_bytes_per_cycle": edge.get("effective_memory_bw_bytes_per_cycle"),
+            }
+    return {
+        "focus_edge": focus_edge,
+        "edges": dict(by_edge),
     }
 
 
@@ -2861,6 +3370,7 @@ def _analyze_relayout_stage(
         hw=hw,
         perf=perf,
     )
+    _attach_transform_metadata(read_reports, read_requests)
     write_reports = _build_stream_reports(
         requests=write_requests,
         ag_ids=("ag4",),
@@ -2871,6 +3381,7 @@ def _analyze_relayout_stage(
         hw=hw,
         perf=perf,
     )
+    _attach_transform_metadata(write_reports, write_requests)
     streams = [*read_reports, *write_reports]
     read_stream = read_reports[0] if read_reports else None
     write_stream = write_reports[0] if write_reports else None

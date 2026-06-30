@@ -106,7 +106,7 @@ def get_category_and_prefix(template_name, base_data_dir, count):
 def build_layer0():
     current_dir = Path(__file__).resolve().parent
     base_data_dir = current_dir.parent.parent / "model_execplan" / "data"
-    mapping_file = current_dir.parent.parent / "model_execplan" / "layer0_mapping.json"
+    mapping_file = current_dir.parent.parent / "model_execplan" / "layer0_op_listing.json"
     layer0_install_dir = base_data_dir / "layer0" / "install"
 
     if not mapping_file.exists():
@@ -223,8 +223,8 @@ def _inject_gemm_ring_ops_to_physic(phys_install, base_data_dir, op_mapping):
 
 def create_layer0_physic(layer0_install_dir, op_mapping):
     """
-    复制 layer0 到 layer0_physic 并对每个 op 下的 slice00..slice27 进行重排。
-    目标顺序由 order 列表给出：目标位置 i 存放原始 slice order[i]。
+    复制 layer0 到 layer0_physic，复原普通数据的 slice 编号后再补充 gemm_ring。
+    输入位置 i 的真实 slice ID 为 order[i]，输出按 slice00..slice27 排列。
     """
     base_data_dir = layer0_install_dir.parent.parent  # .../data
     src_layer0 = base_data_dir / "layer0"
@@ -239,7 +239,7 @@ def create_layer0_physic(layer0_install_dir, op_mapping):
     shutil.copytree(src_layer0, dst_layer0)
     phys_install = dst_layer0 / "install"
 
-    # 目标顺序（长度 28）
+    # 输入位置 i 对应的真实 slice ID（长度 28）。
     order = [0,2,3,1,5,4,6,7,8,10,11,9,15,14,12,13,16,17,19,18,20,21,23,22,26,24,25,27]
 
     for op_dir in sorted(phys_install.iterdir()):
@@ -262,7 +262,8 @@ def create_layer0_physic(layer0_install_dir, op_mapping):
             shutil.rmtree(temp_dir)
         temp_dir.mkdir()
 
-        for tgt_idx, src_idx in enumerate(order):
+        # 源 slice i 标记为真实 ID order[i]，再按真实 ID 复原为连续目录。
+        for src_idx, tgt_idx in enumerate(order):
             src_path = orig_slices.get(src_idx)
             dst_slice = temp_dir / f"slice{tgt_idx:02d}"
             if src_path and src_path.exists():
@@ -285,7 +286,7 @@ def create_layer0_physic(layer0_install_dir, op_mapping):
         if temp_dir.exists():
             temp_dir.rmdir()
 
-    # 重排完成后，再补充/覆盖放入 gemm_ring 相关算子
+    # 普通数据重排完成后，再补充/覆盖 gemm_ring；gemm_ring 不参与上述重排。
     _inject_gemm_ring_ops_to_physic(phys_install, base_data_dir, op_mapping)
 
     print(f"✅ layer0_physic generated at: {dst_layer0}")

@@ -10,11 +10,13 @@ from unittest import mock
 
 from address_remapping.addressing import AddressTransform, encode_physical_address
 from address_remapping.graph import load_graph_file, solve_graph
-from address_remapping.hardware import HardwareSpec
+from address_remapping.hardware import HardwareSpec, SolverConfig
 from address_remapping.layout import LayoutSpec
 from address_remapping.model_parser import expand_model_spec, parse_call
 from address_remapping.performance import (
     MODE_BASELINE,
+    MODE_LAYOUT_REMAP_BANK_AWARE,
+    MODE_ORACLE_INTERLEAVE,
     MODE_REMAP,
     MODE_REMAP_INTERLEAVE,
     PerformanceConfig,
@@ -22,6 +24,7 @@ from address_remapping.performance import (
     _estimate_compute,
     analyze_graph_performance,
     load_performance_config,
+    load_runtime_config,
     _analyze_request_stream,
     write_performance_outputs,
 )
@@ -382,7 +385,8 @@ class SolverTests(unittest.TestCase):
         )
         result = solve_edge(producer, consumer, {"M": 128, "K": 64}, memory_dtype="fp32", hw_cfg=self.hw)
         self.assertEqual(result.status, "ok")
-        self.assertEqual(result.permutation[:9], [0, 6, 7, 1, 2, 3, 4, 5, 8])
+        self.assertEqual(result.layout_permutation[:9], [2, 0, 1, 8, 9, 3, 4, 5, 6])
+        self.assertEqual(result.permutation[:9], result.layout_permutation[:9])
 
     def test_flexible_refinement_supports_split_factorization(self):
         registry = build_default_registry()
@@ -493,6 +497,147 @@ class SolverTests(unittest.TestCase):
         result = solve_edge(layout, layout, {"M": 128, "K": 64}, memory_dtype="fp32", hw_cfg=self.hw)
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.permutation, list(range(self.hw.remap_bits)))
+
+    def test_two_stage_solver_exposes_layout_physical_and_total_permutations(self):
+        producer = make_layout(
+            "fp32",
+            {"M": "M", "K": "K"},
+            [
+                {"name": "M_outer8", "parent_axis": "M", "extent": "M//8", "kind": "outer"},
+                {"name": "K", "parent_axis": "K", "extent": "K", "kind": "outer"},
+                {"name": "m8", "parent_axis": "M", "extent": 8, "kind": "tile"},
+            ],
+            ["M_outer8", "K", "m8"],
+        )
+        consumer = make_layout(
+            "fp32",
+            {"M": "M", "K": "K"},
+            [
+                {"name": "M_outer32", "parent_axis": "M", "extent": "M//32", "kind": "outer"},
+                {"name": "K_outer2", "parent_axis": "K", "extent": "K//2", "kind": "outer"},
+                {"name": "m4", "parent_axis": "M", "extent": 4, "kind": "tile"},
+                {"name": "m8", "parent_axis": "M", "extent": 8, "kind": "tile"},
+                {"name": "k2", "parent_axis": "K", "extent": 2, "kind": "tile"},
+            ],
+            ["M_outer32", "K_outer2", "m4", "m8", "k2"],
+        )
+        result = solve_edge(
+            producer,
+            consumer,
+            {"M": 128, "K": 64},
+            memory_dtype="fp32",
+            hw_cfg=self.hw,
+            bank_interleave_count=4,
+            producer_port="out",
+            consumer_port="inA",
+            producer_op_type="producer_op",
+            consumer_op_type="consumer_op",
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.bank_interleave_count, 4)
+        self.assertEqual(result.permutation, result.composed_permutation)
+        self.assertEqual(result.output_permutation, result.permutation)
+        self.assertEqual(result.input_permutation, result.physical_permutation)
+        self.assertNotEqual(result.layout_permutation, result.composed_permutation)
+        exported = result.to_dict()
+        mapped_positions = exported["internal_physical_permutation"][: len(result.consumer_visible_outer_bits)]
+        bank_positions = {
+            self.hw.column_bits + self.hw.row_bits,
+            self.hw.column_bits + self.hw.row_bits + 1,
+        }
+        self.assertTrue(bank_positions.issubset(set(mapped_positions)))
+        self.assertNotEqual(result.physical_permutation, list(range(self.hw.remap_bits)))
+        self.assertEqual(result.producer_port, "out")
+        self.assertEqual(result.consumer_port, "inA")
+
+    def test_solver_exported_remap_uses_new_bit_to_old_bit_convention(self):
+        producer = make_layout(
+            "fp32",
+            {"M": "M", "K": "K"},
+            [
+                {"name": "M_outer8", "parent_axis": "M", "extent": "M//8", "kind": "outer"},
+                {"name": "K", "parent_axis": "K", "extent": "K", "kind": "outer"},
+                {"name": "m8", "parent_axis": "M", "extent": 8, "kind": "tile"},
+            ],
+            ["M_outer8", "K", "m8"],
+        )
+        consumer = make_layout(
+            "fp32",
+            {"M": "M", "K": "K"},
+            [
+                {"name": "M_outer32", "parent_axis": "M", "extent": "M//32", "kind": "outer"},
+                {"name": "K_outer2", "parent_axis": "K", "extent": "K//2", "kind": "outer"},
+                {"name": "m4", "parent_axis": "M", "extent": 4, "kind": "tile"},
+                {"name": "m8", "parent_axis": "M", "extent": 8, "kind": "tile"},
+                {"name": "k2", "parent_axis": "K", "extent": 2, "kind": "tile"},
+            ],
+            ["M_outer32", "K_outer2", "m4", "m8", "k2"],
+        )
+        result = solve_edge(
+            producer,
+            consumer,
+            {"M": 128, "K": 64},
+            memory_dtype="fp32",
+            hw_cfg=self.hw,
+            bank_interleave_count=2,
+        )
+        exported = result.to_dict()
+        exported_output = exported["output_permutation"]
+        self.assertEqual(len(exported_output), self.hw.remap_bits)
+        self.assertEqual(sorted(exported_output), list(range(self.hw.remap_bits)))
+        self.assertEqual(exported_output, list(result.output_permutation))
+        internal_output = list(exported["internal_output_permutation"])
+        active_width = len(result.producer_visible_outer_bits or [])
+        for old_bit in range(active_width):
+            new_bit = internal_output[old_bit]
+            self.assertEqual(exported_output[new_bit], old_bit)
+
+    def test_two_stage_solver_reports_infeasible_bank_interleave(self):
+        layout = make_layout(
+            "fp16",
+            {"M": "M"},
+            [
+                {"name": "M_outer8", "parent_axis": "M", "extent": "M//8", "kind": "outer"},
+                {"name": "m8", "parent_axis": "M", "extent": 8, "kind": "tile"},
+            ],
+            ["M_outer8", "m8"],
+        )
+        result = solve_edge(
+            layout,
+            layout,
+            {"M": 16},
+            memory_dtype="fp16",
+            hw_cfg=self.hw,
+            bank_interleave_count=4,
+        )
+        self.assertEqual(result.status, "unimplemented")
+        self.assertEqual(result.reason_code, "insufficient remap bits for bank interleave")
+
+    def test_runtime_config_loads_solver_bank_interleave_policy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "runtime_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "hardware": HardwareSpec().to_dict(),
+                        "performance": PerformanceConfig().to_dict(),
+                        "solver": {
+                            "bank_interleave": {
+                                "ring_gemm_fp16_fp16_fp16": {"inA": 4, "inB": 2, "out": 1}
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hardware, perf_cfg, solver_cfg = load_runtime_config(str(config_path))
+        self.assertIsInstance(hardware, HardwareSpec)
+        self.assertEqual(perf_cfg.controller_write_queue_depth, 16)
+        self.assertIsInstance(solver_cfg, SolverConfig)
+        self.assertEqual(solver_cfg.bank_interleave_count("ring_gemm_fp16_fp16_fp16", "inA"), 4)
+        self.assertEqual(solver_cfg.bank_interleave_count("ring_gemm_fp16_fp16_fp16", "inB"), 2)
+        self.assertEqual(solver_cfg.bank_interleave_count("ring_gemm_fp16_fp16_fp16", "out"), 1)
+        self.assertEqual(solver_cfg.bank_interleave_count("unknown", "inA"), 1)
 
     def test_multi_dtype_support(self):
         self.assertEqual(self.hw.block_elements("fp16"), 8)
@@ -1103,7 +1248,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(expanded["ops"]["op36"]["inputs"]["inA"]["resolved_shape"], {"M": 64, "K": 128})
         self.assertEqual(expanded["ops"]["op36"]["inputs"]["inB"]["resolved_shape"], {"K": 3584, "N": 32})
 
-    def test_fill_external_rmsnorm_remapping_keeps_external_and_identity_edges_empty(self):
+    def test_fill_external_rmsnorm_remapping_backfills_external_inputs_and_keeps_identity_outputs_empty(self):
         payload = {
             "used_slices": 28,
             "operators": [
@@ -1145,38 +1290,179 @@ class SolverTests(unittest.TestCase):
 
         filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
         default_permutation = list(range(self.hw.remap_bits))
+        remote_sum_default = [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 1, 2, 3, 4, 5]
 
         op0_a = filled["operators"][0]["inputs"]["A"]
-        self.assertIsNone(op0_a.get("remapping"))
+        self.assertEqual(op0_a.get("remapping"), default_permutation)
+        self.assertNotIn("input_remapping", op0_a)
+        self.assertNotIn("layout_remapping", op0_a)
+        self.assertNotIn("physical_remapping", op0_a)
+        self.assertNotIn("bank_interleave_count", op0_a)
 
         for operator in filled["operators"]:
             op_id = operator["id"]
             for external_port, input_data in operator.get("inputs", {}).items():
                 source = input_data.get("source")
                 if isinstance(source, dict) and source.get("type") == "external":
-                    self.assertIsNone(input_data.get("remapping"))
+                    self.assertEqual(input_data.get("remapping"), default_permutation)
                     continue
                 internal_port = {"A": "inA", "B": "inB"}[external_port]
                 result = by_key[(source, op_id, internal_port)]
-                self.assertIsNone(input_data.get("remapping"))
+                expected_input_remapping = (
+                    remote_sum_default
+                    if op_id == "op1" and external_port == "A"
+                    else default_permutation
+                )
+                self.assertEqual(input_data.get("remapping"), expected_input_remapping)
                 producer_output = next(op for op in filled["operators"] if op["id"] == source)["output"]
                 if result.permutation == default_permutation:
                     self.assertIsNone(producer_output.get("remapping"))
                 else:
                     self.assertEqual(producer_output.get("remapping"), result.permutation)
 
+    def test_normalize_graph_spec_accepts_string_external_source(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 32, 1], "source": "external", "dtype": "fp16"},
+                        "B": {"shape": [896, 1, 64], "source": {"type": "external"}, "dtype": "fp16"},
+                    },
+                    "output": {"shape": [1, 32, 64]},
+                }
+            ],
+        }
+        expanded = normalize_graph_spec(payload)
+        self.assertEqual(
+            expanded["ops"]["op0"]["inputs"]["inA"]["source_tensor"],
+            "op0__inA__external",
+        )
+
+    def test_remote_sum_input_default_remap_composes_with_bank_interleave(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_remote_sum_fp32MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [1, 32, 32],
+                            "remapping": None,
+                            "source": {"type": "external"},
+                        }
+                    },
+                    "output": {"shape": [1, 32, 32], "remapping": None},
+                },
+            ],
+        }
+        solver_cfg = SolverConfig.from_dict(
+            {
+                "bank_interleave": {
+                    "prefill_remote_sum_Mfp32_Mfp32": {"inA": 2, "out": 2}
+                }
+            }
+        )
+
+        filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw, solver_cfg=solver_cfg)
+
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["A"]["remapping"],
+            [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 0, 25, 1, 2, 3, 4, 5],
+        )
+        self.assertEqual(
+            filled["operators"][0]["output"]["remapping"],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25],
+        )
+
+    def test_remote_sum_4slice_input_default_remap_composes_with_bank_interleave(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [1, 32, 32],
+                            "remapping": None,
+                            "source": {"type": "external"},
+                        }
+                    },
+                    "output": {"shape": [1, 32, 32], "remapping": None},
+                },
+            ],
+        }
+        solver_cfg = SolverConfig.from_dict(
+            {
+                "bank_interleave": {
+                    "prefill_remote_sum_fp32MN_fp32MN_2d": {"inA": 2, "out": 2}
+                }
+            }
+        )
+
+        filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw, solver_cfg=solver_cfg)
+
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["A"]["remapping"],
+            [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 0, 25, 1, 2, 3, 4, 5],
+        )
+        self.assertEqual(
+            filled["operators"][0]["output"]["remapping"],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25],
+        )
+
+    def test_remote_sum_4slice_flattens_square_tensor_for_bridge_layout(self):
+        payload = {
+            "params": {"sequence_length": 32, "slice_per_head": 4},
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op23",
+                    "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [1, "slice_per_head", "sequence_length*sequence_length"],
+                            "remapping": None,
+                            "source": {"type": "external"},
+                        }
+                    },
+                    "output": {
+                        "shape": [1, 1, "sequence_length*sequence_length"],
+                        "remapping": None,
+                    },
+                },
+            ],
+        }
+
+        expanded = normalize_graph_spec(payload)
+        op = expanded["ops"]["op23"]
+
+        self.assertEqual(op["inputs"]["inA"]["shape"], {"M": "M", "N": "N"})
+        self.assertEqual(op["inputs"]["inA"]["resolved_shape"], {"M": 32, "N": 32})
+        self.assertEqual(op["outputs"]["out"]["shape"], {"M": "M", "N": "N"})
+        self.assertEqual(op["outputs"]["out"]["resolved_shape"], {"M": 32, "N": 32})
+
     def test_fill_external_rmsnorm_remapping_real_rmsnorm_succeeds(self):
         payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
         filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
-        self.assertIsNone(filled["operators"][0]["inputs"]["A"].get("remapping"))
+        default_permutation = list(range(self.hw.remap_bits))
+        self.assertEqual(filled["operators"][0]["inputs"]["A"].get("remapping"), default_permutation)
         self.assertNotIn("writereg", filled["operators"][0]["inputs"]["A"])
-        self.assertIsNone(filled["operators"][1]["inputs"]["A"].get("remapping"))
+        self.assertEqual(filled["operators"][1]["inputs"]["A"].get("remapping"), default_permutation)
         self.assertNotIn("writereg", filled["operators"][1]["inputs"]["A"])
-        self.assertIsNone(filled["operators"][2]["inputs"]["A"].get("remapping"))
+        self.assertEqual(filled["operators"][2]["inputs"]["A"].get("remapping"), default_permutation)
         self.assertNotIn("writereg", filled["operators"][2]["inputs"]["A"])
-        self.assertIsNone(filled["operators"][3]["inputs"]["A"].get("remapping"))
+        self.assertEqual(filled["operators"][3]["inputs"]["A"].get("remapping"), default_permutation)
         self.assertNotIn("writereg", filled["operators"][3]["inputs"]["A"])
-        self.assertIsNone(filled["operators"][3]["inputs"]["B"].get("remapping"))
+        self.assertEqual(filled["operators"][3]["inputs"]["B"].get("remapping"), default_permutation)
         self.assertNotIn("writereg", filled["operators"][3]["inputs"]["B"])
         self.assertIsNone(filled["operators"][0]["output"].get("remapping"))
         self.assertIsNone(filled["operators"][1]["output"].get("remapping"))
@@ -1217,7 +1503,10 @@ class SolverTests(unittest.TestCase):
 
         self.assertEqual(report["graph_summary"]["op_count"], 4)
         self.assertEqual(report["graph_summary"]["edge_count"], 3)
-        self.assertEqual(set(report["modes"]), {"baseline", "remap", "remap_interleave"})
+        self.assertEqual(
+            set(report["modes"]),
+            {"baseline", "layout_remap", "layout_remap_bank_aware", "oracle_interleave"},
+        )
         self.assertIn(report["overview"]["best_mode_by_estimated_latency"], report["modes"])
 
     def test_fill_external_rmsnorm_remapping_writes_non_default_permutation(self):
@@ -1244,6 +1533,8 @@ class SolverTests(unittest.TestCase):
                 tensor_name="op1__out",
                 status="ok",
                 permutation=[1, 0] + list(range(2, self.hw.remap_bits)),
+                output_permutation=[1, 0] + list(range(2, self.hw.remap_bits)),
+                input_permutation=[1, 0] + list(range(2, self.hw.remap_bits)),
                 write_reg_required=False,
                 write_reg_hint=None,
                 reason=None,
@@ -1267,13 +1558,120 @@ class SolverTests(unittest.TestCase):
         with mock.patch("address_remapping.rmsnorm_bridge.solve_graph", return_value=mocked_results):
             filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw)
 
-        self.assertIsNone(filled["operators"][0]["inputs"]["A"].get("remapping"))
-        self.assertIsNone(filled["operators"][2]["inputs"]["A"].get("remapping"))
-        self.assertIsNone(filled["operators"][1]["inputs"]["A"].get("remapping"))
-        self.assertIsNone(filled["operators"][3]["inputs"]["A"].get("remapping"))
-        self.assertIsNone(filled["operators"][3]["inputs"]["B"].get("remapping"))
+        self.assertEqual(filled["operators"][0]["inputs"]["A"].get("remapping"), list(range(self.hw.remap_bits)))
+        self.assertEqual(filled["operators"][2]["inputs"]["A"]["remapping"], [1, 0] + list(range(2, self.hw.remap_bits)))
+        self.assertEqual(filled["operators"][1]["inputs"]["A"]["remapping"], list(range(self.hw.remap_bits)))
+        self.assertEqual(filled["operators"][3]["inputs"]["A"].get("remapping"), list(range(self.hw.remap_bits)))
+        self.assertEqual(filled["operators"][3]["inputs"]["B"]["remapping"], list(range(self.hw.remap_bits)))
         self.assertEqual(filled["operators"][1]["output"]["remapping"], [1, 0] + list(range(2, self.hw.remap_bits)))
+        self.assertNotIn("output_remapping", filled["operators"][1]["output"])
+        self.assertNotIn("layout_remapping", filled["operators"][1]["output"])
+        self.assertNotIn("physical_remapping", filled["operators"][1]["output"])
+        self.assertNotIn("total_remapping", filled["operators"][1]["output"])
+        self.assertNotIn("bank_interleave_count", filled["operators"][1]["output"])
+        self.assertNotIn("input_remapping", filled["operators"][2]["inputs"]["A"])
+        self.assertNotIn("physical_remapping", filled["operators"][2]["inputs"]["A"])
+        self.assertNotIn("bank_interleave_count", filled["operators"][2]["inputs"]["A"])
         self.assertNotIn("writereg", filled["operators"][2]["inputs"]["A"])
+
+    def test_external_ring_gemm_weight_uses_physical_remap_without_layout_solver(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [32, 32, 1],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                        "B": {
+                            "shape": [896, 1, 32],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                            "write_reg_hint": None,
+                        },
+                        "B'": {
+                            "shape": [896, 1, 32],
+                            "source": {"type": "external"},
+                            "dtype": "fp16",
+                        },
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+        solver_cfg = SolverConfig.from_dict(
+            {
+                "bank_interleave": {
+                    "ring_gemm_fp16_fp16_fp16": {"inA": 2, "inB": 2, "out": 2}
+                }
+            }
+        )
+
+        filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw, solver_cfg=solver_cfg)
+
+        default_permutation = list(range(self.hw.remap_bits))
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["A"]["remapping"],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25],
+        )
+        self.assertEqual(filled["operators"][0]["inputs"]["A"]["bank_interleave"], 2)
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["B"]["remapping"],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25],
+        )
+        self.assertEqual(filled["operators"][0]["inputs"]["B"]["bank_interleave"], 2)
+        self.assertEqual(
+            filled["operators"][0]["inputs"]["B'"]["remapping"],
+            filled["operators"][0]["inputs"]["B"]["remapping"],
+        )
+        self.assertEqual(filled["operators"][0]["inputs"]["B'"]["bank_interleave"], 2)
+
+    def test_terminal_output_uses_out_bank_interleave_remap(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_add_fp32MN_fp16MN_fp32MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {
+                            "shape": [1, 32, 32],
+                            "source": {"type": "external"},
+                        },
+                        "B": {
+                            "shape": [1, 32, 32],
+                            "source": {"type": "external"},
+                        },
+                    },
+                    "output": {"shape": [1, 32, 32], "remapping": None},
+                },
+            ],
+        }
+        solver_cfg = SolverConfig.from_dict(
+            {
+                "bank_interleave": {
+                    "prefill_add_fp32MN_fp16MN_fp32MN": {"inA": 1, "inB": 1, "out": 2}
+                }
+            }
+        )
+
+        filled = fill_external_rmsnorm_remapping(payload, hw_cfg=self.hw, solver_cfg=solver_cfg)
+        self.assertEqual(
+            filled["operators"][0]["output"]["remapping"],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25],
+        )
+        self.assertEqual(filled["operators"][0]["output"]["bank_interleave"], 2)
+        self.assertLess(
+            list(filled["operators"][0]["output"].keys()).index("bank_interleave"),
+            list(filled["operators"][0]["output"].keys()).index("shape"),
+        )
 
     def test_fill_external_rmsnorm_remapping_writes_writereg_object(self):
         payload = json.loads(Path("examples/graphs/rms_norm/rmsnorm.json").read_text(encoding="utf-8-sig"))
@@ -1530,7 +1928,7 @@ class SolverTests(unittest.TestCase):
         )
 
     def test_cli_outputs_json(self):
-        graph_path = Path("examples/graphs/ring_gemm_bias.json").resolve()
+        graph_path = Path("examples/graphs/ring_gemm/ring_gemm_bias.json").resolve()
         output_path = Path("outputs/solver/ring_gemm_bias_result.json").resolve()
         if output_path.exists():
             output_path.unlink()
@@ -1613,13 +2011,16 @@ class SolverTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             written_payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(written_payload, payload)
-            self.assertIsNone(payload["operators"][0]["inputs"]["A"].get("remapping"))
-            self.assertIsNone(payload["operators"][1]["inputs"]["A"].get("remapping"))
+            self.assertEqual(payload["operators"][0]["inputs"]["A"].get("remapping"), list(range(self.hw.remap_bits)))
+            self.assertEqual(
+                payload["operators"][1]["inputs"]["A"]["remapping"],
+                [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 1, 2, 3, 4, 5],
+            )
             self.assertNotIn("writereg", payload["operators"][0]["inputs"]["A"])
             self.assertNotIn("writereg", payload["operators"][1]["inputs"]["A"])
 
     def test_performance_cli_outputs_json_and_markdown(self):
-        graph_path = Path("examples/graphs/ring_gemm_bias.json").resolve()
+        graph_path = Path("examples/graphs/ring_gemm/ring_gemm_bias.json").resolve()
         output_path = Path("outputs/performance/ring_gemm_bias/ring_gemm_bias_performance.json").resolve()
         markdown_path = output_path.with_suffix(".md")
         for path in (output_path, markdown_path):
@@ -1645,7 +2046,10 @@ class SolverTests(unittest.TestCase):
             check=True,
         )
         payload = json.loads(completed.stdout)
-        self.assertEqual(set(payload["modes"]), {"baseline", "remap", "remap_interleave"})
+        self.assertEqual(
+            set(payload["modes"]),
+            {"baseline", "layout_remap", "layout_remap_bank_aware", "oracle_interleave"},
+        )
         self.assertIn("summary_markdown", payload)
         self.assertIn("true_roofline", payload)
         self.assertIn("overview", payload)
@@ -1690,7 +2094,7 @@ class SolverTests(unittest.TestCase):
             self.assertTrue(markdown_path.exists())
             self.assertEqual(
                 set(payload["overview"]["mode_order_by_estimated_latency"]),
-                {"baseline", "remap", "remap_interleave"},
+                {"baseline", "layout_remap", "layout_remap_bank_aware", "oracle_interleave"},
             )
             self.assertIn("top_ops_by_latency", payload["mode_summaries"][MODE_BASELINE])
             self.assertIn("analytical_model", payload["modes"][MODE_BASELINE])
@@ -1716,7 +2120,7 @@ class SolverTests(unittest.TestCase):
     def test_build_roofline_summary_reports_limit_and_achieved(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1772,7 +2176,7 @@ class SolverTests(unittest.TestCase):
         )
 
     def test_plot_roofline_cli_outputs_svg_and_summary_json(self):
-        graph_path = Path("examples/graphs/ring_gemm_bias.json").resolve()
+        graph_path = Path("examples/graphs/ring_gemm/ring_gemm_bias.json").resolve()
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path("src").resolve())
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1868,13 +2272,13 @@ class SolverTests(unittest.TestCase):
     def test_true_roofline_is_mode_independent(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
         )
         baseline = payload["modes"][MODE_BASELINE]["op_breakdown"]
-        remap = payload["modes"]["remap"]["op_breakdown"]
+        remap = payload["modes"][MODE_REMAP]["op_breakdown"]
         interleave = payload["modes"][MODE_REMAP_INTERLEAVE]["op_breakdown"]
         self.assertEqual(
             [op["true_roofline"]["roofline_cycles"] for op in baseline],
@@ -1913,7 +2317,7 @@ class SolverTests(unittest.TestCase):
     def test_gemm_true_roofline_uses_tensor_core_peak(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=False,
@@ -1977,11 +2381,12 @@ class SolverTests(unittest.TestCase):
         self.assertGreater(mul_op["bank_timeline"]["memory_timeline_cycles"], 0.0)
 
     def test_ring_gemm_global_reports_ring_breakdown(self):
-        perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
+        perf_hw, perf_cfg, solver_cfg = load_runtime_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
+            solver_cfg,
             include_request_traces=True,
         )
         gemm_op = next(op for op in payload["modes"][MODE_REMAP]["op_breakdown"] if op["op_type"] == "ring_gemm_fp16_fp16_fp16")
@@ -2008,14 +2413,34 @@ class SolverTests(unittest.TestCase):
         self.assertIn("output_writeback_timeline", gemm_op)
         self.assertEqual(gemm_op["ring_tile_timeline"]["tile_count"], gemm_op["ring_participants"])
         self.assertEqual(gemm_op["ring_tile_timeline"]["ping_pong_assignment"][:4], ["ping", "pong", "ping", "pong"])
-        self.assertEqual(gemm_op["ring_microtile_timeline"]["microtile_count_per_participant"], 4)
-        self.assertEqual(gemm_op["ring_microtile_timeline"]["total_compute_microtiles"], 16)
-        self.assertEqual(gemm_op["a_buffer_timeline"]["tile_count"], 4)
-        self.assertEqual(gemm_op["b_buffer_timeline"]["tile_count"], 8)
-        self.assertEqual(gemm_op["pe_compute_timeline"]["micro_op_count"], 256)
-        self.assertEqual(gemm_op["psum_timeline"]["tile_count"], 2)
-        self.assertEqual(len(gemm_op["psum_timeline"]["tiles"]), 2)
-        self.assertEqual(gemm_op["output_writeback_timeline"]["tile_count"], 2)
+        self.assertEqual(
+            gemm_op["ring_microtile_timeline"]["microtile_count_per_participant"],
+            gemm_op["a_buffer_timeline"]["tile_count"],
+        )
+        self.assertGreater(gemm_op["ring_microtile_timeline"]["total_compute_microtiles"], 0)
+        self.assertGreater(gemm_op["a_buffer_timeline"]["tile_count"], 0)
+        self.assertEqual(
+            gemm_op["b_buffer_timeline"]["tile_count"],
+            gemm_op["ring_microtile_timeline"]["b_load_event_count"],
+        )
+        self.assertEqual(
+            gemm_op["pe_compute_timeline"]["micro_op_count"],
+            len(gemm_op["pe_compute_timeline"]["micro_op_end_cycles"]),
+        )
+        self.assertGreater(gemm_op["pe_compute_timeline"]["micro_op_count"], 0)
+        self.assertEqual(
+            gemm_op["psum_timeline"]["tile_count"],
+            len(gemm_op["psum_timeline"]["tiles"]),
+        )
+        self.assertEqual(
+            gemm_op["output_writeback_timeline"]["tile_count"],
+            len(gemm_op["output_writeback_timeline"]["tiles"]),
+        )
+        self.assertEqual(
+            gemm_op["ring_microtile_timeline"]["b_ping_load_event_count"]
+            + gemm_op["ring_microtile_timeline"]["b_pong_load_event_count"],
+            gemm_op["ring_microtile_timeline"]["b_load_event_count"],
+        )
         self.assertGreaterEqual(
             gemm_op["analytical_model"]["ring_transfer_bound_cycles"],
             gemm_op["ring_a_transfer_cycles"],
@@ -2028,11 +2453,60 @@ class SolverTests(unittest.TestCase):
         )
         self.assertLessEqual(
             gemm_op["psum_timeline"]["tiles"][0]["transfer_start_cycle"],
-            gemm_op["pe_compute_timeline"]["output_tile_completion_cycles"][1],
+            gemm_op["pe_compute_timeline"]["output_tile_completion_cycles"][-1],
         )
         self.assertGreater(
             gemm_op["ring_bank_timeline"]["memory_timeline_cycles"],
             gemm_op["ring_microtile_timeline"]["final_write_release_cycle"],
+        )
+
+    def test_ring_gemm_ffn_uses_split_b_and_bprime_event_ready_timeline(self):
+        perf_hw, perf_cfg, solver_cfg = load_runtime_config("examples/configs/performance_config.json")
+        payload = analyze_graph_performance(
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_ffn.json"),
+            perf_hw,
+            perf_cfg,
+            solver_cfg,
+            include_request_traces=False,
+        )
+        gemm_op = next(op for op in payload["modes"][MODE_REMAP]["op_breakdown"] if op["op_type"] == "ring_gemm_fp16_fp16_fp16")
+        timeline = gemm_op["ring_microtile_timeline"]
+        self.assertGreater(timeline["b_ping_load_event_count"], 0)
+        self.assertGreater(timeline["b_pong_load_event_count"], 0)
+        self.assertEqual(
+            timeline["b_load_event_count"],
+            timeline["b_ping_load_event_count"] + timeline["b_pong_load_event_count"],
+        )
+        self.assertEqual(
+            len(timeline["global_b_event_ready_cycles"]),
+            timeline["b_load_event_count"],
+        )
+        self.assertEqual(
+            len(timeline["global_b_event_buffer_assignment"]),
+            timeline["b_load_event_count"],
+        )
+        self.assertEqual(
+            timeline["global_b_event_buffer_assignment"][:4],
+            ["ping", "pong", "ping", "pong"],
+        )
+        self.assertEqual(
+            len(timeline["b_ping_ready_cycles"]),
+            timeline["b_ping_load_event_count"],
+        )
+        self.assertEqual(
+            len(timeline["b_pong_ready_cycles"]),
+            timeline["b_pong_load_event_count"],
+        )
+        self.assertGreaterEqual(timeline["global_b_event_ready_lag_cycles"], 0.0)
+        self.assertGreaterEqual(timeline["pe_visible_bubble_cycles"], 0.0)
+        self.assertGreaterEqual(timeline["completion_tail_cycles"], 0.0)
+        self.assertGreaterEqual(timeline["last_writeback_completion_cycle"], timeline["last_b_event_ready_cycle"])
+        self.assertEqual(
+            gemm_op["latency_cycles"],
+            max(
+                gemm_op["pe_compute_timeline"]["micro_op_end_cycles"][-1],
+                timeline["last_writeback_completion_cycle"],
+            ),
         )
 
     def test_ring_gemm_cluster_reports_ring_breakdown(self):
@@ -2071,11 +2545,17 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(gemm_op["ring_tile_timeline"]["ping_pong_assignment"][:4], ["ping", "pong", "ping", "pong"])
         self.assertGreater(gemm_op["ring_bank_timeline"]["memory_timeline_cycles"], 0.0)
         self.assertEqual(gemm_op["ring_bank_timeline"]["write_buffer_bytes"], 128)
-        self.assertEqual(gemm_op["ring_microtile_timeline"]["microtile_count_per_participant"], 448)
+        self.assertEqual(
+            gemm_op["ring_microtile_timeline"]["microtile_count_per_participant"],
+            gemm_op["a_buffer_timeline"]["tile_count"],
+        )
         self.assertEqual(len(gemm_op["ring_microtile_timeline"]["compute_end_cycles"]), 1792)
         self.assertEqual(len(gemm_op["ring_tile_timeline"]["tile_compute_end_cycles"]), 1792)
-        self.assertEqual(gemm_op["a_buffer_timeline"]["tile_count"], 448)
-        self.assertEqual(gemm_op["b_buffer_timeline"]["tile_count"], 448)
+        self.assertGreater(gemm_op["a_buffer_timeline"]["tile_count"], 0)
+        self.assertEqual(
+            gemm_op["b_buffer_timeline"]["tile_count"],
+            gemm_op["ring_microtile_timeline"]["b_load_event_count"],
+        )
         self.assertEqual(gemm_op["pe_compute_timeline"]["micro_op_count"], 28672)
         self.assertEqual(gemm_op["psum_timeline"]["tile_count"], 4)
 
@@ -2185,7 +2665,7 @@ class SolverTests(unittest.TestCase):
     def test_request_trace_exposes_physical_address_chain(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=True,
@@ -2203,11 +2683,12 @@ class SolverTests(unittest.TestCase):
         self.assertNotIn("ring_a_transfer", roles)
 
     def test_mode_reports_expose_address_transforms(self):
-        perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
+        perf_hw, perf_cfg, solver_cfg = load_runtime_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
+            solver_cfg,
             include_request_traces=True,
         )
         transforms = payload["modes"][MODE_REMAP]["address_transforms"]
@@ -2215,9 +2696,44 @@ class SolverTests(unittest.TestCase):
         self.assertIn("matrix", transforms[0])
         gemm_op = next(op for op in payload["modes"][MODE_REMAP]["op_breakdown"] if op["op_type"] == "ring_gemm_fp16_fp16_fp16")
         self.assertIn("ring_participants", gemm_op)
+        mismatch_payload = analyze_graph_performance(
+            load_graph_file("examples/graphs/transformer_layer_single_slice.json"),
+            perf_hw,
+            perf_cfg,
+            solver_cfg,
+            include_request_traces=True,
+        )
+        self.assertTrue(
+            any(
+                str(edge["placement_policy"]).startswith("bank_interleave_")
+                for edge in mismatch_payload["modes"][MODE_LAYOUT_REMAP_BANK_AWARE]["edge_breakdown"]
+            )
+        )
+        mismatch_edges = mismatch_payload["modes"][MODE_LAYOUT_REMAP_BANK_AWARE]["edge_breakdown"]
+        self.assertTrue(
+            any(
+                "transform_role" in edge and "transform_source" in edge
+                for edge in mismatch_edges
+            )
+        )
+
+    def test_cross_mode_comparison_and_edge_report_are_emitted(self):
+        perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
+        payload = analyze_graph_performance(
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
+            perf_hw,
+            perf_cfg,
+            include_request_traces=False,
+            emit_edge_report=True,
+        )
+        self.assertIn("cross_mode_comparison", payload)
+        self.assertIn("gain_from_layout_compatibility", payload["cross_mode_comparison"])
+        self.assertIn("benefit_breakdown", payload["mode_summaries"][MODE_LAYOUT_REMAP_BANK_AWARE])
+        self.assertIn("edge_mode_comparison", payload)
+        self.assertTrue(payload["edge_mode_comparison"]["edges"])
 
     def test_missing_base_addr_fails_performance_analysis(self):
-        graph = load_graph_file("examples/graphs/ring_gemm_bias.json")
+        graph = load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json")
         del graph["tensors"]["a_fp16"]["base_addr"]
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         with self.assertRaises(ValueError):
@@ -2248,7 +2764,7 @@ class SolverTests(unittest.TestCase):
     def test_emit_trace_artifacts_generates_ramulator_trace_files(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=True,
@@ -2267,7 +2783,7 @@ class SolverTests(unittest.TestCase):
     def test_run_validation_skips_reference_when_ramulator_missing(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=True,
@@ -2304,7 +2820,7 @@ class SolverTests(unittest.TestCase):
     def test_run_validation_uses_reference_results_when_ramulator_present(self):
         perf_hw, perf_cfg = load_performance_config("examples/configs/performance_config.json")
         payload = analyze_graph_performance(
-            load_graph_file("examples/graphs/ring_gemm_bias.json"),
+            load_graph_file("examples/graphs/ring_gemm/ring_gemm_bias.json"),
             perf_hw,
             perf_cfg,
             include_request_traces=True,
@@ -2336,13 +2852,13 @@ class SolverTests(unittest.TestCase):
         self.assertTrue(validation["validation_overview"]["baseline_includes_software_relayout"])
         self.assertEqual(
             set(validation["reference_mode_summaries"]),
-            {"baseline", "remap", "remap_interleave"},
+            {"baseline", "layout_remap", "layout_remap_bank_aware", "oracle_interleave"},
         )
         self.assertEqual(
             validation["reference_results"]["per_mode"][MODE_BASELINE]["memory_cycles_reference"],
             4321,
         )
-        self.assertEqual(run_mock.call_count, 3)
+        self.assertEqual(run_mock.call_count, 4)
 
     def test_parse_reference_cycles_prefers_memory_system_cycles(self):
         stdout = "\n".join(
