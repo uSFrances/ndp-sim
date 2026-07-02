@@ -53,9 +53,17 @@
             "src_id": "DRAM_LC.LC2",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 1,
             "stride": 1,
             "last_index": 3
+        },
+        "LC7": {
+            "src_id": "DRAM_LC.LC6",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 4
         }
     },
     "lc_pe_configs": {
@@ -96,6 +104,27 @@
             },
             "inport0": {
                 "src_id": "DRAM_LC.LC3",
+                "mode": "keep",
+                "keep_last_index": 4,
+                "constant": 0
+            }
+        },
+        "PE2": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC7",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 4
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC6",
                 "mode": "keep",
                 "keep_last_index": 4,
                 "constant": 0
@@ -148,18 +177,18 @@
         "GROUP0": {
             "target": "A",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC6",
+                "src_id": "DRAM_LC.LC7",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 4
+                "last_index": 5
             },
             "COL_LC": {
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 5
+                "last_index": 6
             }
         },
         "GROUP1": {
@@ -218,7 +247,7 @@
         "buffer0": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -236,7 +265,7 @@
         "buffer1": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -345,7 +374,7 @@
                 null
             ],
             "idx": [
-                "DRAM_LC.LC6",
+                "LC_PE.PE2",
                 null,
                 null
             ],
@@ -400,7 +429,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                5,
+                6,
                 7
             ],
             "buf_spatial_stride": [
@@ -410,9 +439,9 @@
                 3
             ],
             "buf_spatial_size": 4,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "ping_pong": 1,
-            "pingpong_last_index": 4
+            "pingpong_last_index": 5
         },
         "stream1": {
             "target": "B",
@@ -715,7 +744,7 @@
         "inport0": {
             "enable": 1,
             "pingpong_en": 1,
-            "pingpong_last_index": 4,
+            "pingpong_last_index": 5,
             "nbr_enable": 1
         },
         "inport1": {
