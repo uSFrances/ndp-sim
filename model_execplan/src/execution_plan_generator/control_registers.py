@@ -1171,8 +1171,17 @@ def _compute_prefill_gemv_local_control_register_updates(
 
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
-        "iga_lc2.dram_loop_configs.end": b_k // 2 if b_k is not None else 0,
-        "iga_lc4.dram_loop_configs.end": a_m // 4 if a_m is not None else 0,
+        "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
     }
     address_plan = template.address_plan
     b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
@@ -1180,6 +1189,59 @@ def _compute_prefill_gemv_local_control_register_updates(
         updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 16777216)
 
     return updates
+
+
+def _compute_prefill_gemv_ring_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for gemv_ring control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    input_b_prime = operator.inputs.get("B'")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
+    (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+
+
+    updates: dict[str, int] = {
+        "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
+        "iga_lc6.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
+        "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
+        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+    }
+
+    address_plan = template.address_plan
+    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+    if b_base_addr is not None:
+        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 16777216)
+
+    return updates
+
 
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
@@ -1211,6 +1273,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_add_V_fp16MN_fp32N_fp16MN": _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates,
     "prefill_gemm_local_qkt": _compute_prefill_gemm_local_qkt_control_register_updates,
     "prefill_gemv_local": _compute_prefill_gemv_local_control_register_updates,
+    "prefill_gemv_ring": _compute_prefill_gemv_ring_control_register_updates,
 }
 
 
