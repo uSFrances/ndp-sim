@@ -53,7 +53,7 @@
             "src_id": "DRAM_LC.LC2",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 4,
             "stride": 1,
             "last_index": 3
         }
@@ -739,7 +739,7 @@
     "gemv_shape": {
         "M": 1,
         "N": 32,
-        "K": 32
+        "K": 224
     },
     "general_array":{
     "inport":{

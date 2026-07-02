@@ -1242,6 +1242,39 @@ def _compute_prefill_gemv_ring_control_register_updates(
 
     return updates
 
+def _compute_prefill_mac_fp32MN_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Placeholder for prefill_mac_fp32MN_fp32MN_fp32MNN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "iga_lc2.dram_loop_configs.end": b_n if b_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_n or 0) * 32,
+            port2 = 32,
+        ),
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (b_n or 0) * 32,
+            port2 = 32,
+        ),
+        "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (d_n or 0) * 32,
+            port2 = 32,
+        ),
+    }
 
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
@@ -1274,6 +1307,7 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_gemm_local_qkt": _compute_prefill_gemm_local_qkt_control_register_updates,
     "prefill_gemv_local": _compute_prefill_gemv_local_control_register_updates,
     "prefill_gemv_ring": _compute_prefill_gemv_ring_control_register_updates,
+    "prefill_mac_fp32MN_fp32MN_fp32MN": _compute_prefill_mac_fp32MN_fp32MN_fp32MN_control_register_updates,
 }
 
 
