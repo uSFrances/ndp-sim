@@ -15,7 +15,7 @@
   "operators": [
     {
       "id": "op0",
-      "type": "prefill_add_fp32MN_fp32MN_fp32MN",
+      "type": "prefill_mac_fp32MN_fp32MN_fp32MN",
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
@@ -23,7 +23,7 @@
           "remapping": null,
           "source": "op-1"
         },
-        "B": {
+        "C": {
           "shape": [1, "sequence_length", "sequence_length"],
           "remapping": null,
           "source": {

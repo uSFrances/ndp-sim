@@ -121,7 +121,7 @@ def slice_names(candidate_op: Path, reference_op: Path) -> list[str]:
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    layer_dir = script_dir / "layer0_physic"
+    layer_dir = script_dir / "rope"
 
     parser = argparse.ArgumentParser(
         description="Compare selected op/slice matrix files against install data."
@@ -135,7 +135,7 @@ def main() -> int:
     parser.add_argument(
         "--candidate-dir",
         type=Path,
-        default=layer_dir / "output",
+        default=layer_dir / "rope_output",
         help="Directory containing candidate opX/sliceXX files.",
     )
     parser.add_argument(
@@ -153,7 +153,7 @@ def main() -> int:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=script_dir / "output_compare",
+        default=script_dir / "output_compare_rope",
         help="Output directory for opX/sliceXX.json reports.",
     )
     args = parser.parse_args()

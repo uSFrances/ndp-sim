@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 
-MATRIX_NAMES = ("A", "B", "D")
+MATRIX_NAMES = ("A", "B", "C", "D")
 
 
 def find_input_files(source_root: Path) -> list[Path]:
@@ -95,12 +95,12 @@ def main() -> int:
     default_source = script_dir / "data" / "layer0_physic" / "install"
     default_destination = script_dir / "data" / "layer0_physic_bank" / "install"
     default_remapped_json = (
-        script_dir / "layer0_padding_bankinterleave2_remapped.json"
+        script_dir / "layer0_0630_remapped.json"
     )
 
     parser = argparse.ArgumentParser(
         description=(
-            "Split matrix_A/B/D_linearized_128bit.txt into bank files by "
+            "Split matrix_A/B/C/D_linearized_128bit.txt into bank files by "
             "assigning consecutive 128-bit lines round-robin. Bank counts are "
             "read from a remapped JSON file."
         )
@@ -140,7 +140,7 @@ def main() -> int:
 
     source_files = find_input_files(source_root)
     if not source_files:
-        parser.error(f"no matrix A/B/D 128-bit .txt files found in {source_root}")
+        parser.error(f"no matrix A/B/C/D 128-bit .txt files found in {source_root}")
 
     bank_interleaves = load_bank_interleaves(remapped_json)
     total_records = 0
