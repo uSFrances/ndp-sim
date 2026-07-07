@@ -166,7 +166,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Read layer0_physic/sca_cfg.json, convert matrix txt data to "
+            "Read gemm_ring_Vgen/sca_cfg.json, convert matrix txt data to "
             "128-bit hex words, and generate address-to-data files."
         )
     )
@@ -176,7 +176,7 @@ def main() -> int:
         action="append",
         help=(
             "sca_cfg JSON to read. Can be passed multiple times. "
-            "Defaults to layer0_physic/sca_cfg.json and sca_cfg_D.json if present."
+            "Defaults to gemm_ring_Vgen/sca_cfg.json and sca_cfg_D.json if present."
         ),
     )
     parser.add_argument("--model-json", type=Path, default=default_model_json)

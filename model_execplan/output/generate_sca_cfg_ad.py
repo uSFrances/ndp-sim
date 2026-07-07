@@ -11,7 +11,8 @@ from pathlib import Path
 
 MATRIX_PATH_RE = re.compile(
     r"^install/(?P<op>op\d+)/(?P<slice>slice\d+)/"
-    r"matrix_(?P<matrix>[ABD])_linearized_128bit\.txt$"
+    r"matrix_(?P<matrix>[ABD])_linearized_128bit"
+    r"(?:_(?P<bank>\d+))?\.txt$"
 )
 
 

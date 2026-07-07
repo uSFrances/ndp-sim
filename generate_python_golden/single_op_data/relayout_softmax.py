@@ -124,10 +124,10 @@ def get_op_id(filename):
     if "max" in filename: return "op1"
     return "unknown_op"
 
-def get_matrix_name(filename):
-    """根据输入输出类型映射到硬件的端口名 A / B / D"""
+def get_matrix_name(filename, op_id):
+    """根据输入输出类型映射端口名；softmax op0 的 in1 使用 C。"""
     if "in0" in filename: return "A"
-    if "in1" in filename: return "B"
+    if "in1" in filename: return "C" if op_id == "op0" else "B"
     if "out" in filename: return "D"
     return "unknown_matrix"
 
@@ -199,7 +199,7 @@ def process_softmax_tensors(input_dir, output_dir):
             if not match: continue
             
             op_id = get_op_id(filename)
-            matrix_id = get_matrix_name(filename)
+            matrix_id = get_matrix_name(filename, op_id)
             if op_id == "unknown_op" or matrix_id == "unknown_matrix": continue
 
             out_name = f"matrix_{matrix_id}_linearized_128bit.bin"

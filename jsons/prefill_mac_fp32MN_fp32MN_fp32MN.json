@@ -184,7 +184,7 @@
             "ping_pong": 0,
             "pingpong_last_index": null
         },
-        "stream1": {
+        "stream3": {
             "target": "C",
             "mode": "read",
             "base_addr": "0b00000_01_0000000000000_000000_0000",

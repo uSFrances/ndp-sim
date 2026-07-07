@@ -1214,5 +1214,3 @@ def _copy_overwrite_writable(src: Path, dst: Path) -> None:
 
     # Ensure future runs can overwrite this file on Windows.
 
-
-
