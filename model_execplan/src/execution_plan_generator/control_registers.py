@@ -397,6 +397,24 @@ def _compute_prefill_gemm_local_control_register_updates(
         "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(b_n // 2) if b_n is not None else 0,
     }
 
+    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
+        updates.update({
+            "iga_col_lc0.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc0.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream0.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+    if _has_hint(input_b, "reorder(m8,n2)->(n2,m8)") or _has_hint(input_b, "reorder(n8,m2)->(m2,n8)"):
+        updates.update({
+            "iga_col_lc1.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc1.buffer_loop_configs.COL_LC.stride": 2,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.end": 4,
+            "iga_col_lc3.buffer_loop_configs.COL_LC.stride": 2,
+            # buf_spatial_stride is intentionally a list here per your example.
+            "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+            "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
+        })
+
     address_plan = template.address_plan
     if operator.op_type in _BP_INDEPENDENT_ADDR_OPS:
         bp_base_addr = _resolve_input_base_addr(operator, address_plan, "B'")
