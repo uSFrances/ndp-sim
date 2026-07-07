@@ -177,18 +177,18 @@
         "GROUP0": {
             "target": "A",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC7",
+                "src_id": "DRAM_LC.LC6",
                 "start": 0,
-                "end": 1,
+                "end": 4,
                 "stride": 1,
-                "last_index": 5
+                "last_index": 4
             },
             "COL_LC": {
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 6
+                "last_index": 5
             }
         },
         "GROUP1": {
@@ -247,7 +247,7 @@
         "buffer0": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 4,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -260,12 +260,12 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 0
+            "buf_end_row_addr": 3
         },
         "buffer1": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 4,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -278,7 +278,7 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 0
+            "buf_end_row_addr": 3
         },
         "buffer2": {
             "dst_port": 0,
@@ -429,7 +429,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                6,
+                5,
                 7
             ],
             "buf_spatial_stride": [
@@ -439,9 +439,9 @@
                 3
             ],
             "buf_spatial_size": 4,
-            "buf_full_last_index": 5,
-            "ping_pong": 1,
-            "pingpong_last_index": 5
+            "buf_full_last_index": 4,
+            "ping_pong": 0,
+            "pingpong_last_index": 4
         },
         "stream1": {
             "target": "B",
@@ -744,7 +744,7 @@
         "inport0": {
             "enable": 1,
             "pingpong_en": 1,
-            "pingpong_last_index": 5,
+            "pingpong_last_index": 4,
             "nbr_enable": 1
         },
         "inport1": {

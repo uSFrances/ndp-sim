@@ -5,6 +5,7 @@ from math import ceil
 
 from .errors import ExecutionPlanError
 from .models import AddressAssignment, AddressPlan, ExecutionPlanInput, InputSourceType
+from .control_registers import _BP_INDEPENDENT_ADDR_OPS
 
 
 @dataclass
@@ -133,15 +134,18 @@ class AddressPlanner:
                     f"{self.MAX_SLAVES} slices, got mask {op.used_slices}."
                 )
 
+            last_group: int | None = None
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
                 if input_name == "B'" and "B" in op.inputs:
-                    b_io_key = self._io_key(op.op_id, "input", "B")
-                    b_tensor_name = io_map.get(b_io_key)
-                    if b_tensor_name is not None:
-                        io_map[io_key] = b_tensor_name
-                        continue
+                    if op.op_type not in _BP_INDEPENDENT_ADDR_OPS:
+                        b_io_key = self._io_key(op.op_id, "input", "B")
+                        b_tensor_name = io_map.get(b_io_key)
+                        if b_tensor_name is not None:
+                            io_map[io_key] = b_tensor_name
+                            continue
+                    # else: B' gets its own independent allocation below.
 
                 source = tensor.source
                 if source is None:
@@ -149,16 +153,25 @@ class AddressPlanner:
 
                 if source.source_type == InputSourceType.EXTERNAL:
                     tensor_name = f"{op.op_id}.input.{input_name}"
-                    assignment, group_idx, bank_in_group, row, col = (
+                    alloc_shape = tensor.shape
+                    if op.op_type in _BP_INDEPENDENT_ADDR_OPS and input_name in ("B", "B'"):
+                        k, m, n = tensor.shape
+                        alloc_shape = (k, m, n // 2)
+
+                    tensor_ilv = tensor.bank_interleave or 1
+                    assignment, gi, _, _, _ = (
                         self._allocate_tensor_interleaved(
                             tensor_name=tensor_name,
                             tensor_dtype=tensor.dtype,
-                            shape=tensor.shape,
+                            shape=alloc_shape,
                             enabled_slice_ids=enabled_slice_ids,
                             group_cursors=group_cursors,
                             interleave=interleave,
+                            tensor_interleave=tensor_ilv,
+                            avoid_group=last_group,
                         )
                     )
+                    last_group = gi
                     assignments[tensor_name] = assignment
                     io_map[io_key] = tensor_name
                     continue
@@ -177,7 +190,8 @@ class AddressPlanner:
 
             # output
             output_name = f"{op.op_id}.output.D"
-            assignment, group_idx, bank_in_group, row, col = (
+            output_ilv = op.output.bank_interleave or 1
+            output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,
                     tensor_dtype=op.output.dtype,
@@ -185,9 +199,10 @@ class AddressPlanner:
                     enabled_slice_ids=enabled_slice_ids,
                     group_cursors=group_cursors,
                     interleave=interleave,
+                    tensor_interleave=output_ilv,
                 )
             )
-            assignments[output_name] = assignment
+            assignments[output_name] = output_assignment
             output_tensor_by_op[op.op_id] = output_name
             io_map[self._io_key(op.op_id, "output", "D")] = output_name
 
@@ -301,11 +316,13 @@ class AddressPlanner:
                 io_key = self._io_key(op.op_id, "input", input_name)
 
                 if input_name == "B'" and "B" in op.inputs:
-                    b_io_key = self._io_key(op.op_id, "input", "B")
-                    b_tensor_name = io_map.get(b_io_key)
-                    if b_tensor_name is not None:
-                        io_map[io_key] = b_tensor_name
-                        continue
+                    if op.op_type not in _BP_INDEPENDENT_ADDR_OPS:
+                        b_io_key = self._io_key(op.op_id, "input", "B")
+                        b_tensor_name = io_map.get(b_io_key)
+                        if b_tensor_name is not None:
+                            io_map[io_key] = b_tensor_name
+                            continue
+                    # else: B' gets its own independent allocation below.
 
                 source = tensor.source
                 if source is None:
@@ -313,10 +330,14 @@ class AddressPlanner:
 
                 if source.source_type == InputSourceType.EXTERNAL:
                     tensor_name = f"{op.op_id}.input.{input_name}"
+                    alloc_shape = tensor.shape
+                    if op.op_type in _BP_INDEPENDENT_ADDR_OPS and input_name in ("B", "B'"):
+                        k, m, n = tensor.shape
+                        alloc_shape = (k, m, n // 2)
                     assignment, cursor = self._allocate_tensor_flat(
                         tensor_name=tensor_name,
                         tensor_dtype=tensor.dtype,
-                        shape=tensor.shape,
+                        shape=alloc_shape,
                         enabled_slice_ids=enabled_slice_ids,
                         cursor=cursor,
                     )
@@ -422,25 +443,26 @@ class AddressPlanner:
         self,
         group_cursors: list[_AddressCursor],
         interleave: int,
+        avoid_group: int | None = None,
     ) -> int:
-        """Return the index of the least-used bank group."""
-        best = 0
-        best_flat = self._flatten_in_group(
-            bank=group_cursors[0].bank,
-            row=group_cursors[0].row,
-            col=group_cursors[0].col,
-            interleave=interleave,
-        )
-        for gi in range(1, len(group_cursors)):
+        """Return the index of the least-used bank group, optionally avoiding *avoid_group*."""
+        best = None
+        best_flat: int | None = None
+        for gi in range(len(group_cursors)):
+            if avoid_group is not None and len(group_cursors) > 1 and gi == avoid_group:
+                continue
             flat = self._flatten_in_group(
                 bank=group_cursors[gi].bank,
                 row=group_cursors[gi].row,
                 col=group_cursors[gi].col,
                 interleave=interleave,
             )
-            if flat < best_flat:
+            if best_flat is None or flat < best_flat:
                 best_flat = flat
                 best = gi
+        if best is None:
+            # All groups were avoided; pick group 0 as fallback.
+            best = 0
         return best
 
     def _flatten_in_group(
@@ -503,17 +525,25 @@ class AddressPlanner:
         enabled_slice_ids: list[int],
         group_cursors: list[_AddressCursor],
         interleave: int,
+        force_group_idx: int | None = None,
+        tensor_interleave: int | None = None,
+        avoid_group: int | None = None,
     ) -> tuple[AddressAssignment, int, int, int, int]:
         size_bytes = self._tensor_size_bytes(
             tensor_name=tensor_name,
             tensor_dtype=tensor_dtype,
             shape=shape,
         )
-        # Each bank in the group holds 1/interleave of the data.
-        per_bank_bytes = size_bytes // interleave
+        # Use tensor's own interleave for per-bank size (supports mixed plans),
+        # but keep plan-level interleave for group structure (bank assignment).
+        ilv_for_size = tensor_interleave if tensor_interleave is not None else interleave
+        per_bank_bytes = size_bytes // ilv_for_size
         words = ceil(per_bank_bytes / self.WORD_BYTES)
 
-        gi = self._choose_bank_group(group_cursors, interleave)
+        if force_group_idx is not None:
+            gi = force_group_idx
+        else:
+            gi = self._choose_bank_group(group_cursors, interleave, avoid_group=avoid_group)
         cursor = group_cursors[gi]
 
         bank = self._group_start_bank(gi, interleave)

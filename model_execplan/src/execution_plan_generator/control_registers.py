@@ -17,6 +17,14 @@ REMAPPING_ENTRY_COUNT = 26
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MAPPING_REVIEW_CACHE: dict[str, dict[str, str]] = {}
 
+# Operators whose B' tensor requires independent address allocation.
+# B and B' share one combined allocation in the JSON (same shape);
+# the allocated address space for each is // 2 of the JSON size.
+_BP_INDEPENDENT_ADDR_OPS: set[str] = {
+    "prefill_gemv_ring",
+    "prefill_gemv_local",
+}
+
 # Support exact-match tag hints from JSON. write_reg_hint is a single string.
 def _has_hint(tensor: TensorSpec | None, tag: str) -> bool:
     if tensor is None:
@@ -390,9 +398,14 @@ def _compute_prefill_gemm_local_control_register_updates(
     }
 
     address_plan = template.address_plan
-    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
+    if operator.op_type in _BP_INDEPENDENT_ADDR_OPS:
+        bp_base_addr = _resolve_input_base_addr(operator, address_plan, "B'")
+        if bp_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(bp_base_addr)
+    else:
+        b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+        if b_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
 
     return updates
 
@@ -994,9 +1007,14 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "special_array0.special_array.outport.mode": 1, #row = 1, col = 0
         })
     address_plan = template.address_plan
-    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None :
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
+    if operator.op_type in _BP_INDEPENDENT_ADDR_OPS:
+        bp_base_addr = _resolve_input_base_addr(operator, address_plan, "B'")
+        if bp_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(bp_base_addr)
+    else:
+        b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+        if b_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
     return updates
 
 def _compute_prefill_add_fp32MN_fp32MN_fp32MN_control_register_updates(
@@ -1144,13 +1162,18 @@ def _compute_prefill_gemm_local_qkt_control_register_updates(
             "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
     address_plan = template.address_plan
-    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
+    if operator.op_type in _BP_INDEPENDENT_ADDR_OPS:
+        bp_base_addr = _resolve_input_base_addr(operator, address_plan, "B'")
+        if bp_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(bp_base_addr)
+    else:
+        b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
+        if b_base_addr is not None:
+            updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + (128 // b_bank_interleave))
 
     return updates
 
-def _compute_prefill_gemv_local_control_register_updates(
+def _compute_decode_gemv_local_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
 ) -> dict[str, int]:
@@ -1183,15 +1206,10 @@ def _compute_prefill_gemv_local_control_register_updates(
             port2 = (b_k or 0) * 8,
         ),
     }
-    address_plan = template.address_plan
-    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 16777216)
-
     return updates
 
 
-def _compute_prefill_gemv_ring_control_register_updates(
+def _compute_decode_gemv_ring_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
 ) -> dict[str, int]:
@@ -1213,7 +1231,7 @@ def _compute_prefill_gemv_ring_control_register_updates(
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
         "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
-        "iga_lc6.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
+        "iga_lc6.dram_loop_configs.end": a_k // 8 if a_k is not None else 0,
         "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
         "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
@@ -1234,11 +1252,6 @@ def _compute_prefill_gemv_ring_control_register_updates(
             port2 = (b_k or 0) * 8,
         ),
     }
-
-    address_plan = template.address_plan
-    b_base_addr = _resolve_input_base_addr(operator, address_plan, "B")
-    if b_base_addr is not None:
-        updates["rd_stream2.stream_engine.stream.base_addr"] = parse_base_addr(b_base_addr + 16777216)
 
     return updates
 
@@ -1276,6 +1289,147 @@ def _compute_prefill_mac_fp32MN_fp32MN_fp32MN_control_register_updates(
         ),
     }
 
+def _compute_decode_max_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for max operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once max control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_n or 0) * 4,
+            port2 = 4,
+        ),
+    }
+
+def _compute_decode_summac_fp16N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for summac operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once summac control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_n or 0) * 2,
+            port2 = 2,
+        ),
+    }
+    
+def _compute_decode_sum_rec_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for sum_rec operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once sum_rec control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_n or 0) * 4,
+            port2 = 4,
+        ),
+    }
+
+def _compute_decode_mac_SFU_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for mac_SFU control register logic."""
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+        "ga_pe0.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe2.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe4.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe6.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe8.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe10.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe12.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "ga_pe14.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+    }
+
+def _compute_decode_remote_sum_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for remote_sum control register logic."""
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+        "iga_lc0.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_m if a_m is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 4,
+            port2 = 524288,
+        ),
+    }
+
+def _compute_decode_summac_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for summac operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once summac control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (a_n or 0) * 4,
+            port2 = 4,
+        ),
+    }
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -1305,9 +1459,15 @@ OP_CONTROL_REGISTER_FN = {
     "prefill_mul_fp32MN_fp32MN_fp32MN": _compute_prefill_mul_fp32MN_fp32MN_fp32MN_control_register_updates,
     "prefill_add_V_fp16MN_fp32N_fp16MN": _compute_prefill_add_V_fp16MN_fp32N_fp16MN_control_register_updates,
     "prefill_gemm_local_qkt": _compute_prefill_gemm_local_qkt_control_register_updates,
-    "prefill_gemv_local": _compute_prefill_gemv_local_control_register_updates,
-    "prefill_gemv_ring": _compute_prefill_gemv_ring_control_register_updates,
+    "decode_gemv_local": _compute_decode_gemv_local_control_register_updates,
+    "decode_gemv_ring": _compute_decode_gemv_ring_control_register_updates,
     "prefill_mac_fp32MN_fp32MN_fp32MN": _compute_prefill_mac_fp32MN_fp32MN_fp32MN_control_register_updates,
+    "decode_max_fp32N_fp32N": _compute_decode_max_fp32N_fp32N_control_register_updates,
+    "decode_summac_fp16N_fp32N": _compute_decode_summac_fp16N_fp32N_control_register_updates,
+    "decode_sum_rec_fp32N_fp32N": _compute_decode_sum_rec_fp32N_fp32N_control_register_updates,
+    "decode_mac_SFU_fp32N_fp32N": _compute_decode_mac_SFU_fp32N_fp32N_control_register_updates,
+    "decode_remote_sum_fp32N_fp32N": _compute_decode_remote_sum_fp32N_fp32N_control_register_updates,
+    "decode_summac_fp32N_fp32N": _compute_decode_summac_fp32N_fp32N_control_register_updates,
 }
 
 
