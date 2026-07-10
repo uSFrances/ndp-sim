@@ -729,6 +729,19 @@ padding		chunk_size	chunk
 * 已完成 `buffer_config` 控制字段 JSON 注入：
     * `buffer_manager_cluster<N>.buffer_config.buffer.<field_name>` 格式的控制寄存器更新（如 `buffer_nbr_cnt`）在算子 JSON 重生成时自动写入 `buffer_config.buffer<N>` 节点。
     * 已修复 `buffer_nbr_cnt` 默认值问题：`BufferConfig.__init__` 中将初始值设为 `None`，使得 lambda 默认 `x if x is not None else 27` 在字段缺失时正确回落为 27。
+* 已完成特殊算子 B' 独立地址分配（`_BP_INDEPENDENT_ADDR_OPS`）：
+    * `control_registers.py` 维护特殊算子表，当前包含 `prefill_gemv_ring`、`prefill_gemv_local`。
+    * 表中算子的 B' 独立分配地址（JSON shape 取 `size//2`），自动适配 `bank_interleave`。
+    * 5 个 handler（gemm_local/gemm_ring_4slice/gemm_local_qkt/gemv_local/gemv_ring）已适配：特殊算子使用 B' 自身地址，非特殊算子保持 B 地址 + offset。
+* 已完成混合 `bank_interleave` 支持：
+    * 每个 tensor 使用自身 `bank_interleave`，flat tensor 不再因全局最大 interleave 被减半。
+    * 新增 `avoid_group` 机制，同一算子输入尽量分配不同 bank group。
+    * `_allocate_tensor_interleaved` 新增 `tensor_interleave` 参数、`_choose_bank_group` 新增 `avoid_group` 参数。
+* 已完成 JSON/指令/sca_cfg 三路地址同步：
+    * 新增 `_TENSOR_TO_AG_INSTANCE` 固定映射，`_patch_stream_base_addrs` 不再依赖模板 `target` 字段。
+    * `_resolve_stream_key_for_instance` 改为按数字后缀直接匹配（非序号查找），兼容 write stream 穿插场景。
+* 已完成 pipeline 缺失 JSON 模板报错：
+    * 算子 JSON 模板不存在时抛出 `FileNotFoundError`，不再静默跳过。
 
 ### 待完成工作
 * 更多算子模板信息仍需补充到统一基础信息文件中，目前主要围绕示例算子完成联调。
@@ -851,8 +864,14 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 ### 一、地址规划与数据放置
 * 新增自动地址规划：输入/输出 tensor 按“只增不回收”方式顺序分配地址。
 * 支持按 `used_slices` 掩码进行每算子独立 slice 规划，未配置时继承顶层默认掩码。
-* 地址规划按 16Byte 对齐执行，但 `sca_cfg.json` 中显示为真实 byte 地址（不再右移 4bit）。
-* 新增 config 统一地址规划能力：
+* 地址规划按 16Byte 对齐执行，但 `sca_cfg.json` 中显示为真实 byte 地址（不再右移 4bit）。* 新增混合 `bank_interleave` 支持：
+    * 规划时每个 tensor 使用自身的 `bank_interleave`（不再统一取全局最大值）。
+    * flat tensor（`bank_interleave≤1`）在 group 内不拆分，完整占用一个 bank。
+    * interleaved tensor（`bank_interleave>1`）按原有 group 模型拆分。
+    * 同一算子内各 tensor 尽量分配到不同 bank group（`avoid_group` 机制），允许少量内存浪费。
+* 新增特殊算子 B' 独立地址分配（`_BP_INDEPENDENT_ADDR_OPS`）：
+    * 算子表中列出的算子（当前含 `prefill_gemv_ring`、`prefill_gemv_local`），B 与 B' 不再共址。
+    * JSON 中 B 与 B' 的 shape 相同但代表合计大小，分配时各取 `size // 2`。* 新增 config 统一地址规划能力：
     * config 数据纳入地址规划流程，不再依赖模板中的静态地址字段。
     * config 放置在所有数据 tensor 之后。
     * `config_length` 的单位为 64bit 行数，config 起始地址强制对齐到 BANK Row 起点（`col=0, subword=0`）。
@@ -862,8 +881,15 @@ python main.py examples/sample_execution_input.json --dump-normalized-json norma
 
 ### 二、B / B' 相关规则
 * 新增 `B'` 输入支持（包括解析、地址映射、寄存器写入链路）。
-* 地址规划中 `B` 与 `B'` 共用同一地址空间（同算子内 `B'` 复用 `B` 的分配结果）。
-* `sca_cfg.json` 中不再单独输出 `matrixB'` 条目。
+* 默认规则：地址规划中 `B` 与 `B'` 共用同一地址空间（同算子内 `B'` 复用 `B` 的分配结果）。
+* 特殊算子规则（`_BP_INDEPENDENT_ADDR_OPS`）：
+    * 对于 `prefill_gemv_ring`、`prefill_gemv_local` 等算子，B 与 B' 各分配独立地址。
+    * JSON 中 B/B' 的 shape 代表合计大小，各取 `size // 2`（最后一维减半）。
+    * B' 写入 `rd_stream2`（AG2）的 `base_addr`。
+* `sca_cfg.json` 规则：
+    * 默认算子不输出 `matrixB'`。
+    * 特殊算子输出 `matrixBp` 条目（`B'` 消毒为 `Bp`），包含完整的 per-slice per-bank 地址信息。
+* 同步一致性：JSON patching、控制寄存器更新、Write_Reg 指令三条路径统一使用 AG 固定映射（A→AG0, B→AG1, B'→AG2, C→AG3, D→wr_stream0），通过 `_resolve_stream_key_for_instance` 按数字后缀直接匹配 stream key（非序号查找），确保码流与指令地址一致。
 
 ### 三、控制寄存器与映射能力
 * 新增 tensor `remapping` 字段支持（A/B/B'/C/D）：
