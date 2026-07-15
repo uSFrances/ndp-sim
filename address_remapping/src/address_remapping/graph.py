@@ -169,15 +169,17 @@ def _graph_level_producer_layout_override(
     edge: Dict[str, object],
     ops: Dict[str, OpSpec],
 ) -> LayoutSpec:
-    tensor_name = str(edge.get("tensor", edge.get("tensor_name", "")))
     producer = str(edge["producer"])
     consumer = str(edge["consumer"])
+    producer_port = str(edge.get("producer_port", ""))
+    consumer_port = str(edge.get("consumer_port", ""))
     producer_spec = ops[producer]
     consumer_spec = ops[consumer]
     if not (
-        tensor_name == "v_proj_fp16"
-        and producer_spec.op_type == "ring_gemm_fp16_fp16_fp16"
+        producer_spec.op_type == "ring_gemm_fp16_fp16_fp16"
+        and producer_port == "out"
         and consumer_spec.op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
+        and consumer_port == "inB"
     ):
         return producer_layout
     return _reorder_layout_linear_order(producer_layout, "n8", "m8")
@@ -229,13 +231,15 @@ def _is_rope_slice_exchange_edge(consumer_spec: OpSpec, consumer_port: str, tens
 
 
 def _is_v_row_writeback_edge(edge: Dict[str, object], ops: Dict[str, OpSpec]) -> bool:
-    tensor_name = str(edge.get("tensor", edge.get("tensor_name", "")))
     producer = str(edge["producer"])
     consumer = str(edge["consumer"])
+    producer_port = str(edge.get("producer_port", ""))
+    consumer_port = str(edge.get("consumer_port", ""))
     return (
-        tensor_name == "v_proj_fp16"
-        and ops[producer].op_type == "ring_gemm_fp16_fp16_fp16"
+        ops[producer].op_type == "ring_gemm_fp16_fp16_fp16"
+        and producer_port == "out"
         and ops[consumer].op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
+        and consumer_port == "inB"
     )
 
 

@@ -32,6 +32,7 @@ from address_remapping.registry import build_default_registry
 from address_remapping.roofline import build_roofline_summary
 from address_remapping.rmsnorm_bridge import (
     RmsNormBridgeError,
+    build_expanded_graph_from_external_execplan,
     build_expanded_graph_from_external_rmsnorm,
     fill_external_rmsnorm_remapping,
     normalize_graph_spec,
@@ -825,6 +826,44 @@ class SolverTests(unittest.TestCase):
         self.assertIn("row_writeback", v_proj_edge.write_reg_hint)
         self.assertEqual(
             [factor["name"] for factor in v_proj_edge.producer_bound_layout["ordered_factors"]],
+            ["M_outer32", "N_outer32", "n4", "m4", "m8", "n8"],
+        )
+
+    def test_external_add_v_edge_uses_row_writeback_override_for_anonymous_tensor(self):
+        payload = {
+            "used_slices": 28,
+            "operators": [
+                {
+                    "id": "op0",
+                    "type": "prefill_gemm_ring_4slice",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "A": {"shape": [32, 32, 1], "source": {"type": "external"}, "dtype": "fp16"},
+                        "B": {"shape": [896, 1, 32], "source": {"type": "external"}, "dtype": "fp16"},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+                {
+                    "id": "op1",
+                    "type": "prefill_add_V_fp16MN_fp32N_fp16MN",
+                    "used_slices": "0b1111111111111111111111111111",
+                    "inputs": {
+                        "B": {"shape": [1, 32, 32], "source": "op0"},
+                        "A": {"shape": [1, 1, 32], "source": {"type": "external"}},
+                    },
+                    "output": {"shape": [1, 32, 32]},
+                },
+            ],
+        }
+        expanded = build_expanded_graph_from_external_execplan(payload)
+        results = solve_graph(expanded, self.hw)
+        edge = next(result for result in results if result.producer == "op0" and result.consumer == "op1")
+        self.assertEqual(edge.tensor_name, "op0__out")
+        self.assertEqual(edge.status, "ok")
+        self.assertTrue(edge.write_reg_required)
+        self.assertIn("row_writeback", edge.write_reg_hint)
+        self.assertEqual(
+            [factor["name"] for factor in edge.producer_bound_layout["ordered_factors"]],
             ["M_outer32", "N_outer32", "n4", "m4", "m8", "n8"],
         )
 

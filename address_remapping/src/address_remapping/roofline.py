@@ -14,13 +14,17 @@ def generate_roofline_artifacts(
     explicit_output: Optional[str] = None,
 ) -> Dict[str, object]:
     hardware, perf_cfg, solver_cfg = load_runtime_config(config_path)
-    payload = analyze_graph_performance(
-        load_graph_file(graph_path),
-        hardware,
-        perf_cfg,
-        solver_cfg,
-        include_request_traces=False,
-    )
+    graph_payload = load_graph_file(graph_path)
+    try:
+        payload = analyze_graph_performance(
+            graph_payload,
+            hardware,
+            perf_cfg,
+            solver_cfg,
+            include_request_traces=False,
+        )
+    except Exception:
+        payload = _build_roofline_only_payload(graph_payload, hardware, mode)
     summary = build_roofline_summary(payload, mode=mode, graph_name=Path(graph_path).stem)
     svg = render_roofline_svg(summary)
 
@@ -162,6 +166,214 @@ def build_roofline_summary(
         },
         "operators": operators,
     }
+
+
+def _build_roofline_only_payload(
+    graph_payload: Mapping[str, object],
+    hardware: object,
+    mode: str,
+) -> Dict[str, object]:
+    operators = graph_payload.get("operators")
+    if not isinstance(operators, list):
+        raise ValueError("Roofline-only fallback requires an external graph with an 'operators' list.")
+    canonical_mode = MODE_ALIASES.get(mode, mode)
+    op_breakdown: List[Dict[str, object]] = []
+    total_latency = 0.0
+    for operator in operators:
+        if not isinstance(operator, Mapping):
+            continue
+        op_id = str(operator.get("id", "")).strip()
+        if not op_id:
+            continue
+        op_type = str(operator.get("type", "")).strip()
+        work_ops, compute_cycles, peak_compute, compute_meta = _roofline_only_compute(operator, hardware)
+        bytes_read, bytes_written, byte_meta = _roofline_only_bytes(operator, hardware)
+        total_bytes = bytes_read + bytes_written
+        true_roofline = _roofline_from_totals(
+            work_ops=work_ops,
+            total_bytes=total_bytes,
+            peak_compute_ops_per_cycle=peak_compute,
+            peak_memory_bandwidth_bytes_per_cycle=float(hardware.peak_memory_bandwidth_bytes_per_cycle),
+        )
+        latency = float(true_roofline["roofline_cycles"])
+        total_latency += latency
+        measured = _coerce_positive_float(operator.get("hardware_measured"))
+        op_breakdown.append(
+            {
+                "kind": "op",
+                "stage_name": op_id,
+                "op_name": op_id,
+                "op_type": op_type,
+                "hardware_measured_cycles": measured,
+                "latency_cycles": latency,
+                "bytes_read": bytes_read,
+                "bytes_written": bytes_written,
+                "total_bytes": total_bytes,
+                "work_ops": work_ops,
+                "arithmetic_intensity": (work_ops / total_bytes) if total_bytes else None,
+                "true_roofline": true_roofline,
+                "roofline_only": {**compute_meta, **byte_meta},
+            }
+        )
+    return {
+        "hardware": {
+            "derived": {
+                "peak_memory_bandwidth_bytes_per_cycle": float(hardware.peak_memory_bandwidth_bytes_per_cycle),
+                "general_peak_ops_per_cycle": float(hardware.general_peak_ops_per_cycle),
+                "gemm_peak_ops_per_cycle": float(hardware.gemm_peak_ops_per_cycle),
+            }
+        },
+        "modes": {
+            canonical_mode: {
+                "mode": canonical_mode,
+                "total_latency_cycles": total_latency,
+                "op_breakdown": op_breakdown,
+                "edge_breakdown": [],
+            }
+        },
+    }
+
+
+def _roofline_only_compute(
+    operator: Mapping[str, object],
+    hardware: object,
+) -> Tuple[float, float, int, Dict[str, object]]:
+    op_type = str(operator.get("type", "")).strip()
+    if op_type == "prefill_gemv_ring":
+        geometry = _gemv_ring_geometry(operator)
+        work_ops = float(
+            hardware.compute.gemm_core.mac_ops
+            * int(geometry["gemv_m_dim"])
+            * int(geometry["gemv_global_k_dim"])
+            * int(geometry["gemv_local_n_dim"])
+        )
+        peak = int(hardware.gemm_peak_ops_per_cycle)
+        return work_ops, work_ops / max(1, peak), peak, {"work_scope": "per_slice_full_k_local_n", **geometry}
+    output = dict(operator.get("output", {}))
+    work_ops = float(_shape_product(_shape_list(output)))
+    peak = int(hardware.general_peak_ops_per_cycle)
+    return work_ops, math.ceil(work_ops / max(1, peak)), peak, {}
+
+
+def _roofline_only_bytes(
+    operator: Mapping[str, object],
+    hardware: object,
+) -> Tuple[int, int, Dict[str, object]]:
+    op_type = str(operator.get("type", "")).strip()
+    if op_type == "prefill_gemv_ring":
+        geometry = _gemv_ring_geometry(operator)
+        m_dim = int(geometry["gemv_m_dim"])
+        global_k = int(geometry["gemv_global_k_dim"])
+        local_n = int(geometry["gemv_local_n_dim"])
+        inputs = dict(operator.get("inputs", {}))
+        a_dtype = str(dict(inputs.get("A", {})).get("dtype", "fp16"))
+        bytes_read = m_dim * global_k * int(hardware.dtype_bits(a_dtype)) // 8
+        for port_name in ("B", "B'"):
+            if port_name not in inputs:
+                continue
+            b_dtype = str(dict(inputs[port_name]).get("dtype", "fp16"))
+            bytes_read += global_k * local_n * int(hardware.dtype_bits(b_dtype)) // 8
+        output = dict(operator.get("output", {}))
+        output_dtype = str(output.get("dtype", "fp16"))
+        bytes_written = m_dim * local_n * int(hardware.dtype_bits(output_dtype)) // 8
+        return bytes_read, bytes_written, {"byte_scope": "per_slice_full_k_local_n"}
+    inputs = dict(operator.get("inputs", {}))
+    bytes_read = sum(_tensor_bytes(dict(port), hardware) for port in inputs.values() if isinstance(port, Mapping))
+    bytes_written = _tensor_bytes(dict(operator.get("output", {})), hardware)
+    return bytes_read, bytes_written, {}
+
+
+def _gemv_ring_geometry(operator: Mapping[str, object]) -> Dict[str, int]:
+    inputs = dict(operator.get("inputs", {}))
+    a_shape = _shape_list(dict(inputs.get("A", {})))
+    b_shape = _shape_list(dict(inputs.get("B", {})))
+    output_shape = _shape_list(dict(operator.get("output", {})))
+    used_slices = _count_used_slices(operator.get("used_slices")) or _count_used_slices(operator.get("used_slices", 1)) or 1
+    local_k = int(a_shape[-1]) if a_shape else 1
+    if len(b_shape) >= 2:
+        local_k = min(local_k, int(b_shape[-2]))
+    global_k = local_k * used_slices
+    global_n = int(b_shape[-1]) if b_shape else 1
+    local_n = int(output_shape[-1]) if output_shape else max(1, global_n // used_slices)
+    m_dim = _shape_product(output_shape[:-1]) if len(output_shape) > 1 else 1
+    return {
+        "used_slices": int(used_slices),
+        "gemv_m_dim": int(m_dim),
+        "gemv_global_k_dim": int(global_k),
+        "gemv_global_n_dim": int(global_n),
+        "gemv_local_k_dim": int(local_k),
+        "gemv_local_n_dim": int(local_n),
+    }
+
+
+def _roofline_from_totals(
+    work_ops: float,
+    total_bytes: int,
+    peak_compute_ops_per_cycle: int,
+    peak_memory_bandwidth_bytes_per_cycle: float,
+) -> Dict[str, object]:
+    compute_bound_cycles = work_ops / max(1, peak_compute_ops_per_cycle)
+    bandwidth_bound_cycles = total_bytes / peak_memory_bandwidth_bytes_per_cycle if total_bytes else 0.0
+    return {
+        "work_ops": work_ops,
+        "total_bytes": total_bytes,
+        "arithmetic_intensity_ops_per_byte": (work_ops / total_bytes) if total_bytes else None,
+        "peak_compute_ops_per_cycle": peak_compute_ops_per_cycle,
+        "peak_memory_bandwidth_bytes_per_cycle": peak_memory_bandwidth_bytes_per_cycle,
+        "compute_bound_cycles": compute_bound_cycles,
+        "bandwidth_bound_cycles": bandwidth_bound_cycles,
+        "roofline_cycles": max(compute_bound_cycles, bandwidth_bound_cycles),
+        "ridge_point_ops_per_byte": (
+            peak_compute_ops_per_cycle / peak_memory_bandwidth_bytes_per_cycle
+            if peak_memory_bandwidth_bytes_per_cycle
+            else None
+        ),
+    }
+
+
+def _shape_list(tensor: Mapping[str, object]) -> List[int]:
+    shape = tensor.get("shape", tensor.get("resolved_shape", []))
+    if isinstance(shape, Mapping):
+        return [int(value) for value in shape.values()]
+    if isinstance(shape, list):
+        return [int(value) for value in shape]
+    return []
+
+
+def _shape_product(shape: Sequence[int]) -> int:
+    product = 1
+    for value in shape:
+        product *= int(value)
+    return product
+
+
+def _tensor_bytes(tensor: Mapping[str, object], hardware: object) -> int:
+    dtype = str(tensor.get("dtype", "fp16"))
+    return _shape_product(_shape_list(tensor)) * int(hardware.dtype_bits(dtype)) // 8
+
+
+def _count_used_slices(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.startswith("0b"):
+        return text.count("1")
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
+def _coerce_positive_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0.0 else None
 
 
 def render_roofline_svg(summary: Mapping[str, object]) -> str:

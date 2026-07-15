@@ -161,6 +161,7 @@ class PerformanceConfig:
 @dataclass(frozen=True)
 class SolverConfig:
     bank_interleave: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    default_bank_interleave: int = 1
 
     @classmethod
     def from_dict(cls, data: Optional[Mapping[str, object]]) -> "SolverConfig":
@@ -185,7 +186,12 @@ class SolverConfig:
         return cls(bank_interleave=normalized)
 
     def bank_interleave_count(self, op_type: str, port_name: str) -> int:
-        return int(self.bank_interleave.get(str(op_type), {}).get(str(port_name), 1))
+        return int(
+            self.bank_interleave.get(str(op_type), {}).get(
+                str(port_name),
+                self.default_bank_interleave,
+            )
+        )
 
     def to_dict(self) -> Dict[str, object]:
         return {

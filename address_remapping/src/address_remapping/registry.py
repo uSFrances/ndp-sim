@@ -211,6 +211,40 @@ def ring_gemm_out_fp16_layout(dtype: str) -> LayoutSpec:
     )
 
 
+def ring_gemv_a_fp16_layout(dtype: str) -> LayoutSpec:
+    return make_layout(
+        dtype,
+        {"K": "K"},
+        [
+            {"name": "K", "parent_axis": "K", "extent": "K", "kind": "outer"},
+        ],
+        ["K"],
+    )
+
+
+def ring_gemv_b_fp16_layout(dtype: str) -> LayoutSpec:
+    return make_layout(
+        dtype,
+        {"K": "K", "N": "N"},
+        [
+            {"name": "N", "parent_axis": "N", "extent": "N", "kind": "outer"},
+            {"name": "K", "parent_axis": "K", "extent": "K", "kind": "outer"},
+        ],
+        ["N", "K"],
+    )
+
+
+def ring_gemv_out_fp16_layout(dtype: str) -> LayoutSpec:
+    return make_layout(
+        dtype,
+        {"N": "N"},
+        [
+            {"name": "N", "parent_axis": "N", "extent": "N", "kind": "outer"},
+        ],
+        ["N"],
+    )
+
+
 def bias_in_fp16_layout(dtype: str) -> LayoutSpec:
     return make_layout(
         dtype,
@@ -461,6 +495,16 @@ def _gemm_mk_kn_to_mn_shape(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str
     }
 
 
+def _gemv_k_kn_to_n_shape(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+    in_a = input_shapes["inA"]
+    in_b = input_shapes["inB"]
+    if set(in_a.keys()) != {"K"}:
+        raise ValueError(f"Expected ring_gemv inA to have axis K, got {in_a}.")
+    if set(in_b.keys()) != {"K", "N"}:
+        raise ValueError(f"Expected ring_gemv inB to have axes K,N, got {in_b}.")
+    return {"N": in_b["N"]}
+
+
 def _qkt_kt_view_resolver(input_shapes: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     in_a = input_shapes["inA"]
     if set(in_a.keys()) != {"M", "N"}:
@@ -566,6 +610,15 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
         ("inA", "inB"),
         ("out",),
         _gemm_mk_kn_to_mn_shape,
+    )
+    _register(
+        registry,
+        "ring_gemv_fp16_fp16_fp16",
+        {"inA": _port("fp16", ring_gemv_a_fp16_layout), "inB": _port("fp16", ring_gemv_b_fp16_layout)},
+        {"out": _port("fp16", ring_gemv_out_fp16_layout)},
+        ("inA", "inB"),
+        ("out",),
+        _gemv_k_kn_to_n_shape,
     )
     _register(
         registry,

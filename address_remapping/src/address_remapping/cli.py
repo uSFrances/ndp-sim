@@ -2,9 +2,10 @@
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 from .graph import load_graph_file, solve_graph
-from .hardware import HardwareSpec
+from .hardware import HardwareSpec, SolverConfig
 from .json_format import render_json
 from .layout import LayoutSpec
 from .performance import (
@@ -39,24 +40,28 @@ def main() -> None:
     edge_parser.add_argument("--format", choices=["json"], default="json")
     edge_parser.add_argument("--output")
     edge_parser.add_argument("--config")
+    edge_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
 
     graph_parser = subparsers.add_parser("solve-graph")
     graph_parser.add_argument("path")
     graph_parser.add_argument("--format", choices=["json"], default="json")
     graph_parser.add_argument("--output")
     graph_parser.add_argument("--config")
+    graph_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
 
     rmsnorm_parser = subparsers.add_parser("fill-rmsnorm-remapping")
     rmsnorm_parser.add_argument("path")
     rmsnorm_parser.add_argument("--format", choices=["json"], default="json")
     rmsnorm_parser.add_argument("--output")
     rmsnorm_parser.add_argument("--config")
+    rmsnorm_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
 
     remapping_parser = subparsers.add_parser("fill-remapping")
     remapping_parser.add_argument("path")
     remapping_parser.add_argument("--format", choices=["json"], default="json")
     remapping_parser.add_argument("--output")
     remapping_parser.add_argument("--config")
+    remapping_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
     remapping_parser.add_argument("--dump-solver-results", nargs="?", const="__default__")
 
     perf_parser = subparsers.add_parser("analyze-performance")
@@ -64,6 +69,7 @@ def main() -> None:
     perf_parser.add_argument("--format", choices=["json"], default="json")
     perf_parser.add_argument("--output")
     perf_parser.add_argument("--config")
+    perf_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
     perf_parser.add_argument("--emit-trace", action="store_true")
     perf_parser.add_argument("--validate", action="store_true")
     perf_parser.add_argument("--ramulator-root")
@@ -94,6 +100,7 @@ def main() -> None:
     validation_parser.add_argument("--format", choices=["json"], default="json")
     validation_parser.add_argument("--output")
     validation_parser.add_argument("--config")
+    validation_parser.add_argument("--bank-interleave", type=int, choices=[1, 2, 4])
     validation_parser.add_argument("--ramulator-root")
 
     args = parser.parse_args()
@@ -104,6 +111,7 @@ def main() -> None:
             hardware, _, solver_cfg = load_runtime_config(args.config)
         else:
             solver_cfg = None
+        solver_cfg = _override_bank_interleave(solver_cfg, args.bank_interleave)
         payload = load_graph_file(args.path)
         result = solve_edge(
             producer_layout=LayoutSpec.from_dict(payload["producer_layout"]),
@@ -134,6 +142,7 @@ def main() -> None:
 
     if args.command == "analyze-performance":
         perf_hardware, perf_cfg, solver_cfg = load_runtime_config(args.config)
+        solver_cfg = _override_bank_interleave(solver_cfg, args.bank_interleave)
         payload = analyze_graph_performance(
             load_graph_file(args.path),
             perf_hardware,
@@ -163,6 +172,7 @@ def main() -> None:
 
     if args.command == "run-validation":
         perf_hardware, perf_cfg, solver_cfg = load_runtime_config(args.config)
+        solver_cfg = _override_bank_interleave(solver_cfg, args.bank_interleave)
         payload = analyze_graph_performance(
             load_graph_file(args.path),
             perf_hardware,
@@ -197,6 +207,7 @@ def main() -> None:
         solver_cfg = None
         if args.config:
             hardware, _, solver_cfg = load_runtime_config(args.config)
+        solver_cfg = _override_bank_interleave(solver_cfg, args.bank_interleave)
         output_path = fill_external_rmsnorm_remapping_file(
             args.path,
             output_path=args.output,
@@ -210,6 +221,7 @@ def main() -> None:
         solver_cfg = None
         if args.config:
             hardware, _, solver_cfg = load_runtime_config(args.config)
+        solver_cfg = _override_bank_interleave(solver_cfg, args.bank_interleave)
         if args.dump_solver_results is not None:
             source_payload = load_graph_file(args.path)
             filled, solver_results = fill_external_remapping_with_results(
@@ -247,6 +259,7 @@ def main() -> None:
         hardware, _, solver_cfg = load_runtime_config(args.config)
     else:
         solver_cfg = None
+    solver_cfg = _override_bank_interleave(solver_cfg, getattr(args, "bank_interleave", None))
     results = solve_graph(normalize_graph_spec(load_graph_file(args.path)), hardware, solver_cfg)
     rendered = _render_json([result.to_dict() for result in results])
     print(rendered)
@@ -262,6 +275,25 @@ def _write_output_file(input_path: str, explicit_output: str, rendered: str) -> 
 
 def _render_json(payload: object) -> str:
     return render_json(payload)
+
+
+def _override_bank_interleave(
+    solver_cfg: Optional[SolverConfig],
+    bank_interleave: Optional[int],
+) -> Optional[SolverConfig]:
+    if bank_interleave is None:
+        return solver_cfg
+    if bank_interleave not in {1, 2, 4}:
+        raise ValueError("--bank-interleave must be one of 1, 2, or 4.")
+    base = solver_cfg or SolverConfig()
+    overridden = {
+        op_type: {port_name: int(bank_interleave) for port_name in ports}
+        for op_type, ports in base.bank_interleave.items()
+    }
+    return SolverConfig(
+        bank_interleave=overridden,
+        default_bank_interleave=int(bank_interleave),
+    )
 
 
 def _default_solver_output_path(input_path: str) -> Path:
