@@ -125,6 +125,10 @@ def relayout_slice_M8_N(slice_data):
             relayout_data.extend(block)
     return np.array(relayout_data, dtype=slice_data.dtype)
 
+def relayout_slice_N8_M(slice_data):
+    """对一个 MxN 的 slice 先转置，再复用 M8_N 完成 N8_M 重排。"""
+    return relayout_slice_M8_N(slice_data.T)
+
 def is_kcur_vcur_add_tensor(filename):
     """Kcur/Vcur 的 add 张量需要按首维切 4 份，再复制 7 组"""
     return "_op-add_" in filename and ("Kcur" in filename or "Vcur" in filename)
@@ -299,7 +303,13 @@ def process_regular_tensors(input_dir, output_dir):
                 # 0527
                 slice_data = slice_data.T
                 
-                relayout_data = relayout_slice_M8_N(slice_data)
+                if (
+                    target_prefix == "blk.0_Vcur-0-add_op-add"
+                    and matrix_id in {"B", "D"}
+                ):
+                    relayout_data = relayout_slice_N8_M(slice_data)
+                else:
+                    relayout_data = relayout_slice_M8_N(slice_data)
                 relayout_data.tofile(out_path)
                 convert_to_128bit_txt(out_path, rows=slice_data.shape[0], cols=slice_data.shape[1], file_dtype=slice_data.dtype)
 

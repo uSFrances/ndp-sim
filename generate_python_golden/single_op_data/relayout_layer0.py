@@ -46,7 +46,7 @@ def get_category_and_prefix(template_name, base_data_dir, count):
         "rope": ("rope", "blk.0_Qcur-0_op-rope"),
         "rmsnorm_kv": ("rmsnorm", "blk.0_norm-0_op-rms_norm_kv"),
         "rmsnorm_second": ("rmsnorm", "blk.0_norm_ffn-0_op-rms_norm"),
-        "remote_sum_fp16mn_fp32mn": ("gemm_local", "blk.0_node_0_attn_scores_op-remote_sum"),
+        "remote_sum_fp32mn_fp32mn": ("gemm_local", "blk.0_node_0_attn_scores_op-remote_sum"),
         "gemm_local_sv": ("gemm_local", "blk.0_node_0_attn"),
         "silu": ("regular", "blk.0_ffn_silu-0_op-unary"),
 

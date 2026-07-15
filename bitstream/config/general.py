@@ -137,6 +137,14 @@ class GAPEConfig(BaseConfigModule):
         if isinstance(val, str):
             text = val.strip()
             compact = text.replace(" ", "")
+            # Try hex first (e.g., "0x1A", "0XFF", or IEEE 754 fp32 bit pattern "0x3F800000").
+            # Hex values are treated as raw 32-bit bit patterns, which correctly
+            # handles both integer constants and hex-encoded IEEE 754 float32 values.
+            if compact.startswith("0x") or compact.startswith("0X"):
+                try:
+                    return int(compact, 16)
+                except ValueError:
+                    pass  # fall through to fraction/float parsing (e.g., "0x1 / 0x2")
             # Try symbolic fraction first (e.g., "1.0 / 1024" or "1/1024"), then float.
             if "/" in compact:
                 numerator_text, denominator_text = compact.split("/", maxsplit=1)

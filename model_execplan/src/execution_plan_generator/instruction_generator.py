@@ -6,7 +6,7 @@ from typing import Callable
 from typing import Iterable
 
 from .errors import InvalidRegisterWritePlanError
-from .control_registers import compute_control_register_updates
+from .control_registers import compute_control_register_updates, _BP_INDEPENDENT_ADDR_OPS
 from .models import AddressPlan, ExecutionPlanArtifact, ExecutionPlanInput, InputSourceType, OperatorTemplate
 from .register_mapping import (
     PartialRegisterWrite,
@@ -241,7 +241,7 @@ class InstructionGenerator:
                 assignment = address_plan.assignments[tensor_name]
                 reg_field_key = self._base_addr_field_key_for_input(input_name)
                 assignment_base_address = assignment.base_address
-                if input_name == "B'":
+                if input_name == "B'" and op.op_type not in _BP_INDEPENDENT_ADDR_OPS:
                     b_io_key = f"{op.op_id}.input.B"
                     b_tensor_name = address_plan.operator_io_to_tensor.get(b_io_key)
                     if b_tensor_name is not None:

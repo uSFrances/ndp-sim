@@ -15,7 +15,7 @@ from .models import (
     OperatorSpec,
     OperatorTemplate,
 )
-from .control_registers import compute_control_register_updates
+from .control_registers import compute_control_register_updates, _BP_INDEPENDENT_ADDR_OPS
 from .slice_routing import resolve_io_base_addr_source_slice
 
 
@@ -157,6 +157,17 @@ def _patch_emulator_operator_json_payload(
         )
 
 
+# Tensor → AG instance mapping, consistent with BaseAddressRegisterMap
+# in instruction_generator.py.
+_TENSOR_TO_AG_INSTANCE: dict[str, str] = {
+    "A": "rd_stream0",
+    "B": "rd_stream1",
+    "B'": "rd_stream2",
+    "C": "rd_stream3",
+    "D": "wr_stream0",
+}
+
+
 def _patch_stream_base_addrs(
     payload: dict[str, object],
     operator: OperatorSpec,
@@ -168,6 +179,11 @@ def _patch_stream_base_addrs(
     When ``use_global`` is True (bitstream regeneration), the slice-00
     address from the global address plan is used.  When False (emulator
     export), operator-local offsets starting from 0x0 are used.
+
+    Uses the fixed tensor→AG mapping (A→rd_stream0, B→rd_stream1,
+    B'→rd_stream2, C→rd_stream3, D→wr_stream0) instead of template
+    ``target`` fields so that the patched JSON is consistent with the
+    generated Write_Reg instructions.
     """
     stream_engine = payload.get("stream_engine")
     if not isinstance(stream_engine, dict):
@@ -183,11 +199,12 @@ def _patch_stream_base_addrs(
         )
 
     for target_name, base_addr in base_addrs.items():
-        mode = "write" if target_name == "D" else "read"
-        stream_key = _find_stream_key_by_target(
+        ag_instance = _TENSOR_TO_AG_INSTANCE.get(target_name)
+        if ag_instance is None:
+            continue
+        stream_key = _resolve_stream_key_for_instance(
             stream_engine=stream_engine,
-            target=target_name,
-            mode=mode,
+            instance=ag_instance,
         )
         if stream_key is None:
             continue
@@ -246,9 +263,11 @@ def _compute_operator_local_base_addrs(
 
     for input_name in operator.inputs.keys():
         if input_name == "B'":
-            if "B" in local_base_addrs:
-                local_base_addrs[input_name] = local_base_addrs["B"]
-            continue
+            if operator.op_type not in _BP_INDEPENDENT_ADDR_OPS:
+                if "B" in local_base_addrs:
+                    local_base_addrs[input_name] = local_base_addrs["B"]
+                continue
+            # For special operators B' gets its own allocation below.
 
         io_key = f"{operator.op_id}.input.{input_name}"
         tensor_name = address_plan.operator_io_to_tensor.get(io_key)
@@ -522,7 +541,38 @@ def _resolve_stream_key_for_instance(
     stream_engine: dict[str, object],
     instance: str,
 ) -> str | None:
+    """Resolve a logical instance name (rd_stream0, rd_stream1, …, wr_stream0) to a
+    JSON stream key by matching the numeric suffix directly, NOT by ordinal position
+    among same-mode streams.  This ensures the mapping survives templates where
+    write streams are interleaved with read streams.
+    """
     mode = "read" if instance.startswith("rd_stream") else "write"
+
+    # Extract the numeric suffix from the instance (e.g. rd_stream2 → 2).
+    if instance == "wr_stream" or instance == "wr_stream0":
+        target_suffix = 0
+    else:
+        tail = instance.split("stream", maxsplit=1)[-1]
+        if not tail.isdigit():
+            # Fall back to ordinal search for non-standard names.
+            return _resolve_stream_key_by_ordinal(stream_engine, instance, mode)
+        target_suffix = int(tail)
+
+    target_key = f"stream{target_suffix}"
+    stream_node = stream_engine.get(target_key)
+    if isinstance(stream_node, dict) and stream_node.get("mode") == mode:
+        return target_key
+
+    # Fallback: ordinal search if the direct key doesn't match the expected mode.
+    return _resolve_stream_key_by_ordinal(stream_engine, instance, mode)
+
+
+def _resolve_stream_key_by_ordinal(
+    stream_engine: dict[str, object],
+    instance: str,
+    mode: str,
+) -> str | None:
+    """Ordinal fallback: pick the N-th stream of *mode*, sorted by numeric suffix."""
     ordinal = 0
     if instance != "wr_stream":
         tail = instance.split("stream", maxsplit=1)[-1]
@@ -782,7 +832,13 @@ def write_install_manifest(
     for op in execution_input.operators:
         for input_name in op.inputs.keys():
             if input_name == "B'":
-                continue
+                if op.op_type not in _BP_INDEPENDENT_ADDR_OPS:
+                    continue
+                # For special operators B' has its own allocation;
+                # sanitise the manifest key to use "Bp" instead of "B'".
+                manifest_name = "Bp"
+            else:
+                manifest_name = input_name
             input_spec = op.inputs.get(input_name)
             io_key = f"{op.op_id}.input.{input_name}"
             tensor_name = address_plan.operator_io_to_tensor.get(io_key)
@@ -813,18 +869,18 @@ def write_install_manifest(
 
                 bank_interleave_val = input_spec.bank_interleave if input_spec is not None else 1
                 if bank_interleave_val <= 1:
-                    payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}"] = {
+                    payload[f"{op.op_id}_matrix{manifest_name}_slice{slice_id}"] = {
                         "base_addr": _format_hex32(slice_base_addr),
-                        "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit.txt",
+                        "path": f"install/{op.op_id}/{slice_dir}/matrix_{manifest_name}_linearized_128bit.txt",
                     }
                 else:
                     base_bank = (slice_base_addr >> 23) & 0x3
                     bank_mask = ~(0x3 << 23)
                     for bank_off in range(bank_interleave_val):
                         bank_addr = (slice_base_addr & bank_mask) | ((base_bank + bank_off) << 23)
-                        payload[f"{op.op_id}_matrix{input_name}_slice{slice_id}_{bank_off}"] = {
+                        payload[f"{op.op_id}_matrix{manifest_name}_slice{slice_id}_{bank_off}"] = {
                             "base_addr": _format_hex32(bank_addr),
-                            "path": f"install/{op.op_id}/{slice_dir}/matrix_{input_name}_linearized_128bit_{bank_off}.txt",
+                            "path": f"install/{op.op_id}/{slice_dir}/matrix_{manifest_name}_linearized_128bit_{bank_off}.txt",
                         }
 
         output_key = f"{op.op_id}.output.D"
@@ -1157,6 +1213,4 @@ def _copy_overwrite_writable(src: Path, dst: Path) -> None:
     shutil.copyfile(src, dst)
 
     # Ensure future runs can overwrite this file on Windows.
-
-
 

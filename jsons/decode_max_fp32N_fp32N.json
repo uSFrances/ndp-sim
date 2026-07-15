@@ -13,12 +13,20 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 1,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         },
         "LC2": {
-            "src_id": "DRAM_LC.LC1",
+            "src_id": "DRAM_LC.LC0",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 1,
+            "stride": 1,
+            "last_index": 1
+        },
+        "LC3": {
+            "src_id": "DRAM_LC.LC2",
             "outmost_loop": 0,
             "start": 0,
             "end": 1,
@@ -34,7 +42,7 @@
                     "mode": null,
                     "keep_last_index": null,
                     "constant": 0
-            },
+                },
             "inport1": {
                     "src_id": null,
                     "mode": "constant",
@@ -47,30 +55,51 @@
                     "keep_last_index": null,
                     "constant": 0
             }    
+        },
+        "PE1": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "LC_PE.PE0",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
         }
     },
     "buffer_loop_configs": {
         "GROUP0":{
             "target": "A",
             "ROW_LC":{
-                "src_id": "DRAM_LC.LC0",
+                "src_id": "DRAM_LC.LC1",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 1
+                "last_index": 2
             },
             "COL_LC":{
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
                 "end": 4,
                 "stride": 4,
-                "last_index": 2
+                "last_index": 3
             }
         },
         "GROUP1":{
             "target": "D",
             "ROW_LC":{
-                "src_id": "DRAM_LC.LC2",
+                "src_id": "DRAM_LC.LC3",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
@@ -89,13 +118,13 @@
         "stream0": {
             "target": "A",
             "mode": "read",
-            "base_addr": 0,
-            "mem_idx_mode": ["buffer", null, null],
-            "mem_idx_keep_last_index": [7, null, null],
+            "base_addr": "0b00000_00_0000000000000_000000_0000",
+            "mem_idx_mode": ["buffer", "keep", null],
+            "mem_idx_keep_last_index": [7, 1, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["DRAM_LC.LC0", null, null],
-            "idx_size": [3, null, null],
-            "dim_stride": [4, null, null],
+            "idx": ["DRAM_LC.LC1", "DRAM_LC.LC0", null],
+            "idx_size": [3, 0, null],
+            "dim_stride": [4, 128, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -109,21 +138,21 @@
             },
             "address_remapping": null,
             "buf_idx_mode": ["keep", "buffer"],
-            "buf_idx_keep_last_index": [2, 7],
+            "buf_idx_keep_last_index": [3, 7],
             "buf_spatial_stride": [0, 1, 2, 3],
             "buf_spatial_size": 4,
-            "buf_full_last_index": 1,
+            "buf_full_last_index": 2,
             "ping_pong": 0,
             "pingpong_last_index": null
         },
         "stream1": {
             "target": "D",
             "mode": "write",
-            "base_addr": 2048,
+            "base_addr": "0b00000_11_0000000000000_000000_0000",
             "mem_idx_mode": ["buffer", null, null],
             "mem_idx_keep_last_index": [7, null, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["LC_PE.PE0", null, null],
+            "idx": ["LC_PE.PE1", null, null],
             "idx_size": [3, null, null],
             "dim_stride": [4, null, null],
             "tailing_enable": [0, 0, 0],
@@ -144,7 +173,7 @@
         "buffer0": {
             "enable": 1,
             "nbr_enable": 0,
-            "buf_full_last_index": 1,
+            "buf_full_last_index": 2,
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
@@ -159,7 +188,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1,0, 0, 0, 0, 0, 0, 0],
+            "mask":[1, 0, 0, 0, 0, 0, 0, 0],
             "buf_end_row_addr": 0
         }
     },
@@ -191,7 +220,7 @@
             },
             "inport2":{
                 "mask": [0,0,0,0,0,0,0,0],
-                "src_id": 1,
+                "src_id": 0,
                 "pingpong_en": 0,
                 "pingpong_last_index": null,
                 "nbr_enable": 0,
@@ -204,51 +233,29 @@
         },
         "outport":{
             "mask": [1,0,0,0,0,0,0,0],
-            "src_id": 1,
+            "src_id": 0,
             "fp32tofp16": "false",
             "fp32tobf16": "false",
             "int32touint8": "false"
         },
         "PE_array": {
             "PE00": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
+                "alu_opcode": "max",
+                "transout_last_index": 1,
                 "inport2": {
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": 1e-6
+                    "constant": 0
                 },
                 "inport1": {
                     "src_id": null,
-                    "mode": "constant",
+                    "mode": null,
                     "keep_last_index": null,
-                    "constant": "1/1024"
+                    "constant": 0
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE01": {
-                "alu_opcode": "rec_sqrt",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE00",
                     "mode": "buffer",
                     "keep_last_index": null,
                     "constant": 0

@@ -130,11 +130,10 @@ class ExecutionPlanPipeline:
 
             source_json = op_json_root / f"{op.op_type}.json"
             if not source_json.is_file():
-                print(
-                    f"[pipeline] JSON template not found for {op.op_id}"
+                raise FileNotFoundError(
+                    f"JSON template not found for {op.op_id}"
                     f" ({op.op_type}): {source_json}"
                 )
-                continue
 
             print(f"[pipeline] regenerating bitstream for {op.op_id} ({op.op_type}) ...")
             op_payload = _load_json_object(source_json)

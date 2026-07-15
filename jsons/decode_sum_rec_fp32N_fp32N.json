@@ -55,6 +55,27 @@
                     "keep_last_index": null,
                     "constant": 0
             }    
+        },
+        "PE1": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "LC_PE.PE0",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
         }
     },
     "buffer_loop_configs": {
@@ -97,7 +118,7 @@
         "stream0": {
             "target": "A",
             "mode": "read",
-            "base_addr": "0b00000_00_0000000000000_000000_0000",
+            "base_addr": 0,
             "mem_idx_mode": ["buffer", "keep", null],
             "mem_idx_keep_last_index": [7, 1, null],
             "mem_idx_constant": [null, null, null],
@@ -127,11 +148,11 @@
         "stream1": {
             "target": "D",
             "mode": "write",
-            "base_addr": "0b00000_11_0000000000000_000000_0000",
+            "base_addr": 8192,
             "mem_idx_mode": ["buffer", null, null],
             "mem_idx_keep_last_index": [7, null, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["LC_PE.PE0", null, null],
+            "idx": ["LC_PE.PE1", null, null],
             "idx_size": [3, null, null],
             "dim_stride": [4, null, null],
             "tailing_enable": [0, 0, 0],
@@ -212,14 +233,14 @@
         },
         "outport":{
             "mask": [1,0,0,0,0,0,0,0],
-            "src_id": 0,
+            "src_id": 1,
             "fp32tofp16": "false",
             "fp32tobf16": "false",
             "int32touint8": "false"
         },
         "PE_array": {
             "PE00": {
-                "alu_opcode": "max",
+                "alu_opcode": "sum",
                 "transout_last_index": 1,
                 "inport2": {
                     "src_id": null,
@@ -235,6 +256,28 @@
                 },
                 "inport0": {
                     "src_id": 0,
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+                }
+            },
+            "PE01": {
+                "alu_opcode": "rec",
+                "transout_last_index": null,
+                "inport2": {
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+                "inport1": {
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+                "inport0": {
+                    "src_id": "GA_PE.PE00",
                     "mode": "buffer",
                     "keep_last_index": null,
                     "constant": 0
