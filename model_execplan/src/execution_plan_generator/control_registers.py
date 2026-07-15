@@ -21,8 +21,8 @@ _MAPPING_REVIEW_CACHE: dict[str, dict[str, str]] = {}
 # B and B' share one combined allocation in the JSON (same shape);
 # the allocated address space for each is // 2 of the JSON size.
 _BP_INDEPENDENT_ADDR_OPS: set[str] = {
-    "prefill_gemv_ring",
-    "prefill_gemv_local",
+    "decode_gemv_ring",
+    "decode_gemv_local",
 }
 
 # Support exact-match tag hints from JSON. write_reg_hint is a single string.
