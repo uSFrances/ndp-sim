@@ -612,6 +612,8 @@ def _analyze_op(
 
     bytes_read = sum(int(stream["request_count"]) * (hw.block_bits // 8) for stream in read_streams)
     bytes_written = int(write_stream["request_count"]) * (hw.block_bits // 8) if write_stream else 0
+    if op_type == "ring_gemv_fp16_fp16_fp16":
+        bytes_read, bytes_written = _ring_gemv_tensor_bytes(op_data, hw)
     total_bytes = bytes_read + bytes_written
     arithmetic_intensity = (
         float(work_ops) / total_bytes
@@ -2630,6 +2632,15 @@ def _estimate_compute(op_type: str, op_data: Mapping[str, object], hw: HardwareS
         n = int(in_b_shape.get("N", output_shape.get("N", 1)))
         op_work = float(hw.compute.gemm_core.mac_ops * m * n * k)
         peak = hw.gemm_peak_ops_per_cycle
+    elif op_type == "ring_gemv_fp16_fp16_fp16":
+        geometry = _ring_gemv_geometry(op_data)
+        op_work = float(
+            hw.compute.gemm_core.mac_ops
+            * int(geometry["gemv_m_dim"])
+            * int(geometry["gemv_global_k_dim"])
+            * int(geometry["gemv_local_n_dim"])
+        )
+        peak = hw.gemm_peak_ops_per_cycle
     elif "remote_sum" in op_type:
         # Remote reductions do not currently encode the fan-in in the local op shape,
         # so retain the per-output accumulation approximation until that metadata exists.
@@ -2650,8 +2661,47 @@ def _estimate_compute(op_type: str, op_data: Mapping[str, object], hw: HardwareS
     return op_work, math.ceil(op_work / max(1, peak)), peak
 
 
+def _ring_gemv_geometry(op_data: Mapping[str, object]) -> Dict[str, int]:
+    inputs = dict(op_data["inputs"])
+    outputs = dict(op_data["outputs"])
+    output_port = next(iter(outputs))
+    in_a_shape = {str(k): int(v) for k, v in dict(inputs["inA"]["resolved_shape"]).items()}
+    in_b_shape = {str(k): int(v) for k, v in dict(inputs["inB"]["resolved_shape"]).items()}
+    output_shape = {str(k): int(v) for k, v in dict(outputs[output_port]["resolved_shape"]).items()}
+    used_slices = max(1, int(op_data.get("used_slices", 1)))
+    local_k = int(in_a_shape.get("K", in_b_shape.get("K", 1)))
+    global_k = local_k * used_slices
+    local_n = int(output_shape.get("N", in_b_shape.get("N", 1)))
+    m_dim = max(1, _shape_product(output_shape) // max(1, local_n))
+    return {
+        "used_slices": used_slices,
+        "gemv_m_dim": m_dim,
+        "gemv_global_k_dim": global_k,
+        "gemv_local_k_dim": local_k,
+        "gemv_local_n_dim": local_n,
+    }
+
+
+def _ring_gemv_tensor_bytes(op_data: Mapping[str, object], hw: HardwareSpec) -> Tuple[int, int]:
+    geometry = _ring_gemv_geometry(op_data)
+    inputs = dict(op_data["inputs"])
+    outputs = dict(op_data["outputs"])
+    output_port = next(iter(outputs))
+    a_dtype = str(dict(inputs["inA"]).get("dtype", "fp16"))
+    b_dtype = str(dict(inputs["inB"]).get("dtype", "fp16"))
+    output_dtype = str(dict(outputs[output_port]).get("dtype", "fp16"))
+    m_dim = int(geometry["gemv_m_dim"])
+    global_k = int(geometry["gemv_global_k_dim"])
+    local_n = int(geometry["gemv_local_n_dim"])
+    bytes_read = m_dim * global_k * hw.dtype_bits(a_dtype) // 8
+    # ring_gemv uses ping-pong B/B' buffers in the external execplan.
+    bytes_read += 2 * global_k * local_n * hw.dtype_bits(b_dtype) // 8
+    bytes_written = m_dim * local_n * hw.dtype_bits(output_dtype) // 8
+    return bytes_read, bytes_written
+
+
 def _classify_input_stream(op_type: str, port_name: str) -> Tuple[str, Tuple[str, ...]]:
-    if op_type == "ring_gemm_fp16_fp16_fp16":
+    if op_type in {"ring_gemm_fp16_fp16_fp16", "ring_gemv_fp16_fp16_fp16"}:
         if port_name == "inA":
             return "A", ("ag0",)
         if port_name == "inB":

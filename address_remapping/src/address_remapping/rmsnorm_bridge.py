@@ -23,9 +23,11 @@ from .solver import (
 EXTERNAL_TO_CANONICAL_OP = {
     "prefill_add_V_fp16MN_fp32N_fp16MN": "prefill_add_V_fp16MN_fp32N_fp16MN",
     "prefill_add_fp16MN_fp32N_fp32MN": "prefill_add_fp16MN_fp32N_fp32MN",
+    "prefill_mac_fp32MN_fp32MN_fp32MN": "prefill_add_fp32MN_fp32MN_fp32MN",
     "prefill_gemm_local": "gemm_local_fp16_fp16_fp16",
     "prefill_gemm_local_qkt": "gemm_local_qkt_fp16_fp16_fp32",
     "prefill_gemm_ring_4slice": "ring_gemm_fp16_fp16_fp16",
+    "prefill_gemv_ring": "ring_gemv_fp16_fp16_fp16",
     "prefill_mul_fp32MN_fp32N_fp16MN": "prefill_mul_fp32MN_fp32N_fp16MN",
     "prefill_remote_sum_4slice_fp32MN_fp32MN": "prefill_remote_sum_fp32MN_fp32MN_2d",
     "prefill_remote_sum_4slice_fp16MN_fp32MN": "prefill_remote_sum_fp16MN_fp32MN",
@@ -44,9 +46,12 @@ EXTERNAL_TO_INTERNAL_PORT = {
     "C": "inC",
 }
 
-EXTERNAL_PORT_OVERRIDES = {}
+EXTERNAL_PORT_OVERRIDES = {
+    "prefill_mac_fp32MN_fp32MN_fp32MN": {"C": "inB"},
+}
 
 RING_GEMM_EXTERNAL_TYPE = "prefill_gemm_ring_4slice"
+RING_GEMV_EXTERNAL_TYPE = "prefill_gemv_ring"
 LOCAL_GEMM_EXTERNAL_TYPE = "prefill_gemm_local"
 LOCAL_GEMM_EXTERNAL_TYPES = {LOCAL_GEMM_EXTERNAL_TYPE, "prefill_gemm_local_qkt"}
 
@@ -216,6 +221,7 @@ def build_expanded_graph_from_external_execplan(
                 "id": op_id,
                 "external_type": external_type,
                 "canonical_type": canonical_type,
+                "used_slices": _count_used_slices(operator.get("used_slices", payload.get("used_slices"))) or 1,
                 "hardware_measured": operator.get("hardware_measured"),
                 "input_dtypes": {
                     port_name: port_template.memory_dtype
@@ -306,6 +312,7 @@ def build_expanded_graph_from_external_execplan(
             "call_kwargs": {},
             "inputs": resolved_inputs,
             "outputs": normalized_op["output"],
+            "used_slices": int(normalized_op.get("used_slices", 1)),
         }
         if "hardware_measured" in normalized_op:
             ops[op_id]["hardware_measured"] = normalized_op["hardware_measured"]
@@ -892,7 +899,7 @@ def _mirror_auxiliary_input_remappings(payload: Mapping[str, object]) -> None:
 
 
 def _auxiliary_input_port_mirrors(external_type: str) -> Dict[str, str]:
-    if external_type == RING_GEMM_EXTERNAL_TYPE or external_type in LOCAL_GEMM_EXTERNAL_TYPES:
+    if external_type == RING_GEMM_EXTERNAL_TYPE or external_type == RING_GEMV_EXTERNAL_TYPE or external_type in LOCAL_GEMM_EXTERNAL_TYPES:
         return {"B'": "B"}
     return {}
 
@@ -1008,6 +1015,7 @@ def _normalize_external_shape(
         expected_axes=axes,
         op_id=op_id,
         port_name=port_name,
+        values=values,
     )
     debug_info = {
         "external_dims": list(dims),
@@ -1025,11 +1033,14 @@ def _map_external_execplan_shape(
     expected_axes: Sequence[str],
     op_id: str,
     port_name: str,
+    values: Mapping[str, int],
 ) -> tuple[Dict[str, str], Dict[str, int]]:
     axes = list(expected_axes)
 
     if external_type == RING_GEMM_EXTERNAL_TYPE:
         return _map_ring_gemm_shape(dims, internal_port, axes, op_id, port_name)
+    if external_type == RING_GEMV_EXTERNAL_TYPE:
+        return _map_ring_gemv_shape(dims, internal_port, axes, op_id, port_name, values)
     if external_type in LOCAL_GEMM_EXTERNAL_TYPES:
         return _map_local_gemm_shape(dims, internal_port, axes, op_id, port_name)
 
@@ -1119,6 +1130,38 @@ def _map_ring_gemm_shape(
         return {"M": "M", "N": "N"}, {"M": int(dims[1]), "N": int(dims[2])}
     raise RmsNormBridgeError(
         f"Operator '{op_id}' port '{port_name}' uses unsupported ring GEMM axes {list(axes)}."
+    )
+
+
+def _map_ring_gemv_shape(
+    dims: Sequence[int],
+    internal_port: str,
+    axes: Sequence[str],
+    op_id: str,
+    port_name: str,
+    values: Mapping[str, int],
+) -> tuple[Dict[str, str], Dict[str, int]]:
+    if len(dims) != 3:
+        raise RmsNormBridgeError(
+            f"Operator '{op_id}' port '{port_name}' expects ring GEMV external shape rank 3, got {list(dims)}."
+        )
+    if internal_port == "inA" and list(axes) == ["K"]:
+        return {"K": "K"}, {"K": int(dims[2])}
+    if internal_port == "inB" and list(axes) == ["K", "N"]:
+        used_slices = int(values.get("used_slices", 1))
+        if used_slices <= 0:
+            raise RmsNormBridgeError(f"Operator '{op_id}' has invalid used_slices={used_slices}.")
+        global_n = int(dims[2])
+        if global_n % used_slices != 0:
+            raise RmsNormBridgeError(
+                f"Operator '{op_id}' port '{port_name}' global N={global_n} is not divisible by "
+                f"used_slices={used_slices} for ring GEMV column partitioning."
+            )
+        return {"K": "K", "N": "N"}, {"K": int(dims[1]), "N": global_n // used_slices}
+    if internal_port == "out" and list(axes) == ["N"]:
+        return {"N": "N"}, {"N": int(dims[2])}
+    raise RmsNormBridgeError(
+        f"Operator '{op_id}' port '{port_name}' uses unsupported ring GEMV axes {list(axes)}."
     )
 
 
@@ -1342,6 +1385,20 @@ def _resolve_external_values(payload: Mapping[str, object]) -> Dict[str, int]:
     return values
 
 
+def _count_used_slices(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.startswith("0b"):
+        return text.count("1")
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
 def _evaluate_external_dim(dim: object, values: Mapping[str, int]) -> int:
     if isinstance(dim, int):
         return dim
@@ -1363,8 +1420,11 @@ def _normalize_source_ref(source: object) -> object:
 
 
 def _external_to_internal_ports(external_type: str) -> Dict[str, str]:
+    if external_type in EXTERNAL_PORT_OVERRIDES:
+        mapping = {"A": "inA"}
+        mapping.update(EXTERNAL_PORT_OVERRIDES[external_type])
+        return mapping
     mapping = dict(EXTERNAL_TO_INTERNAL_PORT)
-    mapping.update(EXTERNAL_PORT_OVERRIDES.get(external_type, {}))
     return mapping
 
 
@@ -1373,7 +1433,7 @@ def _filtered_external_inputs(
     external_inputs: Mapping[str, object],
 ) -> Dict[str, object]:
     filtered = dict(external_inputs)
-    if external_type == RING_GEMM_EXTERNAL_TYPE or external_type in LOCAL_GEMM_EXTERNAL_TYPES:
+    if external_type == RING_GEMM_EXTERNAL_TYPE or external_type == RING_GEMV_EXTERNAL_TYPE or external_type in LOCAL_GEMM_EXTERNAL_TYPES:
         filtered.pop("B'", None)
     return filtered
 
