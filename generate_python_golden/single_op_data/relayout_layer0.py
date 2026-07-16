@@ -12,12 +12,8 @@ def _resolve_search_name(lower_name, count):
     elif lower_name == "mul_fp32mn_fp32n_fp16mn" and count == 1:
         search_name = "mul_fp32mn_fp32n_fp16mn_second"
     elif lower_name == "gemm_ring":
-        if count == 1:   search_name = "gemm_ring_k"
-        elif count == 2: search_name = "gemm_ring_v"
-        elif count == 3: search_name = "gemm_ring_second"
-        elif count == 4: search_name = "gemm_ring_ffn_gate"
-        elif count == 5: search_name = "gemm_ring_ffn_up"
-        elif count == 6: search_name = "gemm_ring_ffn_out"
+        if count == 1:
+            search_name = "gemm_ring_second"
     return search_name
 
 def get_category_and_prefix(template_name, base_data_dir, count):
@@ -66,6 +62,9 @@ def get_category_and_prefix(template_name, base_data_dir, count):
         # "gemm_ring_ffn_up": ("gemm_local", "blk.0_node_0_attn"),
         # "gemm_ring_ffn_out": ("gemm_local", "blk.0_node_0_attn"),
     }
+
+    if search_name in special_map:
+        return special_map[search_name]
 
     # 关键字匹配：模板名中包含任意 special_map key 则采用对应映射
     for key, (cat, pref) in special_map.items():

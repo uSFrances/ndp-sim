@@ -1,0 +1,43 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_gemm_local_qkt",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": ["sequence_length", 1, "head_dim//slice_per_head"],
+          "dtype": "fp16",
+          "remapping": null,
+          "source": "op-13",
+          "write_reg_hint": null
+        },
+        "B": {
+          "shape": [1, "sequence_length", "head_dim//slice_per_head"],
+          "remapping": null,
+          "dtype": "fp16",
+          "source": "op-3",
+          "axis_view": {
+            "producer_to_consumer": {
+              "M": "N",
+              "N": "K"
+            },
+            "kind": "transpose"
+          },
+          "write_reg_hint": null
+        },
+        "B'": {
+          "shape": [1, "sequence_length", "head_dim//slice_per_head"],
+          "remapping": null,
+          "dtype": "fp16",
+          "source": "op-3"
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "sequence_length"],
+        "remapping": null
+      }
+    }
+  ]
+}

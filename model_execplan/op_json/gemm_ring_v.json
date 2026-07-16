@@ -1,0 +1,41 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_gemm_ring_4slice",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": ["kv_padding_a", "sequence_length", 1],
+          "remapping": null,
+          "source":  "op-6",
+          "dtype": "fp16",
+		      "write_reg_hint": null
+        },
+        "B": {
+          "shape": ["kv_padding_b", 1, "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          },
+		      "write_reg_hint": null,
+          "dtype": "fp16"
+        },
+        "B'": {
+          "shape": ["kv_padding_b", 1, "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source": {
+            "type": "external",
+            "dtype": "fp16"
+          }
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+        "dtype": "fp16",
+        "remapping": null
+      }
+    }
+  ]
+}

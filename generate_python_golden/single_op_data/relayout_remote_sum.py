@@ -97,32 +97,31 @@ def convert_to_128bit_txt(bin_path, rows=None, cols=None, file_dtype=None):
     convert_to_decimal_txt(bin_path, rows=rows, cols=cols, file_dtype=file_dtype)
 
 # ==============================================================================
-# 新增 remote_sum 专用 M8N 规则
+# remote_sum 专用 M8N 规则
 # 说明：
 #   - 这里把输入矩阵统一视为 (N, M)
-#   - M 轴按 8 个一组优先展开
-#   - 如果后续某个张量需要把第 0 维当成 M，只要传 transpose=True 即可
+#   - M 是第二维，M 轴每 8 个为一组，组内 M 连续，N 维在每组内依次推进
 # ==============================================================================
 
-def relayout_m8n(slice_data, transpose=False):
-    view = slice_data.T if transpose else slice_data
-    rows, cols = view.shape
+def relayout_m8n(slice_data):
+    view = np.asarray(slice_data)
+    N, M = view.shape
     relayout_data = []
 
-    for n_idx in range(rows):
-        for m_outer in range(0, cols, 8):
-            for m_idx in range(m_outer, min(m_outer + 8, cols)):
-                relayout_data.append(view[n_idx, m_idx])
+    for m_outer in range(0, M, 8):
+        limit = min(m_outer + 8, M)
+        for n_idx in range(N):
+            relayout_data.extend(view[n_idx, m_outer:limit])
 
     return np.array(relayout_data, dtype=view.dtype)
 
 def relayout_in0_M8N(slice_data):
-    """in0: 直接按 (N, M) 解释，M 轴每 8 个元素展开"""
-    return relayout_m8n(slice_data, transpose=False)
+    """in0: 直接按 (N, M) 解释，M 轴每 8 个元素为一组展开"""
+    return relayout_m8n(slice_data)
 
 def relayout_out_M8N(slice_data):
     """out: 直接按 (N, M) 解释，和 in0 使用同一条 M8N 规则"""
-    return relayout_m8n(slice_data, transpose=False)
+    return relayout_m8n(slice_data)
 
 def get_op_id(filename):
     return "op0"

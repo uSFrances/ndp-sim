@@ -1,0 +1,71 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source": "op-1"
+        },
+        "B": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+        "remapping": null
+      }
+    },    
+    {
+      "id": "op1",
+      "type": "prefill_mul_fp32MN_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source":  "op-1"
+        },
+        "B": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "remapping": null,
+          "source": {
+            "type": "external"
+          }
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+        "remapping": null,
+        "type": "rope_slice_xor2"
+      }
+    },
+    {
+      "id": "op2",
+      "type": "prefill_add_fp32MN_fp32MN_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "source":  "op0"
+        },
+        "B": {
+          "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+          "source": "op1"
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "num_key_value_heads*head_dim//slice_per_head"],
+        "dtype": "fp16"
+      }
+    }
+  ]
+}

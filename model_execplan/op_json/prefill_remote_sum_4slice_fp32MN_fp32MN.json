@@ -1,0 +1,22 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "slice_per_head", "sequence_length*sequence_length"],
+          "type": "slice4",
+          "remapping": null,
+          "source": "op-1"
+        }
+      },
+      "output": {
+        "shape": [1, 1, "sequence_length*sequence_length"],
+        "remapping": null
+      }
+    }
+  ]
+}
