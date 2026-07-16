@@ -71,8 +71,9 @@ generate_python_golden/
 ├── Makefile                                 # Prefill/Decode 自动化入口
 ├── README.md                                # 本文件
 ├── tensor_io.py                             # Golden/install 文件命名、读写及 128-bit 文本转换
-├── decode_ops.py                            # 10 个 Decode 算子注册表与 NumPy Golden 模型
+├── decode_ops.py                            # 19 个 Decode 算子注册表 + 43-op 全层 Golden 模型
 ├── generate_decode_execplan_inputs.py       # 生成 Decode 单算子 execution-plan 图
+├── generate_decode_program_json.py          # 从 manifest 生成 prefill 兼容的 layer0_decode.json（43-op）
 ├── assemble_decode_package.py               # 按 sca_cfg 汇集自包含 Decode 加载包并记录哈希
 ├── validate_decode_outputs.py               # 软件产物只读验收（不依赖硬件仿真器）
 │
@@ -530,10 +531,14 @@ Golden 数据和重排文件的命名遵循统一规范：
 
 - `hidden_size=896`，不做 hidden padding；28 个 slice，每个 hidden slice 恰好 32 个元素。
 - KV cache 初始长度、`sequence_length` 和当前注意力长度均为 32；只生成 step 0，一个 Decode step。
-- 当前注册 10 个 Decode 算子。RoPE、Softmax 等尚未转换的细粒度算子后续加入注册表即可扩展。
-- 所有向量均按 slice 切分，slice 内保持原顺序；标量归约结果因每个 slice 都要读取而复制。
-- 暂不加载真实权重，GEMV 权重由 `random_seed=0` 确定性合成。
-- 已完成 Python Golden、数据切分/重排、bitstream、execution plan 与自包含加载包的软件联调；加载包覆盖 `sca_cfg.json` 的 461/461 个路径。按当前要求不比较硬件仿真输出。
+- **43-op 完整解码层**，严格镜像 Prefill `layer0_0610_remapped.json` 的算子拓扑（19 种算子类型）。
+- 程序 JSON（`layer0_decode.json`）使用 prefill 兼容的 3D 形状约定 `[1, 1, N]`、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）、RoPE 的 `rope_slice_xor2` 输出类型标记。
+- RoPE 按 prefill relayout 规则：sin 表后半自带负号，activation 不做取反，add 做交叉配对合并。
+- mul_cast（RMS Norm scale）使用 `hidden_size` 维随机权重向量，非标量 1.0。
+- 端口顺序与 prefill 一致：add_residual 的 A=外部残差/B=数据路径；mul_cast 的 A=scale/B=data。
+- GEMV 权重复用 GEMM 的 Ring/Local relayout 规则（`N8K2N4K` / `N8M2N4`），B/B' 对半拆分。
+- install 数据按 `op0`~`op42` 编号命名文件夹（通过 manifest 中的 `layer_idx` 字段）。
+- 暂不加载真实权重，GEMV 权重及 scale 向量由 `random_seed=0` 确定性合成。
 
 ### 背景：Prefill vs Decode 的计算特征差异
 
@@ -549,28 +554,44 @@ Golden 数据和重排文件的命名遵循统一规范：
 
 ### 关键设计原则
 
-1. **向量按 slice 切分但不做二维重排**：hidden 向量按 28 份连续切分为 32 元素；注意力向量先按 head，再按每 head 的 4 个 slice 切为 8 元素。slice 内元素顺序不变。
+1. **向量按 slice 切分但不做二维重排**：hidden 向量按 28 份连续切分（每份 32 元素）；注意力向量先按 head，再按每 head 的 4 个 slice 切分。slice 内元素顺序不变；长度为 1 的标量按需复制到所有 slice。
 
-2. **GEMV 复用 GEMM 重排规则**：项目沿用上游 `(K,N)` 权重存储和 `weight.T @ vector` 约定。Ring 权重按输出 N 切片、执行 ring reorder 和 `N8K2N4K`；Local 每 head 按 K 切 4 份并复用 `N8M2N4`。每个 slice 的权重流再等分为独立的 `B`/`B'` 文件。
+2. **程序 JSON 严格镜像 Prefill**：43-op 解码层使用 prefill 兼容的 3D 形状约定（如 `[1, 1, "hidden_size//used_slices"]`）、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）。RoPE sin 表后半自带负号，activation 不做取反，add 做交叉配对合并（`y0=cos₀+sin₁, y1=sin₀+cos₁`），op8/op18 输出标记 `"type": "rope_slice_xor2"`。
 
-3. **输出格式保持一致**：Golden 用 shape/dtype 文件名和 Fortran order；install 数据输出 `.bin`、128-bit `.txt` 和 `_decimal_1d.txt`，与原有硬件加载格式一致。
+3. **GEMV 复用 GEMM 重排规则**：Ring 权重按 N 轴切片 → ring reorder → `N8K2N4K` relayout → B/B' 对半拆分。Local 权重按 K 轴切片 → `N8M2N4` relayout → B/B' 对半拆分。
+
+4. **mul_cast 使用真实 scale 向量**：RMS Norm 的 scale 步骤使用 `hidden_size` 维随机权重向量（范围 0.5~1.5），非标量 1.0。
+
+5. **端口顺序与 prefill 一致**：add_residual（op6/16/21）的 A=外部残差、B=数据路径；mul_cast（op4/14/36）的 A=scale 权重、B=归一化数据。
+
+6. **install 目录按 op 编号命名**：通过 manifest 中的 `layer_idx`（0~42）生成 `op0`~`op42` 文件夹。
 
 ### 已有 Decode 算子 JSON 清单
 
-以下 Decode 算子的硬件配置 JSON 已就绪（位于 `jsons/` 目录）：
+以下 19 种 Decode 算子类型已注册（`decode_ops.py` 中 `SUPPORTED_DECODE_OPERATORS`），
+完整 43-op 解码层严格镜像 Prefill `layer0_0610_remapped.json` 的拓扑结构：
 
-| op id | JSON / 算子类型 | slice 数据策略 | Golden 输出形状 |
-|-------|-----------------|-----------------|------------------|
-| `op0` | `decode_summac_fp32N_fp32N` | 896 → 28×32，逐 slice fp32 FMA 平方和 | `(28,1,1,1)` |
-| `op1` | `decode_summac_fp16N_fp32N` | 896 → 28×32，fp16 输入/fp32 累加 | `(28,1,1,1)` |
-| `op2` | `decode_max_fp32N_fp32N` | 每 head 的 32 → 4×8 | `(4,7,1,1)` |
-| `op3` | `decode_mac_SFU_fp32N_fp32N` | 标量复制到 28 slice；REC_SQRT 使用 `1/896` | `(1,1,1,1)` |
-| `op4` | `decode_sum_rec_fp32N_fp32N` | 每 head 的 32 → 4×8 | `(4,7,1,1)` |
-| `op5` | `decode_mul_fp32N_fp32N_fp16N` | 两个 hidden 向量各切 28×32 | `(896,1,1,1)` fp16 |
-| `op6` | `decode_add_fp16N_fp32N_fp32N` | 两个 hidden 向量各切 28×32 | `(896,1,1,1)` fp32 |
-| `op7` | `decode_remote_sum_fp32N_fp32N` | 每 slice 一个 partial，结果标量复制 | `(1,1,1,1)` |
-| `op8` | `decode_gemv_ring` | Ring reorder + `N8K2N4K`，B/B' 独立半流 | `(896,1,1,1)` fp16 |
-| `op9` | `decode_gemv_local` | 7 head × 4 K-slice，`N8M2N4` | `(32,4,7,1)` fp16 partial |
+| 算子类型 | 用途 | 层中出现次数 |
+|----------|------|-------------|
+| `decode_summac_fp32N_fp32N` | 平方和累加（RMS Norm 步骤1） | 3 次 (Attn/KV/FFN) |
+| `decode_remote_sum_fp32N_fp32N` | 跨片归约（RMS Norm/QKT 步骤2） | 4 次 |
+| `decode_mac_SFU_fp32N_fp32N` | 倒数平方根（RMS Norm 步骤3） | 3 次 |
+| `decode_mul_fp32N_fp32_fp32N` | 向量×标量（RMS Norm scale 施加） | 3 次 |
+| `decode_mul_fp32N_fp32N_fp16N` | 向量×向量 → fp16（RMS Norm cast） | 3 次 |
+| `decode_gemv_ring` | Ring All-Reduce 矩阵-向量乘 | 7 次 (Q/K/V/Out/Gate/Up/FFN-Out) |
+| `decode_add_fp16N_fp32N_fp32N` | fp16 + fp32 残差加（Q/K 残差） | 2 次 |
+| `decode_mul_fp32N_fp32N_fp32N` | 向量×向量（RoPE cos/sin） | 4 次 (Q cos/sin, K cos/sin) |
+| `decode_add_fp32N_fp32N_fp16N` | RoPE 合并 add → fp16 | 2 次 (Q/K merge) |
+| `decode_max_fp32N_fp32N` | 每 head 局部最大值（Softmax 步骤1） | 1 次 |
+| `decode_sub_SFU_fp32N_fp32_fp32N` | 向量−标量（scores − max） | 1 次 |
+| `decode_sum_rec_fp32N_fp32N` | 求和倒数（Softmax 步骤2） | 1 次 |
+| `decode_mul_fp32N_fp32_fp16N` | 向量×标量 → fp16（Softmax 输出） | 1 次 |
+| `decode_gemv_local` | 局部矩阵-向量乘（QK^T / SV） | 2 次 |
+| `decode_add_fp32N_fp16N_fp32N` | fp32 + fp16 残差加（Out/FFN 残差） | 2 次 |
+| `decode_silu_fp16N_fp32N` | SiLU 激活 | 1 次 |
+| `decode_mul_fp32N_fp16N_fp16N` | silu(gate) × up（SwiGLU） | 1 次 |
+| `decode_add_fp16N_fp32N_fp16N` | fp16 + fp32 → fp16（V 残差） | 1 次 |
+| `decode_add_fp32N_fp32N_fp32N` | fp32 + fp32（attention mask add） | 1 次 |
 
 ### Decode 阶段任务清单
 
@@ -624,9 +645,9 @@ flowchart TD
 | **A2** | 单步推理 | 固定 KV=32、step=0，只生成一个 Decode step，不扩为 33 | ✅ 完成 |
 | **A3** | 向量算子 Golden | 在 `decode_ops.py` 实现 fp32 FMA、局部 max/sum-rec、remote sum、REC_SQRT、mul/add | ✅ 完成 |
 | **A4** | GEMV Golden | 实现 Ring 完整输出和 Local 四个 K-slice partial 输出，使用确定性合成 fp16 权重 | ✅ 完成 |
-| **A5** | Golden 输出 | 生成 10 个算子的 shape/dtype 命名 `.bin` 与 `manifest.json` | ✅ 完成 |
+| **A5** | Golden 输出 | 生成 43 个 layer instance（19 种算子类型）的 shape/dtype 命名 `.bin` 与 `manifest.json` | ✅ 完成 |
 
-当前 10 个对象本身就是拆分后的硬件小算子，因此文件直接放在 `python_golden_decode/`；`sub_ops/` 作为后续 RoPE/Softmax 等组合算子的中间结果目录保留。
+当前 43 个对象对应完整解码层的 43 个算子实例；`sub_ops/` 作为后续组合算子的中间结果目录保留。
 
 ##### Phase B: Decode 算子数据重排
 
@@ -645,53 +666,64 @@ flowchart TD
 | **C2** | Decode config | 增加 target、KV 初始长度、step 数、attention length、seed，并校验 896/28/7×4 等约束 | ✅ 完成 |
 | **C3** | model_execplan 联调 | 10 个配置均真实重生成 64/128-bit bitstream；生成 726 条 64-bit 命令（363 行 128-bit），unresolved 字段为 0；汇集 461 个加载路径，其中 448 个输入张量来自 `install_decode` | ✅ 完成 |
 | **C4** | 数据一致性验证 | 14 项单元测试通过；验收器核对 728 个 install tensor、10×28 slice 文件树及加载包全部 461 个路径的大小/哈希。硬件输出对比按当前要求跳过 | ✅ 软件范围完成 |
-| **C5** | Decode layer0 | 新增 `DEFAULT_DECODE_OPLIST`/alias/`--decode`，输出 `layer0_decode.json` 与 op listing | ✅ 完成 |
+| **C5** | Decode layer0 | `generate_decode_program_json.py` 生成 43-op `layer0_decode.json`，正确分支/汇合 source 引用与 prefill 兼容形状 | ✅ 完成 |
 
 ### Decode 阶段实际新增/修改文件
 
 ```
 generate_python_golden/
-├── decode_ops.py                         # [新建] 注册表、配置校验和 10 个 Golden 模型
+├── decode_ops.py                         # [新建] 19 种算子注册表 + 43-op 全层 Golden 模型
 ├── tensor_io.py                          # [新建] 统一 Golden/install I/O
 ├── deepseek1.5b_decode_golden.py         # [新建] Phase A 入口
 ├── run_single_op_decode.py               # [新建] Phase B 调度器
-├── generate_decode_execplan_inputs.py    # [新建] 10 个 execution-plan 图
+├── generate_decode_execplan_inputs.py    # [新建] 单算子 execution-plan 图
+├── generate_decode_program_json.py       # [新建] 43-op prefill 兼容程序 JSON 生成
 ├── assemble_decode_package.py            # [新建] 自包含加载包汇集与哈希 manifest
 ├── validate_decode_outputs.py            # [新建] 只读软件产物及加载包验收
 ├── gen_layer0_oplist.py                  # [修改] --decode + DEFAULT_DECODE_OPLIST
 ├── config.json                           # [修改] Decode 配置项
 ├── Makefile                              # [修改] Decode 完整目标链
-├── tests/test_decode_pipeline.py         # [新建] 14 项单元测试
-├── python_golden_decode/                 # [生成] 10 个算子 IO + manifest
-│   ├── decode_*_shape*_dtype_*.bin
-│   ├── manifest.json
+├── test_decode_pipeline.py               # [新建] 单元测试
+├── weight_gen.py                         # [修改] 4D→3D 形状适配
+├── python_golden_decode/                 # [生成] 43 个 layer instance IO + manifest
+│   ├── *_shape*_dtype_*.bin
+│   ├── manifest.json                     # 含 layer_idx 字段
 │   └── sub_ops/
 │
 ├── model_execplan/
-│   ├── op_json/decode_*_graph.json        # [生成] 单算子图与 decode_all.json
-│   ├── examples/layer0_decode.json        # [生成] Decode program JSON
-│   └── output/layer0_decode/              # [生成] bitstream/execplan/sca_cfg/自包含加载包
+│   ├── op_json/decode_*_graph.json        # [生成] 单算子图
+│   ├── examples/layer0_decode.json        # [生成] 43-op 程序 JSON
+│   └── output/layer0_decode/              # [生成] bitstream/execplan/sca_cfg
 │
 └── single_op_data/
-    ├── decode_passthrough.py              # [新建] 向量 slice 切分
-    ├── relayout_gemv.py                   # [新建] Ring/Local GEMV 重排
-    └── install_decode/op0...op9/slice00...slice27/
+    ├── decode_passthrough.py              # [新建] 向量 slice 切分 + 标量复制
+    ├── relayout_gemv.py                   # [新建] Ring/Local GEMV 重排 + B/B' 拆分（3D 适配）
+    └── install_decode/op0...op42/slice00...slice27/
 ```
 
 新增算子时，在 `decode_ops.py` 的 `SUPPORTED_DECODE_OPERATORS` 注册元数据和 Golden case，并在 `generate_decode_execplan_inputs.py` 补充局部 I/O shape；调度器、manifest 与 `gen_layer0_oplist.py --decode` 均按注册顺序工作。RoPE/Softmax 拆分算子可沿此路径后续加入。
 
 ### Decode 算子命名对照表
 
-| Prefill 算子名 | Decode 算子名 | 维度变化 | 说明 |
-|---------------|---------------|----------|------|
-| `prefill_summac_fp32MN_fp32MN` | `decode_summac_fp32N_fp32N` | `(M,N)→(N,)` | 平方和累加 |
-| `prefill_summac_fp16MN_fp32MN` | `decode_summac_fp16N_fp32N` | `(M,N)→(N,)` | fp16 输入版本 |
-| `prefill_max_fp32MN_fp32MN` | `decode_max_fp32N_fp32N` | `(M,N)→(N,)` | 求最大值 |
-| `prefill_mac_SFU_fp32MN_fp32MN` | `decode_mac_SFU_fp32N_fp32N` | `(M,N)→(N,)` | MAC + 特殊函数 |
-| `prefill_sum_rec_fp32MN_fp32MN` | `decode_sum_rec_fp32N_fp32N` | `(M,N)→(N,)` | 求和 + 倒数 |
-| `prefill_mul_fp32MN_fp32N_fp16MN` | `decode_mul_fp32N_fp32N_fp16N` | `(M,N)→(N,)` | 逐元素乘法 |
-| `prefill_add_fp16MN_fp32N_fp32MN` | `decode_add_fp16N_fp32N_fp32N` | `(M,N)→(N,)` | 逐元素加法 |
-| `prefill_remote_sum_fp32MN_fp32MN` | `decode_remote_sum_fp32N_fp32N` | `(M,N)→(N,)` | 跨片归约 |
-| `prefill_gemm_ring` | `decode_gemv_ring` | 矩阵乘→矩阵-向量乘 | Ring All-Reduce GEMV |
-| `prefill_gemm_local` | `decode_gemv_local` | 矩阵乘→矩阵-向量乘 | 局部 GEMV |
+| Prefill 算子名 | Decode 算子名 | 说明 |
+|---------------|---------------|------|
+| `prefill_summac_fp32MN_fp32MN` | `decode_summac_fp32N_fp32N` | 平方和累加（RMS Norm 步骤1） |
+| `prefill_remote_sum_fp32MN_fp32MN` | `decode_remote_sum_fp32N_fp32N` | 跨片归约（RMS Norm/QKT 步骤2） |
+| `prefill_mac_SFU_fp32MN_fp32MN` | `decode_mac_SFU_fp32N_fp32N` | 倒数平方根（RMS Norm 步骤3） |
+| `prefill_mul_fp32MN_fp32M_fp32MN` | `decode_mul_fp32N_fp32_fp32N` | 向量×标量（RMS Norm scale） |
+| `prefill_mul_fp32MN_fp32N_fp16MN` | `decode_mul_fp32N_fp32N_fp16N` | 向量×向量 → fp16（RMS Norm cast） |
+| `prefill_gemm_ring_4slice` | `decode_gemv_ring` | Ring All-Reduce 矩阵-向量乘 |
+| `prefill_add_fp16MN_fp32N_fp32MN` | `decode_add_fp16N_fp32N_fp32N` | fp16 + fp32 残差加 |
+| `prefill_mul_fp32MN_fp32MN_fp32MN` | `decode_mul_fp32N_fp32N_fp32N` | 向量×向量（RoPE cos/sin） |
+| `prefill_add_fp32MN_fp32MN_fp16MN` | `decode_add_fp32N_fp32N_fp16N` | RoPE 交叉配对合并 |
+| `prefill_max_fp32MN_fp32MN` | `decode_max_fp32N_fp32N` | 每 head 局部最大值 |
+| `prefill_sub_SFU_fp32MN_fp32M_fp32MN` | `decode_sub_SFU_fp32N_fp32_fp32N` | 向量−标量（scores − max） |
+| `prefill_sum_rec_fp32MN_fp32MN` | `decode_sum_rec_fp32N_fp32N` | 求和倒数（Softmax） |
+| `prefill_mul_fp32MN_fp32M_fp16MN` | `decode_mul_fp32N_fp32_fp16N` | 向量×标量 → fp16（Softmax 输出） |
+| `prefill_gemm_local` / `prefill_gemm_local_qkt` | `decode_gemv_local` | 局部 GEMV（QK^T / SV） |
+| `prefill_add_fp32MN_fp16MN_fp32MN` | `decode_add_fp32N_fp16N_fp32N` | fp32 + fp16 残差加 |
+| `prefill_silu_fp16MN_fp32MN` | `decode_silu_fp16N_fp32N` | SiLU 激活 |
+| `prefill_mul_fp32MN_fp16MN_fp16MN` | `decode_mul_fp32N_fp16N_fp16N` | silu(gate) × up（SwiGLU） |
+| `prefill_add_V_fp16MN_fp32N_fp16MN` | `decode_add_fp16N_fp32N_fp16N` | fp16 + fp32 → fp16（V 残差） |
+| `prefill_add_fp32MN_fp32MN_fp32MN` | `decode_add_fp32N_fp32N_fp32N` | fp32 + fp32（attention mask add） |
 
