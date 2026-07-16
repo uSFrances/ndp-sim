@@ -1,44 +1,77 @@
-PYTHON = python
+PYTHON ?= python
 
-.PHONY: all inputs weights golden single_op clean help
+.DEFAULT_GOAL := prefill
 
-# 默认目标，执行完整的生成流程
-all: golden single_op
+.PHONY: prefill all inputs weights golden single_op \
+	decode decode_golden decode_single_op decode_graphs decode_layer0 decode_execplan \
+	decode_package decode_validate clean help
 
-# 1. 产生 inputs 文件
+# Preserve the original bare `make` behavior: run the Prefill pipeline.
+prefill: golden single_op
+
+# Explicitly request both phases with `make all`.
+all: prefill decode
+
 inputs:
 	@echo "=> Generating dummy inputs based on config.json..."
 	$(PYTHON) generate_seq_input.py
 
-# 2. 产生 weight 文件
 weights:
 	@echo "=> Generating sliced weights based on config.json..."
 	$(PYTHON) weight_gen.py
 
-# 3. 产生 python_golden 数据（依赖输入和权重）
 golden: inputs weights
-	@echo "=> Running main model script to generate python_golden data..."
+	@echo "=> Generating Prefill Python Golden data..."
 	$(PYTHON) deepseek1.5b_3_time_golden_smallsize.py
 
-# 4. 运行单算子的 slice 分割
 single_op: golden
-	@echo "=> Running single operator slice extraction based on config.json..."
+	@echo "=> Generating Prefill per-slice operator data..."
 	$(PYTHON) run_single_op.py
 
-# 清理生成的文件和文件夹
-clean:
-	@echo "=> Cleaning up generated folders..."
-	rm -rf inputs
-	rm -rf model_weights_small
-	rm -rf python_golden
-	rm -rf python_golden_debug
+decode_golden:
+	@echo "=> Generating deterministic Decode Python Golden data..."
+	$(PYTHON) deepseek1.5b_decode_golden.py
 
-# 打印帮助信息
+decode_single_op: decode_golden
+	@echo "=> Generating Decode per-slice operator data..."
+	$(PYTHON) run_single_op_decode.py
+
+decode_graphs:
+	@echo "=> Generating Decode execution-plan operator graphs..."
+	$(PYTHON) generate_decode_execplan_inputs.py
+
+decode_layer0: decode_graphs
+	@echo "=> Merging Decode operator graphs into layer0_decode.json..."
+	$(PYTHON) gen_layer0_oplist.py --decode
+
+decode_execplan: decode_layer0
+	@echo "=> Generating Decode bitstreams and execution-plan instructions..."
+	$(PYTHON) model_execplan/main.py model_execplan/examples/layer0_decode.json
+
+decode_package: decode_single_op decode_execplan
+	@echo "=> Assembling the self-contained Decode SCA loading package..."
+	$(PYTHON) assemble_decode_package.py
+
+decode_validate: decode_package
+	@echo "=> Validating Decode Golden, slice data, bitstreams, and instructions..."
+	$(PYTHON) validate_decode_outputs.py
+
+# Complete Phase A, Phase B, and the software-only Phase C integration.
+decode: decode_validate
+
+clean:
+	@echo "=> Cleaning Prefill generated folders..."
+	rm -rf inputs model_weights_small python_golden python_golden_debug
+
 help:
-	@echo "可用命令:"
-	@echo "  make         - 执行完整的生成流程 (inputs -> weights -> golden -> single_op -> execplan)"
-	@echo "  make inputs  - 仅产生 inputs 文件"
-	@echo "  make weights - 仅产生 weight 文件"
-	@echo "  make golden  - 产生 python_golden 数据 (自动依赖 inputs 和 weights)"
-	@echo "  make single_op - 运行 target_op 的算子分割及指令生成代码 (依赖 golden)"
-	@echo "  make clean   - 清理所有生成的文件和文件夹"
+	@echo "Available targets:"
+	@echo "  make / make prefill       - run the original Prefill pipeline"
+	@echo "  make decode_golden        - generate python_golden_decode"
+	@echo "  make decode_single_op     - generate single_op_data/install_decode"
+	@echo "  make decode_graphs        - generate the 10 Decode operator graph JSONs"
+	@echo "  make decode_layer0        - generate model_execplan/examples/layer0_decode.json"
+	@echo "  make decode_execplan      - generate Decode bitstreams and instructions"
+	@echo "  make decode_package       - assemble every sca_cfg path into one package"
+	@echo "  make decode_validate      - validate all generated software artifacts"
+	@echo "  make decode               - run the complete Decode software pipeline"
+	@echo "  make all                  - run Prefill and Decode"

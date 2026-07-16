@@ -118,9 +118,9 @@ if __name__ == "__main__":
                  new_tensor = orig_tensor_sq[:H_TGT, :]
 
         if new_tensor.ndim == 1:
-            new_tensor = new_tensor.reshape(new_tensor.shape[0], 1, 1, 1, order='F')
+            new_tensor = new_tensor.reshape(new_tensor.shape[0], 1, 1, order='F')
         elif new_tensor.ndim == 2:
-            new_tensor = new_tensor.reshape(new_tensor.shape[0], new_tensor.shape[1], 1, 1, order='F')
+            new_tensor = new_tensor.reshape(new_tensor.shape[0], new_tensor.shape[1], 1, order='F')
         
         save_new_weight(new_weights_folder, name, new_tensor)
 

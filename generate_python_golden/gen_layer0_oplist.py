@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
-OP_JSON_DIR = BASE_DIR / "op_json"
+OP_JSON_DIR = BASE_DIR / "model_execplan" / "op_json"
 
 # 直接在这里改你要拼的 op 顺序
 DEFAULT_OPLIST = [
@@ -42,6 +42,45 @@ DEFAULT_OPLIST = [
     "add_fp32MN_fp16MN_fp32MN_out"
 ]
 
+# Keep this order identical to decode_ops.SUPPORTED_DECODE_OPERATORS so the
+# generated program op ids match python_golden_decode/manifest.json and
+# single_op_data/install_decode/opN.
+#
+# Chaining convention: operators that use "source": "op-1" must be placed
+# immediately after their logical predecessor.  Chains:
+#   summac_fp32 → remote_sum → mac_SFU → mul_scale → mul_cast → gemv_ring → add
+DEFAULT_DECODE_OPLIST = [
+    # -- RMS Norm chain (fp32) --
+    "decode_summac_fp32N_fp32N",       # op0,  external
+    "decode_remote_sum_fp32N_fp32N",   # op1,  source: op-1 → op0
+    "decode_mac_SFU_fp32N_fp32N",      # op2,  source: op-1 → op1
+    # -- RMS Norm scale + cast --
+    "decode_mul_fp32N_fp32_fp32N",     # op3,  external (hidden × rms_scale)
+    "decode_mul_fp32N_fp32N_fp16N",    # op4,  external (normed → fp16)
+    # -- Q GEMV Ring + residual add --
+    "decode_gemv_ring",                # op5,  external (Q weight + normed_fp16)
+    "decode_add_fp16N_fp32N_fp32N",    # op6,  external (Q_out + residual)
+    # -- Element-wise vector ops --
+    "decode_mul_fp32N_fp32N_fp32N",    # op7,  external
+    "decode_add_fp32N_fp32N_fp32N",    # op8,  external
+    "decode_add_fp32N_fp32N_fp16N",    # op9,  external
+    # -- Attention softmax chain --
+    "decode_max_fp32N_fp32N",          # op10, external
+    "decode_sub_SFU_fp32N_fp32_fp32N", # op11, external
+    "decode_sum_rec_fp32N_fp32N",      # op12, external
+    "decode_mul_fp32N_fp32_fp16N",     # op13, external
+    # -- GEMV Local (SV) --
+    "decode_gemv_local",               # op14, external
+    # -- Output residual add --
+    "decode_add_fp32N_fp16N_fp32N",    # op15, external
+    # -- FFN operators --
+    "decode_silu_fp16N_fp32N",         # op16, external
+    "decode_mul_fp32N_fp16N_fp16N",    # op17, external
+    "decode_add_fp16N_fp32N_fp16N",    # op18, external
+    # -- Standalone fp16 variant --
+    "decode_summac_fp16N_fp32N",       # op19, external
+]
+
 # 可识别 op 名称到模板文件的映射
 ALIAS_TO_FILE = {
     "softmax": "softmax.json",
@@ -72,6 +111,10 @@ ALIAS_TO_FILE = {
 
     "silu": "prefill_silu_fp16MN_fp32MN.json"
 }
+
+ALIAS_TO_FILE.update(
+    {name: f"{name}_graph.json" for name in DEFAULT_DECODE_OPLIST}
+)
 
 
 def load_template(op_name: str) -> dict:
@@ -142,7 +185,7 @@ def merge_templates(oplist: list[str]) -> dict:
 
     # 1. 读取 params (config.json)
     params = {}
-    config_path = BASE_DIR.parent / "generate_python_golden" / "config.json"
+    config_path = BASE_DIR / "config.json"
     if config_path.exists():
         with config_path.open("r", encoding="utf-8") as f:
             params = json.load(f)
@@ -185,20 +228,35 @@ def merge_templates(oplist: list[str]) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--decode",
+        action="store_true",
+        help="Merge the supported Decode operator graph templates.",
+    )
+    parser.add_argument(
         "--ops",
         nargs="*",
-        default=DEFAULT_OPLIST,
+        default=None,
         help="要合并的 op 列表，可直接写 softmax/rope/rmsnorm 或 json 文件名",
     )
     parser.add_argument(
         "--output",
-        default=str(BASE_DIR / "layer0.json"),
+        default=None,
         help="输出 layer0.json 路径",
     )
     args = parser.parse_args()
 
-    result, op_mapping = merge_templates(args.ops)
-    out_path = Path(args.output)
+    selected_ops = args.ops
+    if selected_ops is None:
+        selected_ops = DEFAULT_DECODE_OPLIST if args.decode else DEFAULT_OPLIST
+    default_output = (
+        BASE_DIR / "model_execplan" / "examples" / "layer0_decode.json"
+        if args.decode
+        else BASE_DIR / "layer0.json"
+    )
+
+    result, op_mapping = merge_templates(selected_ops)
+    out_path = Path(args.output) if args.output else default_output
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
