@@ -1,0 +1,80 @@
+{
+  "params": {
+    "hidden_size": 896,
+    "intermediate_size": 1792,
+    "num_attention_heads": 7,
+    "num_key_value_heads": 1,
+    "head_dim": 128,
+    "num_hidden_layers": 1,
+    "sequence_length": 32,
+    "slice_per_head": 4,
+    "used_slices": 28,
+    "target_op": "gemm"
+  },
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_summac_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
+          "remapping": null,
+          "source": "op-1"
+        }
+      },
+      "output": {
+        "shape": [1, 1, "sequence_length"],
+        "remapping": null
+      }
+    },    
+    {
+      "id": "op1",
+      "type": "prefill_remote_sum_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, 1, "sequence_length"],
+          "type": "slice0",
+          "source": "op0"
+        }
+      },
+      "output": {
+        "shape": [1, 1, "sequence_length"]
+      }
+    },
+    {
+      "id": "op2",
+      "type": "prefill_mac_SFU_fp32MN_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": ["hidden_size", 1, "sequence_length"],
+          "source":"op1"
+        }
+      },
+      "output": {
+        "shape": [1, 1, "sequence_length"]
+      }
+    },
+    {
+      "id": "op3",
+      "type": "prefill_mul_fp32MN_fp32M_fp32MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "hidden_size//used_slices"],
+          "source":  "op-1"
+        },
+        "B": {
+          "shape": [1, 1, "sequence_length"],
+          "source": "op2"
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "hidden_size//used_slices"]
+      }
+    }
+  ]
+}

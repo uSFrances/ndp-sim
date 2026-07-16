@@ -156,14 +156,14 @@ def get_matrix_name(filename, prefix=""):
     if "_out" in filename: return "D"
     return "unknown_matrix"
 
-def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d):
+def save_before_relayout(before_install_dir, op_id, slice_idx, out_name, matrix_2d, flatten_order='C'):
     matrix_2d = np.asarray(matrix_2d)
     if matrix_2d.ndim == 1:
         matrix_2d = matrix_2d.reshape(-1, 1)
     slice_dir = os.path.join(before_install_dir, op_id, f"slice{slice_idx:02d}")
     os.makedirs(slice_dir, exist_ok=True)
     out_path = os.path.join(slice_dir, out_name)
-    matrix_2d.reshape(-1, order='C').tofile(out_path)
+    matrix_2d.reshape(-1, order=flatten_order).tofile(out_path)
     convert_to_128bit_txt(out_path, rows=matrix_2d.shape[0], cols=matrix_2d.shape[1], file_dtype=matrix_2d.dtype)
 
 def process_regular_tensors(input_dir, output_dir):
@@ -294,7 +294,8 @@ def process_regular_tensors(input_dir, output_dir):
 
             # 遍历分配后的 slice 数据执行 relayout & 落盘
             for slice_idx, slice_data in enumerate(slices_to_distribute):
-                save_before_relayout(before_install_dir, op_id, slice_idx, out_name, slice_data)
+                before_flatten_order = 'F' if target_prefix == "blk.0_ffn_silu-0_op-unary" else 'C'
+                save_before_relayout(before_install_dir, op_id, slice_idx, out_name, slice_data, flatten_order=before_flatten_order)
 
                 slice_dir = os.path.join(install_dir, op_id, f"slice{slice_idx:02d}")
                 os.makedirs(slice_dir, exist_ok=True)

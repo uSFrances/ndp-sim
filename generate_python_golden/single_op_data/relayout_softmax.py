@@ -34,6 +34,7 @@ def load_model_params(config_path=CONFIG_PATH):
     return params
 
 MODEL_PARAMS = load_model_params()
+SOFTMAX_INPUT_A_SCALE = np.float32(np.sqrt(128.0))
 
 def float_to_bin(f):
     """将单个 float32 转换为 32 位二进制字符串"""
@@ -214,6 +215,8 @@ def process_softmax_tensors(input_dir, output_dir):
             
             file_dtype = dtype_from_filename(filename)
             data = np.fromfile(filepath, dtype=file_dtype).reshape(shape, order='F')
+            if op_id == "op0" and matrix_id == "A":
+                data = data.astype(np.float32) * SOFTMAX_INPUT_A_SCALE
             print(f"📦 Processing: {filename} -> {target_prefix}/{op_id}/{out_name} | F-view Shape: {data.shape}")
             
             # ----------------------------------------------------

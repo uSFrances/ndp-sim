@@ -1,0 +1,28 @@
+{
+  "used_slices": 28,
+  "operators": [
+    {
+      "id": "op0",
+      "type": "prefill_mul_fp32MN_fp16MN_fp16MN",
+      "used_slices": "0b1111111111111111111111111111",
+      "inputs": {
+        "A": {
+          "shape": [1, "sequence_length", "intermediate_size//used_slices"],
+          "remapping": null,
+          "source": "op-1"
+        },
+        "B": {
+          "shape": [1, "sequence_length", "intermediate_size//used_slices"],
+          "dtype": "fp16",
+          "remapping": null,
+          "source": "op-2"
+        }
+      },
+      "output": {
+        "shape": [1, "sequence_length", "intermediate_size//used_slices"],
+        "dtype": "fp16",
+        "remapping": null
+      }
+    }
+  ]
+}
