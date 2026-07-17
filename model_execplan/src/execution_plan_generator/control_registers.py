@@ -948,7 +948,7 @@ def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": d_n // 8 if d_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_n // 16 if d_m is not None else 0,
         "iga_lc2.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
@@ -1241,9 +1241,9 @@ def _compute_decode_gemv_ring_control_register_updates(
     b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
-    (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
-    (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+    (a_k, a_n, a_m) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_n, b_m) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_k, b_prime_n, b_prime_m) = b_prime_shape if b_prime_shape is not None else (None, None, None)
 
 
     updates: dict[str, int] = {
@@ -1519,40 +1519,7 @@ def _compute_decode_mul_fp32N_fp32_fp32N_control_register_updates(
         ),
     }
 
-def _compute_decode_mul_fp32N_fp32_fp16N_control_register_updates(
-    operator: OperatorSpec,
-    template: OperatorTemplate,) -> dict[str, int]:
-    """Example handler for mul operator control-register updates.
 
-    This function is intentionally conservative: it reads shapes and returns no-op
-    updates by default. Replace the returned dict with real register-value logic
-    once mul control rules are finalized.
-    """
-
-    input_a = operator.inputs.get("A")
-    input_b = operator.inputs.get("B")
-    a_shape = input_a.shape if input_a is not None else None
-    b_shape = input_b.shape if input_b is not None else None
-    d_shape = operator.output.shape
-    (d_k, d_m, d_n) = d_shape
-    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
-    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
-    return {
-
-        "iga_lc1.dram_loop_configs.end": a_n // 8 if a_n is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
-        "iga_lc3.dram_loop_configs.end": b_n * 8 if b_n is not None else 0,
-        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
-            port0 = 0,
-            port1 = (a_n or 0) * 4,
-            port2 = 32,
-        ),
-        "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
-            port0 = 0,
-            port1 = (d_n or 0) * 2,
-            port2 = 32,
-        ),
-    }
 
 
 def _compute_decode_mul_fp32N_fp32_fp16N_control_register_updates(
@@ -1765,6 +1732,30 @@ def _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates(
         "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
+def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for add operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once add control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+    }
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -1812,8 +1803,8 @@ OP_CONTROL_REGISTER_FN = {
     "decode_silu_fp16N_fp32N": _compute_decode_silu_fp16N_fp32N_control_register_updates,
     "decode_add_fp32N_fp32N_fp32N": _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates,
     "decode_add_fp32N_fp32N_fp16N": _compute_decode_add_fp32N_fp32N_fp16N_control_register_updates,
-    "decode_add_fp32N_fp16N_fp32N": _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates
-
+    "decode_add_fp32N_fp16N_fp32N": _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates,
+    "decode_add_fp16N_fp32N_fp16N": _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates,
 }
 
 
