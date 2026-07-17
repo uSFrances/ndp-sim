@@ -38,6 +38,18 @@ _SPH = "slice_per_head"
 _ATN_SLICE = "decode_attention_length//slice_per_head"
 _ATN = "decode_attention_length"
 
+# KV padding macros (matching prefill: 4-slice K/V with kv_padding)
+_KV_PAD_A = "kv_padding_a"   # 256
+_KV_PAD_B = "kv_padding_b"   # 1024
+_KV_N = "num_key_value_heads*head_dim//slice_per_head"  # 32
+
+# GEMV B/B' port helper — prefill convention: [K, 1, N_slice], bank_interleave=1
+def _gemv_b(shape: list[Any], source: str = "ext") -> dict[str, Any]:
+    return {"shape": shape, "dtype": "fp16", "bank_interleave": 1, "source": source}
+
+def _gemv_bp(shape: list[Any], source: str = "ext") -> dict[str, Any]:
+    return {"shape": shape, "dtype": "fp16", "bank_interleave": 1, "source": source}
+
 # ---------------------------------------------------------------------------
 # 43-op decode layer: shape definitions and source references
 # ---------------------------------------------------------------------------
@@ -78,22 +90,23 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
-    # op5  gemv_ring (Q projection)
+    # op5  gemv_ring (Q projection) — prefill: A=[K_slice,1,1], B=[K,1,N_slice]
     {
         "id": "op5", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op4"},
-            "B": {"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_HID, 1, 1], "dtype": "fp16", "source": "op4"},
+            "B": _gemv_b([_HID_FULL, 1, _HID]),
+            "B'": _gemv_bp([_HID_FULL, 1, _HID]),
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
-    # op6  add residual (Q + residual) — B=data from op5, A=external residual
+    # op6  add residual (Q + residual) — A=fp16 from op5, B=fp32 external
     {
         "id": "op6", "type": "decode_add_fp16N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
-            "B": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op5"},
+            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op5"},
+            "B": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
         },
         "output": {"shape": [1, 1, _HID]},
     },
@@ -124,16 +137,16 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
-    # op10 summac (KV RMS norm part 1) — external kv input
+    # op10 summac (KV RMS norm part 1) — external kv input, kv_padding_a
     {
         "id": "op10", "type": "decode_summac_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"}},
+        "inputs": {"A": {"shape": [1, 1, _KV_PAD_A], "dtype": "f32", "source": "ext"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op11 remote_sum (KV RMS norm part 2)
     {
         "id": "op11", "type": "decode_remote_sum_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, _USL, 1], "dtype": "f32", "source": "op10"}},
+        "inputs": {"A": {"shape": [1, _SPH, 1], "dtype": "f32", "source": "op10"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op12 mac_SFU (KV RMS norm part 3)
@@ -142,161 +155,171 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "dtype": "f32", "source": "op11"}},
         "output": {"shape": [1, 1, 1]},
     },
-    # op13 mul_scale (KV RMS norm apply — A=external kv, B=op12)
+    # op13 mul_scale (KV RMS norm apply — A=external kv, B=op12) kv_padding_a
     {
         "id": "op13", "type": "decode_mul_fp32N_fp32_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
+            "A": {"shape": [1, 1, _KV_PAD_A], "dtype": "f32", "source": "ext"},
             "B": {"shape": [1, 1, 1], "dtype": "f32", "source": "op12"},
         },
-        "output": {"shape": [1, 1, _HID]},
+        "output": {"shape": [1, 1, _KV_PAD_A]},
     },
-    # op14 mul_cast (KV → fp16 — A=external scale, B=op13)
+    # op14 mul_cast (KV → fp16 — A=external scale, B=op13) kv_padding_a
     {
         "id": "op14", "type": "decode_mul_fp32N_fp32N_fp16N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
-            "B": {"shape": [1, 1, _HID], "dtype": "f32", "source": "op13"},
+            "A": {"shape": [1, 1, _KV_PAD_A], "dtype": "f32", "source": "ext"},
+            "B": {"shape": [1, 1, _KV_PAD_A], "dtype": "f32", "source": "op13"},
         },
-        "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _KV_PAD_A], "dtype": "fp16"},
     },
-    # op15 gemv_ring (K projection)
+    # op15 gemv_ring (K projection) — kv_padding: A=[kv_padding_a,1,1], B=[kv_padding_b,1,kv_n]
     {
         "id": "op15", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op14"},
-            "B": {"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_KV_PAD_A, 1, 1], "dtype": "fp16", "source": "op14"},
+            "B": _gemv_b([_KV_PAD_B, 1, _KV_N]),
+            "B'": _gemv_bp([_KV_PAD_B, 1, _KV_N]),
         },
-        "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
-    # op16 add residual (K + residual) — B=data from op15, A=external residual
+    # op16 add residual (K + residual) — A=fp16 from op15, B=fp32 external
     {
         "id": "op16", "type": "decode_add_fp16N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
-            "B": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op15"},
+            "A": {"shape": [1, 1, _KV_N], "dtype": "fp16", "source": "op15"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "ext"},
         },
-        "output": {"shape": [1, 1, _HID]},
+        "output": {"shape": [1, 1, _KV_N]},
     },
-    # op17 RoPE cos mul (K)
+    # op17 RoPE cos mul (K) — KV_N
     {
         "id": "op17", "type": "decode_mul_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "op16"},
-            "B": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
+            "A": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "op16"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "ext"},
         },
-        "output": {"shape": [1, 1, _HID]},
+        "output": {"shape": [1, 1, _KV_N]},
     },
-    # op18 RoPE sin mul (K) — sin table has -sin in 2nd half
+    # op18 RoPE sin mul (K) — KV_N, rope_slice_xor2
     {
         "id": "op18", "type": "decode_mul_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "op16"},
-            "B": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
+            "A": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "op16"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "ext"},
         },
-        "output": {"shape": [1, 1, _HID], "type": "rope_slice_xor2"},
+        "output": {"shape": [1, 1, _KV_N], "type": "rope_slice_xor2"},
     },
-    # op19 RoPE merge add (K)
+    # op19 RoPE merge add (K) — KV_N
     {
         "id": "op19", "type": "decode_add_fp32N_fp32N_fp16N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "op17"},
-            "B": {"shape": [1, 1, _HID], "dtype": "f32", "source": "op18"},
+            "A": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "op17"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "op18"},
         },
-        "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
-    # op20 gemv_ring (V projection — A←op14 same as K)
+    # op20 gemv_ring (V projection) — kv_padding same as K
     {
         "id": "op20", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op14"},
-            "B": {"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_KV_PAD_A, 1, 1], "dtype": "fp16", "source": "op14"},
+            "B": _gemv_b([_KV_PAD_B, 1, _KV_N]),
+            "B'": _gemv_bp([_KV_PAD_B, 1, _KV_N]),
         },
-        "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
-    # op21 add residual (V) — B=data from op20, A=external residual
+    # op21 add residual (V) — A=fp16 from op20, B=fp32 external
     {
         "id": "op21", "type": "decode_add_fp16N_fp32N_fp16N",
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "f32", "source": "ext"},
-            "B": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op20"},
+            "A": {"shape": [1, 1, _KV_N], "dtype": "fp16", "source": "op20"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "f32", "source": "ext"},
         },
-        "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
-    # op22 gemv_local (QK^T — A=Q from op9, B/B'=K from op19)
+    # op22 gemv_local (QK^T — A=Q from op9, B/B'=K **cache** from external)
+    # Decode: Q is current token (vector), K cache has attention_length positions.
+    # op19 only produces K for the *current* token → stored to cache externally.
+    # op22 reads the full K cache (external), NOT op19.
     {
         "id": "op22", "type": "decode_gemv_local",
+        "used_slices_mask": _USL,
         "inputs": {
             "A": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16", "source": "op9"},
-            "B": {"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "source": "op19"},
-            "B'":{"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "source": "op19"},
+            "B": {"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
+            "B'": {"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
         },
-        "output": {"shape": [1, _ATN, _ATN_SLICE], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
     },
-    # op23 remote_sum (QK^T aggregation)
+    # op23 remote_sum (QK^T aggregation — golden: sum partial scores across K-slices)
     {
         "id": "op23", "type": "decode_remote_sum_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, _SPH, f"{_ATN}*{_ATN}"], "dtype": "f32", "source": "op22"}},
-        "output": {"shape": [1, 1, f"{_ATN}*{_ATN}"]},
+        "inputs": {"A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op22"}},
+        "output": {"shape": [1, 1, _ATN]},
     },
-    # op24 add_mask (scores + mask)
+    # op24 add_mask (scores + mask — A←op23 broadcast, B←external mask)
     {
         "id": "op24", "type": "decode_add_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "op23"},
-            "B": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "ext"},
+            "A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op23"},
+            "B": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "ext"},
         },
-        "output": {"shape": [1, _ATN, _ATN]},
-    },
-    # op25 max (per-head local maxima — A←op24)
-    {
-        "id": "op25", "type": "decode_max_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "op24"}},
         "output": {"shape": [1, 1, _ATN]},
     },
-    # op26 sub_SFU (scores - max — A←op24, B←op25)
+    # op25 max (per-head local maxima — A←op24, reduces attention_length dim)
+    {
+        "id": "op25", "type": "decode_max_fp32N_fp32N",
+        "inputs": {"A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op24"}},
+        "output": {"shape": [1, 1, 1]},
+    },
+    # op26 sub_SFU (scores - max — A←op24, B←op25 broadcast scalar)
     {
         "id": "op26", "type": "decode_sub_SFU_fp32N_fp32_fp32N",
         "inputs": {
-            "A": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "op24"},
-            "B": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op25"},
+            "A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op24"},
+            "B": {"shape": [1, 1, 1], "dtype": "f32", "source": "op25"},
         },
-        "output": {"shape": [1, _ATN, _ATN]},
+        "output": {"shape": [1, 1, _ATN]},
     },
     # op27 sum_rec (per-head sum reciprocals — A←op26)
     {
         "id": "op27", "type": "decode_sum_rec_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "op26"}},
-        "output": {"shape": [1, 1, _ATN]},
+        "inputs": {"A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op26"}},
+        "output": {"shape": [1, 1, 1]},
     },
-    # op28 mul_softmax (exp(x-max) * 1/sum — A←op26, B←op27)
+    # op28 mul_softmax (exp(x-max) * 1/sum — A←op26, B←op27 broadcast scalar)
     {
         "id": "op28", "type": "decode_mul_fp32N_fp32_fp16N",
         "inputs": {
-            "A": {"shape": [1, _ATN, _ATN], "dtype": "f32", "source": "op26"},
-            "B": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op27"},
+            "A": {"shape": [1, 1, _ATN], "dtype": "f32", "source": "op26"},
+            "B": {"shape": [1, 1, 1], "dtype": "f32", "source": "op27"},
         },
-        "output": {"shape": [1, _ATN, _ATN], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
     },
-    # op29 gemv_local (SV — A=softmax from op28, B/B'=V from op21)
+    # op29 gemv_local (SV — A=softmax from op28, B/B'=V **cache** from external)
+    # Decode: op21 only produces V for the *current* token → stored to cache.
+    # op29 reads the full V cache (external), NOT op21.
     {
         "id": "op29", "type": "decode_gemv_local",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, _ATN, _ATN], "dtype": "fp16", "source": "op28"},
-            "B": {"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "source": "op21"},
-            "B'":{"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "source": "op21"},
+            "A": {"shape": [1, 1, _ATN], "dtype": "fp16", "source": "op28"},
+            "B": {"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
+            "B'": {"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
         },
         "output": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16"},
     },
-    # op30 gemv_ring (output projection)
+    # op30 gemv_ring (output projection) — 28-slice, A per-slice = hidden_size//used_slices
     {
         "id": "op30", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16", "source": "op29"},
-            "B": {"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_HID, 1, 1], "dtype": "fp16", "source": "op29"},
+            "B": _gemv_b([_HID_FULL, 1, _HID]),
+            "B'": _gemv_bp([_HID_FULL, 1, _HID]),
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
@@ -345,23 +368,25 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
-    # op37 gemv_ring (FFN gate projection)
+    # op37 gemv_ring (FFN gate) — prefill: B=[hidden_size,1,intermediate//slices]
     {
         "id": "op37", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op36"},
-            "B": {"shape": [_HID_FULL, 1, _INT], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _INT], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_HID, 1, 1], "dtype": "fp16", "source": "op36"},
+            "B": _gemv_b([_HID_FULL, 1, _INT]),
+            "B'": _gemv_bp([_HID_FULL, 1, _INT]),
         },
         "output": {"shape": [1, 1, _INT], "dtype": "fp16"},
     },
-    # op38 gemv_ring (FFN up projection — same input as op37)
+    # op38 gemv_ring (FFN up — same input as op37)
     {
         "id": "op38", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HID], "dtype": "fp16", "source": "op36"},
-            "B": {"shape": [_HID_FULL, 1, _INT], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_HID_FULL, 1, _INT], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_HID, 1, 1], "dtype": "fp16", "source": "op36"},
+            "B": _gemv_b([_HID_FULL, 1, _INT]),
+            "B'": _gemv_bp([_HID_FULL, 1, _INT]),
         },
         "output": {"shape": [1, 1, _INT], "dtype": "fp16"},
     },
@@ -380,13 +405,14 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _INT], "dtype": "fp16"},
     },
-    # op41 gemv_ring (FFN output projection)
+    # op41 gemv_ring (FFN output) — prefill: B=[intermediate,1,hidden//slices]
     {
         "id": "op41", "type": "decode_gemv_ring",
+        "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _INT], "dtype": "fp16", "source": "op40"},
-            "B": {"shape": [_INT_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
-            "B'":{"shape": [_INT_FULL, 1, _HID], "dtype": "fp16", "source": "ext"},
+            "A": {"shape": [_INT, 1, 1], "dtype": "fp16", "source": "op40"},
+            "B": _gemv_b([_INT_FULL, 1, _HID]),
+            "B'": _gemv_bp([_INT_FULL, 1, _HID]),
         },
         "output": {"shape": [1, 1, _HID], "dtype": "fp16"},
     },
@@ -427,14 +453,23 @@ def generate_program_json(
     config = load_decode_config(config_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     used_slices = int(config["used_slices"])
-    mask = "0b" + "1" * used_slices
+    mask_all = "0b" + "1" * used_slices
 
     operators: list[dict[str, Any]] = []
     for layout_op in _DECODE_LAYOUT:
+        # Resolve used_slices mask
+        us_mask_spec = layout_op.get("used_slices_mask", None)
+        if us_mask_spec is None or us_mask_spec == _USL:
+            us_mask = mask_all
+        elif us_mask_spec == "1":
+            us_mask = "0b1"
+        else:
+            us_mask = us_mask_spec
+
         op_entry: dict[str, Any] = {
             "id": layout_op["id"],
             "type": layout_op["type"],
-            "used_slices": mask,
+            "used_slices": us_mask,
             "inputs": {},
             "output": {},
         }
@@ -443,7 +478,7 @@ def generate_program_json(
         for port, inp_spec in layout_op.get("inputs", {}).items():
             inp: dict[str, Any] = {
                 "shape": inp_spec["shape"],
-                "bank_interleave": 1,
+                "bank_interleave": inp_spec.get("bank_interleave", 1),
             }
             dtype = inp_spec.get("dtype", "")
             if dtype == "fp16":
@@ -452,6 +487,8 @@ def generate_program_json(
                 pass  # fp32 is implicit, no dtype field
             elif dtype:
                 inp["dtype"] = dtype
+            if inp_spec.get("remapping") is not None:
+                inp["remapping"] = inp_spec["remapping"]
             inp["source"] = _resolve_source(inp_spec["source"])
             op_entry["inputs"][port] = inp
 
@@ -467,7 +504,11 @@ def generate_program_json(
         operators.append(op_entry)
 
     payload: dict[str, Any] = {
-        "params": config,
+        "params": {
+            **config,
+            "kv_padding_a": int(config.get("kv_padding", 256)),
+            "kv_padding_b": int(config.get("kv_padding", 256)) * int(config.get("slice_per_head", 4)),
+        },
         "used_slices": used_slices,
         "operators": operators,
     }

@@ -18,6 +18,14 @@ from decode_ops import (
     load_decode_config,
     resolve_target_names,
 )
+from decode_data_loader import (
+    LayerWeights,
+    KVCache,
+    generate_kv_cache,
+    load_kv_cache,
+    load_layer_weights,
+    save_kv_cache,
+)
 from tensor_io import dtype_tag, save_golden_tensor
 
 
@@ -54,10 +62,37 @@ def generate_decode_golden(
     config_path: Path,
     output_dir: Path,
     keep_existing: bool = False,
+    use_real_weights: bool = True,
 ) -> Path:
     config = load_decode_config(config_path)
     prepare_output_directory(output_dir, keep_existing=keep_existing)
-    cases = build_decode_golden_cases(config)
+
+    # Load real model weights and KV cache
+    weights = None
+    kv_cache = None
+    if use_real_weights:
+        try:
+            weights = load_layer_weights(0)
+            print("[decode-golden] loaded real weights from model_weights_32/")
+        except FileNotFoundError:
+            print("[decode-golden] WARNING: model_weights_32 not found, using random weights")
+
+        try:
+            kv_cache = load_kv_cache()
+            print("[decode-golden] loaded KV cache from kv_cache/")
+        except FileNotFoundError:
+            print("[decode-golden] generating KV cache (one-time prefill pass) ...")
+            kv_cache = generate_kv_cache(
+                hidden=int(config["hidden_size"]),
+                head_dim=int(config["head_dim"]),
+                num_heads=int(config["num_attention_heads"]),
+                num_kv_heads=int(config["num_key_value_heads"]),
+                attention_length=int(config["decode_attention_length"]),
+                random_seed=int(config.get("random_seed", 0)),
+            )
+            print("[decode-golden] KV cache generated and saved")
+
+    cases = build_decode_golden_cases(config, weights=weights, kv_cache=kv_cache)
 
     manifest: dict[str, object] = {
         "config": config,

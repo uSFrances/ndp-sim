@@ -93,9 +93,10 @@ def slice_passthrough_case(
     case_entry: dict[str, object],
     golden_dir: Path,
     config: dict[str, object],
+    slice_count_override: int | None = None,
 ) -> tuple[dict[str, list[np.ndarray]], list[np.ndarray]]:
     policy = str(case_entry["slice_policy"])
-    slice_count = int(config["used_slices"])
+    slice_count = slice_count_override or int(config["used_slices"])
     heads = int(config["num_attention_heads"])
     slices_per_head = int(config["slice_per_head"])
     inputs, output = _load_case_tensors(case_entry, golden_dir)
@@ -114,15 +115,28 @@ def slice_passthrough_case(
         }
         output_chunks = replicate_scalar(output, slice_count)
     elif policy == "hidden_elementwise":
-        def _split_or_replicate(tensor: np.ndarray) -> list[np.ndarray]:
+        # K/V ops (GQA num_kv_heads=1) produce vectors of length kv_dim=128,
+        # which only divide into slice_per_head=4 slices, not used_slices=28.
+        def _split_or_replicate(tensor: np.ndarray, sc: int) -> list[np.ndarray]:
             flat = np.asarray(tensor).reshape(-1, order="F")
             if flat.size == 1:
-                return replicate_scalar(tensor, slice_count)
-            return split_vector(tensor, slice_count)
+                return replicate_scalar(tensor, sc)
+            if flat.size % sc != 0 and flat.size % slices_per_head == 0:
+                sc = slices_per_head  # K/V data → 4 slices
+            return split_vector(tensor, sc)
+        # Determine slice_count from the first input or output tensor
+        all_tensors = list(inputs.values()) + [output]
+        actual_slice_count = slice_count
+        for t in all_tensors:
+            flat = np.asarray(t).reshape(-1, order="F")
+            if flat.size > 1 and flat.size % slice_count != 0 and flat.size % slices_per_head == 0:
+                actual_slice_count = slices_per_head
+                break
         input_chunks = {
-            port: _split_or_replicate(tensor) for port, tensor in inputs.items()
+            port: _split_or_replicate(tensor, actual_slice_count) for port, tensor in inputs.items()
         }
-        output_chunks = _split_or_replicate(output)
+        output_chunks = _split_or_replicate(output, actual_slice_count)
+        slice_count = actual_slice_count  # update for the assertion below
     elif policy == "remote_sum":
         input_chunks = {"A": split_one_value_per_slice(inputs["A"], slice_count)}
         output_chunks = replicate_scalar(output, slice_count)
@@ -146,8 +160,11 @@ def write_passthrough_case(
 ) -> None:
     input_chunks, output_chunks = slice_passthrough_case(case_entry, golden_dir, config)
     entry_id = op_label or str(case_entry.get("instance_id", case_entry.get("id", case_entry.get("name", ""))))
+    instance_id = str(case_entry.get("instance_id", ""))
     op_dir = install_dir / entry_id
-    slice_count = int(config["used_slices"])
+    # Use actual slice count from the split result (K/V ops use 4 slices)
+    slice_count = len(output_chunks)
+
     for slice_index in range(slice_count):
         slice_dir = op_dir / f"slice{slice_index:02d}"
         for port, chunks in input_chunks.items():

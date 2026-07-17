@@ -19,6 +19,7 @@ from tensor_io import load_golden_tensor, save_install_tensor
 try:
     from .relayout_gemm import (
         BASE_HW_PARAMS,
+        KV_HW_PARAMS,
         relayout_in0_N8K2N4K,
         reorder_in0_slice_by_ring,
     )
@@ -26,6 +27,7 @@ try:
 except ImportError:  # Standalone: python single_op_data/relayout_gemv.py
     from relayout_gemm import (  # type: ignore[no-redef]
         BASE_HW_PARAMS,
+        KV_HW_PARAMS,
         relayout_in0_N8K2N4K,
         reorder_in0_slice_by_ring,
     )
@@ -81,7 +83,11 @@ def write_gemv_ring_case(
         raise ValueError(f"decode_gemv_ring weight must be 2D, got {weight.shape}")
 
     k_size, n_size = weight.shape
-    num_slices = int(config["used_slices"])
+    # Detect K/V GEMV (GQA): kv_dim=128 → use 4-slice KV_HW_PARAMS
+    kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
+    is_kv_gemv = (n_size == kv_dim and n_size < k_size)
+    hw_params = KV_HW_PARAMS if is_kv_gemv else BASE_HW_PARAMS
+    num_slices = hw_params["num_slices"]
     if k_size % num_slices or n_size % num_slices:
         raise ValueError(
             f"ring GEMV dimensions K={k_size}, N={n_size} must divide {num_slices} slices"
@@ -91,8 +97,8 @@ def write_gemv_ring_case(
 
     slice_k = k_size // num_slices
     slice_n = n_size // num_slices
-    physical_mapping = list(BASE_HW_PARAMS["physical_mapping"])
-    ring_order = list(BASE_HW_PARAMS["ring_order"])
+    physical_mapping = list(hw_params["physical_mapping"])
+    ring_order = list(hw_params["ring_order"])
     entry_id = op_label or str(case_entry.get("instance_id", case_entry.get("id", case_entry.get("name", ""))))
     op_dir = install_dir / entry_id
 

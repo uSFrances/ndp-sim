@@ -15,6 +15,7 @@ __pycache__/
 
 golden_models/
 model_execplan/output/*zip
+generate_python_golden/kv_cache
 
 !operator_base_info.json
 !generate_python_golden/README.md
