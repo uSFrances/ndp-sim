@@ -83,17 +83,33 @@ def write_gemv_ring_case(
         raise ValueError(f"decode_gemv_ring weight must be 2D, got {weight.shape}")
 
     k_size, n_size = weight.shape
-    # Detect K/V GEMV (GQA): kv_dim=128 → use 4-slice KV_HW_PARAMS
-    kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
-    is_kv_gemv = (n_size == kv_dim and n_size < k_size)
-    hw_params = KV_HW_PARAMS if is_kv_gemv else BASE_HW_PARAMS
-    num_slices = hw_params["num_slices"]
+    # All GEMV ring ops use 28-slice BASE_HW_PARAMS (matching prefill).
+    # K/V GEMV (GQA): replicate N from kv_dim=128 → 7×128=896
+    # so both K=896 and N=896 divide evenly into 28 slices.
+    hw_params = BASE_HW_PARAMS
+    num_slices = hw_params["num_slices"]  # 28
+
+    kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])  # 128
+    heads = int(config["num_attention_heads"])  # 7
+
+    # --- K/V GEMV: replicate N (128 → 7×128=896) for GQA broadcast ---
+    if n_size == kv_dim and n_size < k_size and n_size % num_slices != 0:
+        weight = np.tile(weight, (1, heads))  # (896, 128) → (896, 896)
+        n_size = weight.shape[1]
+        output = np.tile(output, heads)       # (128,) → (896,)
+
     if k_size % num_slices or n_size % num_slices:
         raise ValueError(
             f"ring GEMV dimensions K={k_size}, N={n_size} must divide {num_slices} slices"
         )
-    if activation.size != k_size or output.size != n_size:
-        raise ValueError("ring GEMV activation/output dimensions do not match the weight")
+    if activation.size != k_size:
+        raise ValueError(
+            f"ring GEMV activation size {activation.size} != K={k_size} (after kv_padding)"
+        )
+    if output.size != n_size:
+        raise ValueError(
+            f"ring GEMV output size {output.size} != N={n_size} (after N-padding)"
+        )
 
     slice_k = k_size // num_slices
     slice_n = n_size // num_slices

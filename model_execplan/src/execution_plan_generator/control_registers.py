@@ -937,20 +937,6 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         ),
     }
 
-def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
-    operator: OperatorSpec,
-    template: OperatorTemplate,
-) -> dict[str, int]:
-    """Placeholder for decode_mul_fp32N_fp32N_fp16N control register logic."""
-    input_a = operator.inputs.get("A")
-    a_shape = input_a.shape if input_a is not None else None
-    d_shape = operator.output.shape
-    (d_k, d_m, d_n) = d_shape
-    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
-    return {
-        "iga_lc1.dram_loop_configs.end": d_n // 16 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
-    }
 
 def _compute_decode_add_fp16N_fp32N_fp32N_control_register_updates(
     operator: OperatorSpec,
@@ -1753,6 +1739,25 @@ def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+    }
+
+def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for decode_mul_fp32N_fp32N_fp16N control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
         "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 

@@ -9,6 +9,8 @@
     "slice_per_head": 4,
     "used_slices": 28,
     "kv_padding": 256,
+    "kv_padding_a": 256,
+    "kv_padding_b": 1024,
     "target_op": "all",
     "target_op_decode": "all",
     "kv_cache_initial_length": 32,

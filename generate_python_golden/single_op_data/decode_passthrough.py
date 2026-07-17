@@ -115,28 +115,41 @@ def slice_passthrough_case(
         }
         output_chunks = replicate_scalar(output, slice_count)
     elif policy == "hidden_elementwise":
-        # K/V ops (GQA num_kv_heads=1) produce vectors of length kv_dim=128,
-        # which only divide into slice_per_head=4 slices, not used_slices=28.
+        # K/V ops (GQA) produce kv_dim=128 vectors — replicate 7× to 896
+        # so they can be split into 28 slices (matching prefill broadcast).
+        hidden = int(config["hidden_size"])
+        heads = int(config["num_attention_heads"])
+        kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
         def _split_or_replicate(tensor: np.ndarray, sc: int) -> list[np.ndarray]:
             flat = np.asarray(tensor).reshape(-1, order="F")
             if flat.size == 1:
                 return replicate_scalar(tensor, sc)
-            if flat.size % sc != 0 and flat.size % slices_per_head == 0:
-                sc = slices_per_head  # K/V data → 4 slices
-            return split_vector(tensor, sc)
-        # Determine slice_count from the first input or output tensor
+            if flat.size == kv_dim and flat.size < hidden:
+                # GQA broadcast: replicate 7× for all Q heads
+                flat = np.tile(flat, heads)  # 128 → 896
+            return split_vector(flat, sc)
+        # Auto-tile K/V tensors in-place
         all_tensors = list(inputs.values()) + [output]
-        actual_slice_count = slice_count
-        for t in all_tensors:
-            flat = np.asarray(t).reshape(-1, order="F")
-            if flat.size > 1 and flat.size % slice_count != 0 and flat.size % slices_per_head == 0:
-                actual_slice_count = slices_per_head
-                break
+        need_tile = any(
+            np.asarray(t).reshape(-1, order="F").size == kv_dim
+            and kv_dim < hidden
+            for t in all_tensors
+        )
+        if need_tile:
+            tiled_inputs = {}
+            for port, tensor in inputs.items():
+                flat = np.asarray(tensor).reshape(-1, order="F")
+                if flat.size == kv_dim:
+                    flat = np.tile(flat, heads)
+                tiled_inputs[port] = flat.reshape(tensor.shape[0], -1) if tensor.ndim > 1 else flat
+            inputs = tiled_inputs
+            flat_out = np.asarray(output).reshape(-1, order="F")
+            if flat_out.size == kv_dim:
+                output = np.tile(flat_out, heads).reshape(output.shape[0], -1) if output.ndim > 1 else np.tile(flat_out, heads)
         input_chunks = {
-            port: _split_or_replicate(tensor, actual_slice_count) for port, tensor in inputs.items()
+            port: _split_or_replicate(tensor, slice_count) for port, tensor in inputs.items()
         }
-        output_chunks = _split_or_replicate(output, actual_slice_count)
-        slice_count = actual_slice_count  # update for the assertion below
+        output_chunks = _split_or_replicate(output, slice_count)
     elif policy == "remote_sum":
         input_chunks = {"A": split_one_value_per_slice(inputs["A"], slice_count)}
         output_chunks = replicate_scalar(output, slice_count)
