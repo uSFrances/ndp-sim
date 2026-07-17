@@ -298,7 +298,7 @@
                 "pingpong_en": 0,
                 "pingpong_last_index": null,
                 "nbr_enable": 0,
-                "fp16tofp32": "false",
+                "fp16tofp32": "true",
                 "bf16tofp32": "false",
                 "int32tofp32": "false",
                 "uint8tofp32": "false",
