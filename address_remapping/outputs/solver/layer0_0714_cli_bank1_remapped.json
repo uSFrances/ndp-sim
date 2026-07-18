@@ -5,7 +5,7 @@
     "num_attention_heads": 7,
     "num_key_value_heads": 1,
     "head_dim": 128,
-    "num_hidden_layers": 1,
+    "num_hidden_layers": 2,
     "sequence_length": 32,
     "slice_per_head": 4,
     "used_slices": 28,
@@ -331,7 +331,8 @@
           "sequence_length",
           "hidden_size//used_slices"
         ],
-        "remapping": null
+        "remapping": null,
+        "type": "rope_slice_xor2"
       }
     },
     {
@@ -410,7 +411,7 @@
             "slice_per_head",
             "sequence_length"
           ],
-          "type": "slice_div4",
+          "type": "slice4",
           "source": "op10",
           "remapping": [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 1, 2, 3, 4, 5]
         }
@@ -687,7 +688,8 @@
           "sequence_length",
           "num_key_value_heads*head_dim//slice_per_head"
         ],
-        "remapping": null
+        "remapping": null,
+        "type": "rope_slice_xor2"
       }
     },
     {
@@ -909,7 +911,7 @@
     },
     {
       "id": "op24",
-      "type": "prefill_add_fp32MN_fp32MN_fp32MN",
+      "type": "prefill_mac_fp32MN_fp32MN_fp32MN",
       "used_slices": "0b1111111111111111111111111111",
       "inputs": {
         "A": {
@@ -922,7 +924,7 @@
           "remapping": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
           "source": "op23"
         },
-        "B": {
+        "C": {
           "bank_interleave": 1,
           "shape": [
             1,
@@ -1465,7 +1467,7 @@
           "intermediate_size//used_slices"
         ],
         "dtype": "fp16",
-        "remapping": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+        "remapping": [0, 1, 2, 5, 6, 7, 3, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
       }
     },
     {
@@ -1518,7 +1520,7 @@
           ],
           "dtype": "fp16",
           "remapping": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
-          "source": "op37"
+          "source": "op38"
         }
       },
       "output": {
