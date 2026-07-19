@@ -3,6 +3,7 @@
 ## Model Parameters
 
 - Model config: `examples\configs\config.json`
+- Model name: `deepseek1.5b`
 - TTFT layers: `28`
 - TTFT frequency: `800 MHz`
 - Layer graph: `layer0`; template TTFT multiplies layer0 cycles, model-scaled TTFT recomputes op sizes from the model config.
@@ -28,105 +29,86 @@
 
 ## Summary Metrics
 
-| Metric | Scope | Roofline | Measured |
+| Metric | Scope | AXI pull roofline | Projected measured |
 | --- | --- | --- | --- |
-| GEMM compute utilization | GEMM-only cycles | 100.00% | 87.73% |
-| GEMM bandwidth utilization | GEMM-only cycles | 28.10% | 24.65% |
-| GEMM compute utilization | Full-layer cycles | 43.76% | 17.21% |
-| GEMM bandwidth utilization | Full-layer cycles | 12.30% | 4.84% |
-| non-GEMM bandwidth utilization | non-GEMM-only cycles | 12.66% | 3.48% |
-| non-GEMM bandwidth utilization | Full-layer cycles | 7.12% | 2.80% |
-| Whole-layer bandwidth utilization | Full-layer cycles | 19.42% | 7.64% |
-| Template TTFT | 28 layers @ 800 MHz | 5.938 ms | 15.096 ms |
-| Model-scaled TTFT | 28 layers @ 800 MHz | 19.725 ms | 63.418 ms |
-| GEMM time share | Cycles | 43.76% | 19.62% |
-| non-GEMM time share | Cycles | 56.24% | 80.38% |
+| GEMM compute utilization | GEMM-only cycles | 100.00% | 89.80% |
+| GEMM compute utilization | Full-layer cycles | 91.76% | 28.54% |
+| non-GEMM bandwidth utilization | non-GEMM-only cycles | 100.00% | 3.76% |
+| non-GEMM bandwidth utilization | Full-layer cycles | 8.24% | 2.56% |
+| Whole-layer bandwidth utilization | Full-layer cycles | 8.24% | 2.56% |
+| GEMM time share | Cycles | 91.76% | 31.78% |
+| non-GEMM time share | Cycles | 8.24% | 68.22% |
 
-## GEMM Operators
+## Model-Scaled Summary
 
-| Op ID | Kernel | Type | Work ops | Roofline cycles | Measured cycles | Roofline layer time share | Layer time share | Roofline compute util | Measured compute util | Roofline bandwidth util | Measured bandwidth util |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| op37 | ffn_gate | ring_gemm_fp16_fp16_fp16 | 3,670,016 | 14,336 | 15,878 | 8.45% | 3.68% | 100.00% | 90.29% | 26.34% | 23.78% |
-| op38 | ffn_up | ring_gemm_fp16_fp16_fp16 | 3,670,016 | 14,336 | 15,792 | 8.45% | 3.66% | 100.00% | 90.78% | 26.34% | 23.91% |
-| op41 | ffn_down | ring_gemm_fp16_fp16_fp16 | 3,670,016 | 14,336 | 15,756 | 8.45% | 3.65% | 100.00% | 90.99% | 26.34% | 23.97% |
-| op20 | v_gen | ring_gemm_fp16_fp16_fp16 | 2,097,152 | 8,192 | 10,237 | 4.83% | 2.37% | 100.00% | 80.02% | 32.03% | 25.63% |
-| op15 | k_gen | ring_gemm_fp16_fp16_fp16 | 2,097,152 | 8,192 | 9,023 | 4.83% | 2.09% | 100.00% | 90.79% | 32.03% | 29.08% |
-| op5 | q_gen | ring_gemm_fp16_fp16_fp16 | 1,835,008 | 7,168 | 8,011 | 4.23% | 1.86% | 100.00% | 89.48% | 26.79% | 23.97% |
-| op30 | atten_out | ring_gemm_fp16_fp16_fp16 | 1,835,008 | 7,168 | 8,004 | 4.23% | 1.86% | 100.00% | 89.56% | 26.79% | 23.99% |
-| op29 | local_gemm_sv | gemm_local_fp16_fp16_fp16 | 65,536 | 256 | 995 | 0.15% | 0.23% | 100.00% | 25.73% | 75.00% | 19.30% |
-| op22 | local_gemm_qkt | gemm_local_qkt_fp16_fp16_fp32 | 65,536 | 256 | 929 | 0.15% | 0.22% | 100.00% | 27.56% | 100.00% | 27.56% |
+| Scenario | Per-layer cycles | Total cycles | TTFT |
+| --- | --- | --- | --- |
+| Projected measured | 1,811,956 | 50,734,762 | 63.418 ms |
+| Projected measured with centralized global remote-sum | 3,860,035 | 108,080,987 | 135.101 ms |
+| Projected measured with Ring2Ring remote-sum | 1,811,956 | 50,734,762 | 63.418 ms |
+| AXI pull roofline | 563,584 | 15,780,352 | 19.725 ms |
+| Centralized global roofline | 570,068 | 15,961,904 | 19.952 ms |
+| Ring2Ring n2n roofline | 563,584 | 15,780,352 | 19.725 ms |
 
-## non-GEMM Operators
+## Model-Scaled Operator Projection
 
-| Op ID | Operator | Type | Total bytes | Roofline cycles | Measured cycles | Roofline layer time share | Layer time share | Roofline bandwidth util | Measured bandwidth util | Roofline global BW util | Measured global BW util |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| op23 | qkt_remote_sum | prefill_remote_sum_fp32MN_fp32MN_2d | 20,480 | 57,344 | 165,609 | 33.80% | 38.40% | 100.00% | 34.63% | 100.00% | 34.63% |
-| op33 | ffn_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 3,712 | 12,544 | 33,245 | 7.39% | 7.71% | 100.00% | 37.73% | 100.00% | 37.73% |
-| op1 | q_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 3,712 | 12,544 | 33,097 | 7.39% | 7.67% | 100.00% | 37.90% | 100.00% | 37.90% |
-| op14 | k_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | 50,176 | 1,568 | 26,218 | 0.92% | 6.08% | 100.00% | 5.98% | N/A | N/A |
-| op18 | k_rope_mul_b | prefill_mul_fp32MN_fp32MN_fp32MN | 12,288 | 384 | 17,376 | 0.23% | 4.03% | 100.00% | 2.21% | N/A | N/A |
-| op8 | q_rope_mul_b | prefill_mul_fp32MN_fp32MN_fp32MN | 12,288 | 384 | 17,308 | 0.23% | 4.01% | 100.00% | 2.22% | N/A | N/A |
-| op13 | k_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | 65,664 | 2,052 | 4,396 | 1.21% | 1.02% | 100.00% | 46.68% | N/A | N/A |
-| op10 | k_norm_summac | prefill_summac | 32,896 | 1,028 | 4,365 | 0.61% | 1.01% | 100.00% | 23.55% | N/A | N/A |
-| op36 | ffn_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | 6,272 | 196 | 4,028 | 0.12% | 0.93% | 100.00% | 4.87% | N/A | N/A |
-| op6 | q_bias_add | prefill_add_fp16MN_fp32N_fp32MN | 6,272 | 196 | 3,873 | 0.12% | 0.90% | 100.00% | 5.06% | N/A | N/A |
-| op11 | k_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 640 | 1,792 | 3,869 | 1.06% | 0.90% | 100.00% | 46.32% | 100.00% | 46.32% |
-| op16 | k_bias_add | prefill_add_fp16MN_fp32N_fp32MN | 6,272 | 196 | 3,611 | 0.12% | 0.84% | 100.00% | 5.43% | N/A | N/A |
-| op40 | ffn_gate_mul | prefill_mul_fp32MN_fp16MN_fp16MN | 16,384 | 512 | 3,559 | 0.30% | 0.83% | 100.00% | 14.39% | N/A | N/A |
-| op4 | q_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | 6,272 | 196 | 2,448 | 0.12% | 0.57% | 100.00% | 8.01% | N/A | N/A |
-| op17 | k_rope_mul_a | prefill_mul_fp32MN_fp32MN_fp32MN | 12,288 | 384 | 2,387 | 0.23% | 0.55% | 100.00% | 16.09% | N/A | N/A |
-| op24 | qkt_score_add | prefill_add_fp32MN_fp32MN_fp32MN | 12,288 | 384 | 2,344 | 0.23% | 0.54% | 100.00% | 16.38% | N/A | N/A |
-| op9 | q_rope_out | prefill_add_fp32MN_fp32MN_fp16MN | 10,240 | 320 | 2,304 | 0.19% | 0.53% | 100.00% | 13.89% | N/A | N/A |
-| op7 | q_rope_mul_a | prefill_mul_fp32MN_fp32MN_fp32MN | 12,288 | 384 | 2,283 | 0.23% | 0.53% | 100.00% | 16.82% | N/A | N/A |
-| op19 | k_rope_out | prefill_add_fp32MN_fp32MN_fp16MN | 10,240 | 320 | 2,224 | 0.19% | 0.52% | 100.00% | 14.39% | N/A | N/A |
-| op31 | atten_residual_add | prefill_add_fp32MN_fp16MN_fp32MN | 10,240 | 320 | 1,697 | 0.19% | 0.39% | 100.00% | 18.86% | N/A | N/A |
-| op28 | softmax_scale | prefill_mul_fp32MN_fp32M_fp16MN | 6,272 | 196 | 1,449 | 0.12% | 0.34% | 100.00% | 13.53% | N/A | N/A |
-| op35 | ffn_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | 8,320 | 260 | 1,235 | 0.15% | 0.29% | 100.00% | 21.05% | N/A | N/A |
-| op26 | softmax_sub | prefill_sub_SFU_fp32MN_fp32MN_fp32MN | 8,320 | 260 | 1,081 | 0.15% | 0.25% | 100.00% | 24.05% | N/A | N/A |
-| op39 | ffn_silu | prefill_silu_fp16MN_fp32MN | 12,288 | 384 | 1,073 | 0.23% | 0.25% | 100.00% | 35.79% | N/A | N/A |
-| op21 | v_bias_add | prefill_add_V_fp16MN_fp32N_fp16MN | 4,224 | 132 | 867 | 0.08% | 0.20% | 100.00% | 15.22% | N/A | N/A |
-| op42 | ffn_residual_add | prefill_add_fp32MN_fp16MN_fp32MN | 10,240 | 320 | 866 | 0.19% | 0.20% | 100.00% | 36.95% | N/A | N/A |
-| op25 | softmax_max | prefill_max | 4,224 | 132 | 734 | 0.08% | 0.17% | 100.00% | 17.98% | N/A | N/A |
-| op27 | softmax_sum_rec | prefill_sum_rec_fp32MN_fp32MN | 4,224 | 132 | 696 | 0.08% | 0.16% | 100.00% | 18.97% | N/A | N/A |
-| op32 | ffn_norm_summac | prefill_summac | 4,224 | 132 | 660 | 0.08% | 0.15% | 100.00% | 20.00% | N/A | N/A |
-| op3 | q_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | 8,320 | 260 | 649 | 0.15% | 0.15% | 100.00% | 40.06% | N/A | N/A |
-| op0 | q_norm_summac | prefill_summac | 4,224 | 132 | 588 | 0.08% | 0.14% | 100.00% | 22.45% | N/A | N/A |
-| op12 | k_norm_mac_sfu | prefill_mac_SFU | 256 | 8 | 192 | 0.00% | 0.04% | 100.00% | 4.17% | N/A | N/A |
-| op2 | q_norm_mac_sfu | prefill_mac_SFU | 256 | 8 | 184 | 0.00% | 0.04% | 100.00% | 4.35% | N/A | N/A |
-| op34 | ffn_norm_mac_sfu | prefill_mac_SFU | 256 | 8 | 170 | 0.00% | 0.04% | 100.00% | 4.71% | N/A | N/A |
+This table recomputes each operator's work or bytes from the target model config, then projects cycles using the calibration layer's measured GEMM throughput or measured non-GEMM effective bandwidth.
 
-## Remote-Sum Transport Comparison
+- Target model: `deepseek1.5b`
+- Target layers: `28`
+- Target sequence length: `32`
+- Target execution hidden size: `1792`
 
-Ring2Ring remote-sum model: each slice first reads its local partial result, then receives the other slice partial results through the slice-to-slice n2n datapath. The ring datapath bandwidth is modeled as 256 bit/cycle = 32 B/cycle per slice.
 
-For each remote-sum op: `local_read_bytes = output_elements * dtype_bytes`, `ring_transfer_bytes = (fan_in - 1) * output_elements * dtype_bytes`, `local_write_bytes = output_elements * output_dtype_bytes`, and `ring2ring_roofline_cycles = max(local_read_bytes / local_bw, ring_transfer_bytes / 32, local_write_bytes / local_bw, reduction_ops / general_peak)`.
+### Model-Scaled GEMM Operators
 
-Centralized-global remote-sum projection: one slice reads all partial results through global AXI, performs the reduction, then sends the reduced result back to the other participating slices through global AXI. The global AXI bandwidth is modeled as 128 bit at half slice frequency, i.e. 8 B/cycle. This projection keeps all non-remote-sum measured cycles unchanged and scales each remote-sum measured cycle count by `centralized_global_roofline_cycles / axi_pull_roofline_cycles`.
-
-### Layer Roofline Summary
-
-| Metric | Scope | Measured | Projected measured with centralized global remote-sum | Projected measured with Ring2Ring remote-sum | AXI pull roofline | Centralized global roofline | Ring2Ring n2n roofline |
+| Op ID | Operator | Type | Model work ops | Projected measured cycles | Layer share | Projected compute util | AXI roofline cycles |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GEMM compute utilization | GEMM-only cycles | 87.73% | 87.73% | 87.73% | 100.00% | 100.00% | 100.00% |
-| GEMM bandwidth utilization | GEMM-only cycles | 24.65% | 24.65% | 24.65% | 28.10% | 28.10% | 28.10% |
-| GEMM compute utilization | Full-layer cycles | 17.21% | 35.23% | 37.65% | 43.76% | 81.69% | 86.29% |
-| GEMM bandwidth utilization | Full-layer cycles | 4.84% | 9.90% | 10.58% | 12.30% | 22.96% | 24.25% |
-| non-GEMM bandwidth utilization | non-GEMM-only cycles | 3.48% | 9.58% | 10.73% | 12.66% | 72.58% | 102.37% |
-| non-GEMM bandwidth utilization | Full-layer cycles | 2.80% | 5.73% | 6.13% | 7.12% | 13.29% | 14.04% |
-| Whole-layer bandwidth utilization | Full-layer cycles | 7.64% | 15.63% | 16.71% | 19.42% | 36.25% | 38.29% |
-| GEMM time share | Cycles | 19.62% | 40.16% | 42.91% | 43.76% | 81.69% | 86.29% |
-| non-GEMM time share | Cycles | 80.38% | 59.84% | 57.09% | 56.24% | 18.31% | 13.71% |
-| Total cycles | Cycles | 431,310 | 210,736 | 197,196 | 169,652 | 90,884 | 86,040 |
-| Template TTFT | 28 layers @ 800 MHz | 15.096 ms | 7.376 ms | 6.902 ms | 5.938 ms | 3.181 ms | 3.011 ms |
-| Model-scaled TTFT | 28 layers @ 800 MHz | 63.418 ms | 47.438 ms | 46.472 ms | 19.725 ms | 19.952 ms | 19.725 ms |
-| Remote-sum cycles | Cycles | 235,820 | 15,246 | 1,706 | 84,224 | 5,456 | 612 |
-| Speedup vs measured | Measured total / scenario total | 1.00x | 2.05x | 2.19x | N/A | N/A | N/A |
+| op37 | ffn_gate | prefill_gemm_ring_4slice | 36,700,160 | 158,780 | 8.76% | 90.29% | 143,360 |
+| op38 | ffn_up | prefill_gemm_ring_4slice | 36,700,160 | 157,920 | 8.72% | 90.78% | 143,360 |
+| op41 | ffn_down | prefill_gemm_ring_4slice | 36,700,160 | 157,560 | 8.70% | 90.99% | 143,360 |
+| op5 | q_gen | prefill_gemm_ring_4slice | 7,340,032 | 32,044 | 1.77% | 89.48% | 28,672 |
+| op30 | atten_out | prefill_gemm_ring_4slice | 7,340,032 | 32,016 | 1.77% | 89.56% | 28,672 |
+| op20 | v_gen | prefill_gemm_ring_4slice | 3,670,016 | 17,915 | 0.99% | 80.02% | 14,336 |
+| op15 | k_gen | prefill_gemm_ring_4slice | 3,670,016 | 15,790 | 0.87% | 90.79% | 14,336 |
+| op29 | local_gemm_sv | prefill_gemm_local | 131,072 | 1,990 | 0.11% | 25.73% | 512 |
+| op22 | local_gemm_qkt | prefill_gemm_local_qkt | 131,072 | 1,858 | 0.10% | 27.56% | 512 |
 
-### Remote-Sum Operators
+### Model-Scaled non-GEMM Operators
 
-| Operator | Type | Fan-in | AXI roofline cycles | Ring2Ring roofline cycles | Speedup | Measured cycles | Projected measured cycles | AXI roofline layer share | Ring2Ring roofline layer share | Ring transfer bytes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| qkt_remote_sum | prefill_remote_sum_fp32MN_fp32MN_2d | 4 | 57,344 | 384 | 149.33x | 165,609 | 1,109 | 33.80% | 0.45% | 12,288 |
-| q_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 28 | 12,544 | 108 | 116.15x | 33,097 | 285 | 7.39% | 0.13% | 3,456 |
-| ffn_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 28 | 12,544 | 108 | 116.15x | 33,245 | 286 | 7.39% | 0.13% | 3,456 |
-| k_norm_remote_sum | prefill_remote_sum_Mfp32_Mfp32 | 4 | 1,792 | 12 | 149.33x | 3,869 | 26 | 1.06% | 0.01% | 384 |
+| Op ID | Operator | Type | Input shape | Output shape | Remote-sum geometry | Model bytes | Projected measured cycles | Layer share | Projected BW util | AXI roofline cycles | Centralized roofline cycles | Ring2Ring roofline cycles |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| op23 | qkt_remote_sum | prefill_remote_sum_4slice_fp32MN_fp32MN | A=[1 x 4 x 1024] | out=[1 x 1 x 1024] | fan-in=4 partial slices -> 1 result (1024 elements) | 40,960 | 414,022 | 22.85% | 0.31% | 1,280 | 6,144 | 1,280 |
+| op12 | k_norm_mac_sfu | prefill_mac_SFU_fp32MN_fp32MN | A=[1792 x 1 x 32] | out=[1 x 1 x 32] | - | 229,504 | 172,128 | 9.50% | 4.17% | 7,172 | 7,172 | 7,172 |
+| op2 | q_norm_mac_sfu | prefill_mac_SFU_fp32MN_fp32MN | A=[1792 x 1 x 32] | out=[1 x 1 x 32] | - | 229,504 | 164,956 | 9.10% | 4.35% | 7,172 | 7,172 | 7,172 |
+| op34 | ffn_norm_mac_sfu | prefill_mac_SFU_fp32MN_fp32MN | A=[1792 x 1 x 32] | out=[1 x 1 x 32] | - | 229,504 | 152,405 | 8.41% | 4.71% | 7,172 | 7,172 | 7,172 |
+| op8 | q_rope_mul_b | prefill_mul_fp32MN_fp32MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 49,152 | 69,232 | 3.82% | 2.22% | 1,536 | 1,536 | 1,536 |
+| op18 | k_rope_mul_b | prefill_mul_fp32MN_fp32MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 24,576 | 34,752 | 1.92% | 2.21% | 768 | 768 | 768 |
+| op33 | ffn_norm_remote_sum | prefill_remote_sum_fp32MN_fp32MN | A=[1 x 28 x 32] | out=[1 x 1 x 32] | fan-in=28 partial slices -> 1 result (32 elements) | 3,712 | 34,432 | 1.90% | 0.34% | 116 | 880 | 116 |
+| op1 | q_norm_remote_sum | prefill_remote_sum_fp32MN_fp32MN | A=[1 x 28 x 32] | out=[1 x 1 x 32] | fan-in=28 partial slices -> 1 result (32 elements) | 3,712 | 34,279 | 1.89% | 0.34% | 116 | 880 | 116 |
+| op14 | k_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | B=[1 x 32 x 256]; A=[1 x 1 x 256] | out=[1 x 32 x 256] | - | 50,176 | 26,218 | 1.45% | 5.98% | 1,568 | 1,568 | 1,568 |
+| op6 | q_bias_add | prefill_add_fp16MN_fp32N_fp32MN | B=[1 x 32 x 64]; A=[1 x 1 x 64] | out=[1 x 32 x 64] | - | 33,024 | 20,393 | 1.13% | 5.06% | 1,032 | 1,032 | 1,032 |
+| op40 | ffn_gate_mul | prefill_mul_fp32MN_fp16MN_fp16MN | A=[1 x 32 x 320]; B=[1 x 32 x 320] | out=[1 x 32 x 320] | - | 81,920 | 17,795 | 0.98% | 14.39% | 2,560 | 2,560 | 2,560 |
+| op16 | k_bias_add | prefill_add_fp16MN_fp32N_fp32MN | B=[1 x 32 x 64]; A=[1 x 1 x 64] | out=[1 x 32 x 64] | - | 16,512 | 9,507 | 0.52% | 5.43% | 516 | 516 | 516 |
+| op9 | q_rope_out | prefill_add_fp32MN_fp32MN_fp16MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 40,960 | 9,216 | 0.51% | 13.89% | 1,280 | 1,280 | 1,280 |
+| op7 | q_rope_mul_a | prefill_mul_fp32MN_fp32MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 49,152 | 9,132 | 0.50% | 16.82% | 1,536 | 1,536 | 1,536 |
+| op36 | ffn_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | B=[1 x 32 x 64]; A=[1 x 1 x 64] | out=[1 x 32 x 64] | - | 12,544 | 8,056 | 0.44% | 4.87% | 392 | 392 | 392 |
+| op39 | ffn_silu | prefill_silu_fp16MN_fp32MN | A=[1 x 32 x 320] | out=[1 x 32 x 320] | - | 61,440 | 5,365 | 0.30% | 35.79% | 1,920 | 1,920 | 1,920 |
+| op4 | q_norm_apply | prefill_mul_fp32MN_fp32N_fp16MN | B=[1 x 32 x 64]; A=[1 x 1 x 64] | out=[1 x 32 x 64] | - | 12,544 | 4,896 | 0.27% | 8.01% | 392 | 392 | 392 |
+| op11 | k_norm_remote_sum | prefill_remote_sum_fp32MN_fp32MN | A=[1 x 4 x 32] | out=[1 x 1 x 32] | fan-in=4 partial slices -> 1 result (32 elements) | 640 | 4,836 | 0.27% | 0.41% | 20 | 112 | 20 |
+| op17 | k_rope_mul_a | prefill_mul_fp32MN_fp32MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 24,576 | 4,774 | 0.26% | 16.09% | 768 | 768 | 768 |
+| op24 | qkt_score_add | prefill_add_fp32MN_fp32MN_fp32MN | A=[1 x 32 x 32]; B=[1 x 32 x 32] | out=[1 x 32 x 32] | - | 24,576 | 4,688 | 0.26% | 16.38% | 768 | 768 | 768 |
+| op19 | k_rope_out | prefill_add_fp32MN_fp32MN_fp16MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 20,480 | 4,448 | 0.25% | 14.39% | 640 | 640 | 640 |
+| op13 | k_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | A=[1 x 32 x 256]; B=[1 x 1 x 32] | out=[1 x 32 x 256] | - | 65,664 | 4,396 | 0.24% | 46.68% | 2,052 | 2,052 | 2,052 |
+| op10 | k_norm_summac | prefill_summac_fp32MN_fp32MN | A=[1 x 32 x 256] | out=[1 x 1 x 32] | - | 32,896 | 4,365 | 0.24% | 23.55% | 1,028 | 1,028 | 1,028 |
+| op31 | atten_residual_add | prefill_add_fp32MN_fp16MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 20,480 | 3,394 | 0.19% | 18.86% | 640 | 640 | 640 |
+| op28 | softmax_scale | prefill_mul_fp32MN_fp32M_fp16MN | A=[1 x 32 x 32]; B=[1 x 1 x 32] | out=[1 x 32 x 32] | - | 12,544 | 2,898 | 0.16% | 13.53% | 392 | 392 | 392 |
+| op21 | v_bias_add | prefill_add_V_fp16MN_fp32N_fp16MN | B=[1 x 32 x 64]; A=[1 x 1 x 64] | out=[1 x 32 x 64] | - | 12,416 | 2,548 | 0.14% | 15.22% | 388 | 388 | 388 |
+| op35 | ffn_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | A=[1 x 32 x 64]; B=[1 x 1 x 32] | out=[1 x 32 x 64] | - | 16,512 | 2,451 | 0.14% | 21.05% | 516 | 516 | 516 |
+| op26 | softmax_sub | prefill_sub_SFU_fp32MN_fp32M_fp32MN | A=[1 x 32 x 32]; B=[1 x 1 x 32] | out=[1 x 32 x 32] | - | 16,640 | 2,162 | 0.12% | 24.05% | 520 | 520 | 520 |
+| op42 | ffn_residual_add | prefill_add_fp32MN_fp16MN_fp32MN | A=[1 x 32 x 64]; B=[1 x 32 x 64] | out=[1 x 32 x 64] | - | 20,480 | 1,732 | 0.10% | 36.95% | 640 | 640 | 640 |
+| op25 | softmax_max | prefill_max_fp32MN_fp32MN | A=[1 x 32 x 32] | out=[1 x 1 x 32] | - | 8,448 | 1,468 | 0.08% | 17.98% | 264 | 264 | 264 |
+| op27 | softmax_sum_rec | prefill_sum_rec_fp32MN_fp32MN | A=[1 x 32 x 32] | out=[1 x 1 x 32] | - | 8,448 | 1,392 | 0.08% | 18.97% | 264 | 264 | 264 |
+| op32 | ffn_norm_summac | prefill_summac_fp32MN_fp32MN | A=[1 x 32 x 64] | out=[1 x 1 x 32] | - | 8,320 | 1,300 | 0.07% | 20.00% | 260 | 260 | 260 |
+| op3 | q_norm_scale | prefill_mul_fp32MN_fp32M_fp32MN | A=[1 x 32 x 64]; B=[1 x 1 x 32] | out=[1 x 32 x 64] | - | 16,512 | 1,288 | 0.07% | 40.06% | 516 | 516 | 516 |
+| op0 | q_norm_summac | prefill_summac_fp32MN_fp32MN | A=[1 x 32 x 64] | out=[1 x 1 x 32] | - | 8,320 | 1,158 | 0.06% | 22.45% | 260 | 260 | 260 |

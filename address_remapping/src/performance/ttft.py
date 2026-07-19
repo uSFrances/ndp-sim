@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -44,6 +45,7 @@ def build_model_scaled_ttft_summary(
     frequency_hz: float,
 ) -> Dict[str, object]:
     operators = _load_graph_operators(graph_path)
+    values = model.values()
     row_by_id = {str(row["op_id"]): row for row in baseline_rows}
     ring_by_id = {str(row["op_id"]): row for row in ring_rows or []}
 
@@ -97,6 +99,11 @@ def build_model_scaled_ttft_summary(
             {
                 "op_id": op_id,
                 "op_type": op_type,
+                "input_shapes": _format_operator_port_shapes(operator, "inputs", values),
+                "output_shapes": _format_operator_port_shapes(operator, "output", values),
+                "remote_sum_geometry": _model_remote_sum_geometry(operator, values)
+                if "remote_sum" in op_type
+                else "-",
                 "compute_domain": row.get("compute_domain"),
                 "peak_compute_ops_per_cycle": row.get("peak_compute_ops_per_cycle"),
                 "peak_memory_bandwidth_bytes_per_cycle": row.get("peak_memory_bandwidth_bytes_per_cycle"),
@@ -126,6 +133,29 @@ def build_model_scaled_ttft_summary(
         "operators": operator_projections,
         "scenarios": scenarios,
     }
+
+
+def _format_operator_port_shapes(
+    operator: Mapping[str, object],
+    direction: str,
+    values: Mapping[str, int],
+) -> str:
+    raw_ports = operator[direction]
+    ports = {"out": raw_ports} if direction == "output" else dict(raw_ports)
+    return "; ".join(
+        f"{port_name}=[{' x '.join(str(_eval_shape_expr(value, values)) for value in dict(port_spec)['shape'])}]"
+        for port_name, port_spec in ports.items()
+    )
+
+
+def _model_remote_sum_geometry(operator: Mapping[str, object], values: Mapping[str, int]) -> str:
+    inputs = dict(operator["inputs"])
+    input_port = next(iter(inputs.values()))
+    input_shape = [_eval_shape_expr(value, values) for value in dict(input_port)["shape"]]
+    output_shape = [_eval_shape_expr(value, values) for value in dict(operator["output"])["shape"]]
+    fan_in = input_shape[1] if len(input_shape) > 1 else int(values["used_slices"])
+    output_elements = math.prod(output_shape)
+    return f"fan-in={fan_in} partial slices -> 1 result ({output_elements} elements)"
 
 
 def estimate_operator_work_bytes(

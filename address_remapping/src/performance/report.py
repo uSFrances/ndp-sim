@@ -105,6 +105,24 @@ def _shape_list(port_data: Mapping[str, object]) -> List[int]:
     return [int(value) for value in shape]
 
 
+def _format_port_shapes(op_data: Mapping[str, object], direction: str) -> str:
+    ports = dict(op_data[direction])
+    formatted: List[str] = []
+    for port_name, port_data in ports.items():
+        debug = dict(port_data.get("external_shape_debug", {}))
+        # External dimensions retain fan-in axes that are intentionally absent
+        # from the logical layout of remote-reduction input ports.
+        shape = debug.get("external_dims") or _shape_list(port_data)
+        formatted.append(f"{port_name}=[{' x '.join(str(value) for value in shape)}]")
+    return "; ".join(formatted)
+
+
+def _format_remote_sum_geometry(geometry: Mapping[str, object]) -> str:
+    fan_in = int(geometry["remote_fan_in"])
+    output_elements = int(geometry["remote_output_elements"])
+    return f"fan-in={fan_in} partial slices -> 1 result ({output_elements} elements)"
+
+
 def _count_used_slices(value: object) -> Optional[int]:
     if value is None:
         return None
@@ -602,6 +620,11 @@ def _build_rows(
             {
                 "op_id": op_name,
                 "op_type": op_type,
+                "input_shapes": _format_port_shapes(op_data, "inputs"),
+                "output_shapes": _format_port_shapes(op_data, "outputs"),
+                "remote_sum_geometry": (
+                    _format_remote_sum_geometry(byte_metadata) if is_remote_sum else "-"
+                ),
                 "peak_compute_ops_per_cycle": peak_for_util,
                 "peak_memory_bandwidth_bytes_per_cycle": peak_memory_bandwidth_bytes_per_cycle,
                 "work_ops": work_ops,
@@ -1524,6 +1547,9 @@ def _append_remote_sum_transport_comparison(
             [
                 "Operator",
                 "Type",
+                "Input shape",
+                "Output shape",
+                "Reduction geometry",
                 "Fan-in",
                 "AXI roofline cycles",
                 "Ring2Ring roofline cycles",
@@ -1538,6 +1564,9 @@ def _append_remote_sum_transport_comparison(
                 [
                     _operator_label(axi_remote_rows[op_id]),
                     str(axi_remote_rows[op_id]["op_type"]),
+                    str(axi_remote_rows[op_id].get("input_shapes", "N/A")),
+                    str(axi_remote_rows[op_id].get("output_shapes", "N/A")),
+                    str(axi_remote_rows[op_id].get("remote_sum_geometry", "N/A")),
                     str(axi_remote_rows[op_id].get("remote_fan_in", "N/A")),
                     _fmt_number(axi_remote_rows[op_id].get("roofline_cycles"), digits=0),
                     _fmt_number(ring_remote_rows[op_id].get("roofline_cycles"), digits=0),
@@ -1802,6 +1831,9 @@ def _write_summary_tables(
                 "Op ID",
                 "Operator",
                 "Type",
+                "Input shape",
+                "Output shape",
+                "Remote-sum geometry",
                 "Total bytes",
                 "Roofline cycles",
                 "Measured cycles",
@@ -1817,6 +1849,9 @@ def _write_summary_tables(
                     str(row["op_id"]),
                     str(row["name"]),
                     str(row["op_type"]),
+                    str(row.get("input_shapes", "N/A")),
+                    str(row.get("output_shapes", "N/A")),
+                    str(row.get("remote_sum_geometry", "-")),
                     _fmt_number(row["total_bytes"], digits=0),
                     _fmt_number(row.get("roofline_cycles"), digits=0),
                     _fmt_number(row.get("measured_cycles"), digits=0),
@@ -2054,6 +2089,9 @@ def _append_model_scaled_operator_projection(
                 "Op ID",
                 "Operator",
                 "Type",
+                "Input shape",
+                "Output shape",
+                "Remote-sum geometry",
                 "Model bytes",
                 "Projected measured cycles",
                 "Layer share",
@@ -2067,6 +2105,9 @@ def _append_model_scaled_operator_projection(
                     str(row["op_id"]),
                     _operator_label(row),
                     str(row["op_type"]),
+                    str(row.get("input_shapes", "N/A")),
+                    str(row.get("output_shapes", "N/A")),
+                    str(row.get("remote_sum_geometry", "-")),
                     _fmt_number(row.get("total_bytes"), digits=0),
                     _fmt_number(row.get("measured_cycles"), digits=0),
                     _fmt_percent_value(
