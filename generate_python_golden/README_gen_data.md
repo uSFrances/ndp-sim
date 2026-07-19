@@ -589,6 +589,7 @@ python single_op_data/relayout_layer0.py
 输入：
 
 ```text
+model_execplan/layer0.json
 model_execplan/layer0_op_listing.json
 model_execplan/data/rmsnorm/<prefix>/install/
 model_execplan/data/regular/<prefix>/install/
@@ -625,6 +626,9 @@ model_execplan/data/layer0_physic/install/opX/sliceYY/
 
 - 先按 `layer0_op_listing.json` 从各单算子目录复制对应 `install/opX`。
 - 普通数据先生成 `data/layer0/install`。
+- 拼接时会读取 `layer0.json` 中每个 op 的完整 `type`，用于判断特殊规则；`layer0_op_listing.json` 继续用于定位单算子数据来源。
+- 当 `layer0.json` 中的 op 类型是 `prefill_add_fp16MN_fp32N_fp32MN`、`add_fp16MN_fp32N_fp32MN`、`prefill_mul_fp32MN_fp32N_fp16MN` 或 `mul_fp32MN_fp32N_fp16MN` 时，脚本不会复制 `install/opX`，而是改用同一单算子目录下的 `install_beforerelayout/opX`，用于保留未重排版本。
+- 命中上述规则时，脚本会打印 layer0 op、算子类型和实际来源文件夹，例如 `op6 -> regular/<prefix>/install_beforerelayout/op0`。
 - 再复制成 `data/layer0_physic`。
 - `layer0_physic` 会把 slice 从逻辑顺序复原到物理顺序。
 
