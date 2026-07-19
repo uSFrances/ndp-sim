@@ -967,9 +967,6 @@
       {
         "op_id": "op0",
         "op_type": "prefill_summac_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -988,9 +985,6 @@
       {
         "op_id": "op1",
         "op_type": "prefill_remote_sum_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 28 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "fan-in=28 partial slices -> 1 result (32 elements)",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1009,9 +1003,6 @@
       {
         "op_id": "op2",
         "op_type": "prefill_mac_SFU_fp32MN_fp32MN",
-        "input_shapes": "A=[1792 x 1 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1030,9 +1021,6 @@
       {
         "op_id": "op3",
         "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 1 x 32]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1051,9 +1039,6 @@
       {
         "op_id": "op4",
         "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-        "input_shapes": "B=[1 x 32 x 64]; A=[1 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1072,9 +1057,6 @@
       {
         "op_id": "op5",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[64 x 32 x 1]; B=[1792 x 1 x 64]; B'=[1792 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1093,9 +1075,6 @@
       {
         "op_id": "op6",
         "op_type": "prefill_add_fp16MN_fp32N_fp32MN",
-        "input_shapes": "B=[1 x 32 x 64]; A=[1 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1114,9 +1093,6 @@
       {
         "op_id": "op7",
         "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1135,9 +1111,6 @@
       {
         "op_id": "op8",
         "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1156,9 +1129,6 @@
       {
         "op_id": "op9",
         "op_type": "prefill_add_fp32MN_fp32MN_fp16MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1177,9 +1147,6 @@
       {
         "op_id": "op10",
         "op_type": "prefill_summac_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 256]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1198,9 +1165,6 @@
       {
         "op_id": "op11",
         "op_type": "prefill_remote_sum_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 4 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "fan-in=4 partial slices -> 1 result (32 elements)",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1219,9 +1183,6 @@
       {
         "op_id": "op12",
         "op_type": "prefill_mac_SFU_fp32MN_fp32MN",
-        "input_shapes": "A=[1792 x 1 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1240,9 +1201,6 @@
       {
         "op_id": "op13",
         "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-        "input_shapes": "A=[1 x 32 x 256]; B=[1 x 1 x 32]",
-        "output_shapes": "out=[1 x 32 x 256]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1261,9 +1219,6 @@
       {
         "op_id": "op14",
         "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-        "input_shapes": "B=[1 x 32 x 256]; A=[1 x 1 x 256]",
-        "output_shapes": "out=[1 x 32 x 256]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1282,9 +1237,6 @@
       {
         "op_id": "op15",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[256 x 32 x 1]; B=[1024 x 1 x 64]; B'=[1024 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1303,9 +1255,6 @@
       {
         "op_id": "op16",
         "op_type": "prefill_add_fp16MN_fp32N_fp32MN",
-        "input_shapes": "B=[1 x 32 x 64]; A=[1 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1324,9 +1273,6 @@
       {
         "op_id": "op17",
         "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1345,9 +1291,6 @@
       {
         "op_id": "op18",
         "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1366,9 +1309,6 @@
       {
         "op_id": "op19",
         "op_type": "prefill_add_fp32MN_fp32MN_fp16MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1387,9 +1327,6 @@
       {
         "op_id": "op20",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[256 x 32 x 1]; B=[1024 x 1 x 64]; B'=[1024 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1408,9 +1345,6 @@
       {
         "op_id": "op21",
         "op_type": "prefill_add_V_fp16MN_fp32N_fp16MN",
-        "input_shapes": "B=[1 x 32 x 64]; A=[1 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1429,9 +1363,6 @@
       {
         "op_id": "op22",
         "op_type": "prefill_gemm_local_qkt",
-        "input_shapes": "A=[32 x 1 x 32]; B=[1 x 32 x 32]; B'=[1 x 32 x 32]",
-        "output_shapes": "out=[1 x 32 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1450,9 +1381,6 @@
       {
         "op_id": "op23",
         "op_type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 4 x 1024]",
-        "output_shapes": "out=[1 x 1 x 1024]",
-        "remote_sum_geometry": "fan-in=4 partial slices -> 1 result (1024 elements)",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1471,9 +1399,6 @@
       {
         "op_id": "op24",
         "op_type": "prefill_add_fp32MN_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 32]; B=[1 x 32 x 32]",
-        "output_shapes": "out=[1 x 32 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1492,9 +1417,6 @@
       {
         "op_id": "op25",
         "op_type": "prefill_max_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1513,9 +1435,6 @@
       {
         "op_id": "op26",
         "op_type": "prefill_sub_SFU_fp32MN_fp32M_fp32MN",
-        "input_shapes": "A=[1 x 32 x 32]; B=[1 x 1 x 32]",
-        "output_shapes": "out=[1 x 32 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1534,9 +1453,6 @@
       {
         "op_id": "op27",
         "op_type": "prefill_sum_rec_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1555,9 +1471,6 @@
       {
         "op_id": "op28",
         "op_type": "prefill_mul_fp32MN_fp32M_fp16MN",
-        "input_shapes": "A=[1 x 32 x 32]; B=[1 x 1 x 32]",
-        "output_shapes": "out=[1 x 32 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1576,9 +1489,6 @@
       {
         "op_id": "op29",
         "op_type": "prefill_gemm_local",
-        "input_shapes": "A=[32 x 1 x 32]; B=[1 x 32 x 32]; B'=[1 x 32 x 32]",
-        "output_shapes": "out=[1 x 32 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1597,9 +1507,6 @@
       {
         "op_id": "op30",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[64 x 32 x 1]; B=[1792 x 1 x 64]; B'=[1792 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1618,9 +1525,6 @@
       {
         "op_id": "op31",
         "op_type": "prefill_add_fp32MN_fp16MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1639,9 +1543,6 @@
       {
         "op_id": "op32",
         "op_type": "prefill_summac_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1660,9 +1561,6 @@
       {
         "op_id": "op33",
         "op_type": "prefill_remote_sum_fp32MN_fp32MN",
-        "input_shapes": "A=[1 x 28 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "fan-in=28 partial slices -> 1 result (32 elements)",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1681,9 +1579,6 @@
       {
         "op_id": "op34",
         "op_type": "prefill_mac_SFU_fp32MN_fp32MN",
-        "input_shapes": "A=[1792 x 1 x 32]",
-        "output_shapes": "out=[1 x 1 x 32]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1702,9 +1597,6 @@
       {
         "op_id": "op35",
         "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 1 x 32]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1723,9 +1615,6 @@
       {
         "op_id": "op36",
         "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-        "input_shapes": "B=[1 x 32 x 64]; A=[1 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1744,9 +1633,6 @@
       {
         "op_id": "op37",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[64 x 32 x 1]; B=[1792 x 1 x 320]; B'=[1792 x 1 x 320]",
-        "output_shapes": "out=[1 x 32 x 320]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1765,9 +1651,6 @@
       {
         "op_id": "op38",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[64 x 32 x 1]; B=[1792 x 1 x 320]; B'=[1792 x 1 x 320]",
-        "output_shapes": "out=[1 x 32 x 320]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1786,9 +1669,6 @@
       {
         "op_id": "op39",
         "op_type": "prefill_silu_fp16MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 320]",
-        "output_shapes": "out=[1 x 32 x 320]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 8.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1807,9 +1687,6 @@
       {
         "op_id": "op40",
         "op_type": "prefill_mul_fp32MN_fp16MN_fp16MN",
-        "input_shapes": "A=[1 x 32 x 320]; B=[1 x 32 x 320]",
-        "output_shapes": "out=[1 x 32 x 320]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1828,9 +1705,6 @@
       {
         "op_id": "op41",
         "op_type": "prefill_gemm_ring_4slice",
-        "input_shapes": "A=[320 x 32 x 1]; B=[8960 x 1 x 64]; B'=[8960 x 1 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "gemm",
         "peak_compute_ops_per_cycle": 256.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -1849,9 +1723,6 @@
       {
         "op_id": "op42",
         "op_type": "prefill_add_fp32MN_fp16MN_fp32MN",
-        "input_shapes": "A=[1 x 32 x 64]; B=[1 x 32 x 64]",
-        "output_shapes": "out=[1 x 32 x 64]",
-        "remote_sum_geometry": "-",
         "compute_domain": "general",
         "peak_compute_ops_per_cycle": 16.0,
         "peak_memory_bandwidth_bytes_per_cycle": 32.0,
@@ -2175,9 +2046,6 @@
     {
       "op_id": "op0",
       "op_type": "prefill_summac",
-      "input_shapes": "inA=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 992.0,
@@ -2217,9 +2085,6 @@
     {
       "op_id": "op1",
       "op_type": "prefill_remote_sum_Mfp32_Mfp32",
-      "input_shapes": "inA=[1 x 28 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "fan-in=28 partial slices -> 1 result (32 elements)",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 864.0,
@@ -2266,9 +2131,6 @@
     {
       "op_id": "op2",
       "op_type": "prefill_mac_SFU",
-      "input_shapes": "inA=[896 x 1 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 32.0,
@@ -2308,9 +2170,6 @@
     {
       "op_id": "op3",
       "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2350,9 +2209,6 @@
     {
       "op_id": "op4",
       "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-      "input_shapes": "inA=[1 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2392,9 +2248,6 @@
     {
       "op_id": "op5",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[32 x 32 x 1]; inB=[896 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1835008.0,
@@ -2434,9 +2287,6 @@
     {
       "op_id": "op6",
       "op_type": "prefill_add_fp16MN_fp32N_fp32MN",
-      "input_shapes": "inA=[1 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2476,9 +2326,6 @@
     {
       "op_id": "op7",
       "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2518,9 +2365,6 @@
     {
       "op_id": "op8",
       "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2560,9 +2404,6 @@
     {
       "op_id": "op9",
       "op_type": "prefill_add_fp32MN_fp32MN_fp16MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2602,9 +2443,6 @@
     {
       "op_id": "op10",
       "op_type": "prefill_summac",
-      "input_shapes": "inA=[1 x 32 x 256]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 8160.0,
@@ -2644,9 +2482,6 @@
     {
       "op_id": "op11",
       "op_type": "prefill_remote_sum_Mfp32_Mfp32",
-      "input_shapes": "inA=[1 x 4 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "fan-in=4 partial slices -> 1 result (32 elements)",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 96.0,
@@ -2693,9 +2528,6 @@
     {
       "op_id": "op12",
       "op_type": "prefill_mac_SFU",
-      "input_shapes": "inA=[896 x 1 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 32.0,
@@ -2735,9 +2567,6 @@
     {
       "op_id": "op13",
       "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 256]; inB=[1 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 256]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 8192.0,
@@ -2777,9 +2606,6 @@
     {
       "op_id": "op14",
       "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-      "input_shapes": "inA=[1 x 1 x 256]; inB=[1 x 32 x 256]",
-      "output_shapes": "out=[1 x 32 x 256]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 8192.0,
@@ -2819,9 +2645,6 @@
     {
       "op_id": "op15",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[256 x 32 x 1]; inB=[1024 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 2097152.0,
@@ -2861,9 +2684,6 @@
     {
       "op_id": "op16",
       "op_type": "prefill_add_fp16MN_fp32N_fp32MN",
-      "input_shapes": "inA=[1 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2903,9 +2723,6 @@
     {
       "op_id": "op17",
       "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2945,9 +2762,6 @@
     {
       "op_id": "op18",
       "op_type": "prefill_mul_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -2987,9 +2801,6 @@
     {
       "op_id": "op19",
       "op_type": "prefill_add_fp32MN_fp32MN_fp16MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3029,9 +2840,6 @@
     {
       "op_id": "op20",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[256 x 32 x 1]; inB=[1024 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 2097152.0,
@@ -3071,9 +2879,6 @@
     {
       "op_id": "op21",
       "op_type": "prefill_add_V_fp16MN_fp32N_fp16MN",
-      "input_shapes": "inA=[1 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3113,9 +2918,6 @@
     {
       "op_id": "op22",
       "op_type": "gemm_local_qkt_fp16_fp16_fp32",
-      "input_shapes": "inA=[32 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 65536.0,
@@ -3155,9 +2957,6 @@
     {
       "op_id": "op23",
       "op_type": "prefill_remote_sum_fp32MN_fp32MN_2d",
-      "input_shapes": "inA=[1 x 4 x 1024]",
-      "output_shapes": "out=[1 x 1 x 1024]",
-      "remote_sum_geometry": "fan-in=4 partial slices -> 1 result (1024 elements)",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 3072.0,
@@ -3204,9 +3003,6 @@
     {
       "op_id": "op24",
       "op_type": "prefill_add_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3246,9 +3042,6 @@
     {
       "op_id": "op25",
       "op_type": "prefill_max",
-      "input_shapes": "inA=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 992.0,
@@ -3288,9 +3081,6 @@
     {
       "op_id": "op26",
       "op_type": "prefill_sub_SFU_fp32MN_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3330,9 +3120,6 @@
     {
       "op_id": "op27",
       "op_type": "prefill_sum_rec_fp32MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 992.0,
@@ -3372,9 +3159,6 @@
     {
       "op_id": "op28",
       "op_type": "prefill_mul_fp32MN_fp32M_fp16MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3414,9 +3198,6 @@
     {
       "op_id": "op29",
       "op_type": "gemm_local_fp16_fp16_fp16",
-      "input_shapes": "inA=[32 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 65536.0,
@@ -3456,9 +3237,6 @@
     {
       "op_id": "op30",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[32 x 32 x 1]; inB=[896 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1835008.0,
@@ -3498,9 +3276,6 @@
     {
       "op_id": "op31",
       "op_type": "prefill_add_fp32MN_fp16MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3540,9 +3315,6 @@
     {
       "op_id": "op32",
       "op_type": "prefill_summac",
-      "input_shapes": "inA=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 992.0,
@@ -3582,9 +3354,6 @@
     {
       "op_id": "op33",
       "op_type": "prefill_remote_sum_Mfp32_Mfp32",
-      "input_shapes": "inA=[1 x 28 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "fan-in=28 partial slices -> 1 result (32 elements)",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 864.0,
@@ -3631,9 +3400,6 @@
     {
       "op_id": "op34",
       "op_type": "prefill_mac_SFU",
-      "input_shapes": "inA=[896 x 1 x 32]",
-      "output_shapes": "out=[1 x 1 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 32.0,
@@ -3673,9 +3439,6 @@
     {
       "op_id": "op35",
       "op_type": "prefill_mul_fp32MN_fp32M_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3715,9 +3478,6 @@
     {
       "op_id": "op36",
       "op_type": "prefill_mul_fp32MN_fp32N_fp16MN",
-      "input_shapes": "inA=[1 x 1 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,
@@ -3757,9 +3517,6 @@
     {
       "op_id": "op37",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[32 x 32 x 1]; inB=[896 x 1 x 64]",
-      "output_shapes": "out=[1 x 32 x 64]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 3670016.0,
@@ -3799,9 +3556,6 @@
     {
       "op_id": "op38",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[32 x 32 x 1]; inB=[896 x 1 x 64]",
-      "output_shapes": "out=[1 x 32 x 64]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 3670016.0,
@@ -3841,9 +3595,6 @@
     {
       "op_id": "op39",
       "op_type": "prefill_silu_fp16MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 64]",
-      "output_shapes": "out=[1 x 32 x 64]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 8.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 2048.0,
@@ -3883,9 +3634,6 @@
     {
       "op_id": "op40",
       "op_type": "prefill_mul_fp32MN_fp16MN_fp16MN",
-      "input_shapes": "inA=[1 x 32 x 64]; inB=[1 x 32 x 64]",
-      "output_shapes": "out=[1 x 32 x 64]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 2048.0,
@@ -3925,9 +3673,6 @@
     {
       "op_id": "op41",
       "op_type": "ring_gemm_fp16_fp16_fp16",
-      "input_shapes": "inA=[64 x 32 x 1]; inB=[1792 x 1 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 256.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 3670016.0,
@@ -3967,9 +3712,6 @@
     {
       "op_id": "op42",
       "op_type": "prefill_add_fp32MN_fp16MN_fp32MN",
-      "input_shapes": "inA=[1 x 32 x 32]; inB=[1 x 32 x 32]",
-      "output_shapes": "out=[1 x 32 x 32]",
-      "remote_sum_geometry": "-",
       "peak_compute_ops_per_cycle": 16.0,
       "peak_memory_bandwidth_bytes_per_cycle": 32.0,
       "work_ops": 1024.0,

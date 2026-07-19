@@ -72,6 +72,7 @@ generate_python_golden/
 ├── README.md                                # 本文件
 ├── tensor_io.py                             # Golden/install 文件命名、读写及 128-bit 文本转换
 ├── decode_ops.py                            # 19 个 Decode 算子注册表 + 43-op 全层 Golden 模型
+├── decode_data_loader.py                    # 从 model_weights_32 加载真实权重 + KV cache 生成/加载
 ├── generate_decode_execplan_inputs.py       # 生成 Decode 单算子 execution-plan 图
 ├── generate_decode_program_json.py          # 从 manifest 生成 prefill 兼容的 layer0_decode.json（43-op）
 ├── assemble_decode_package.py               # 按 sca_cfg 汇集自包含 Decode 加载包并记录哈希
@@ -199,7 +200,7 @@ flowchart TD
 | `decode_attention_length` | 当前 step 使用的注意力向量长度，本阶段为 32，不追加到 33 |
 | `random_seed` | 合成输入及临时 GEMV 权重的随机种子，保证可复现 |
 
-本阶段固定使用 `hidden_size=896`，不进行 hidden padding。真实模型权重暂不参与 Decode Golden；GEMV 使用固定 seed 的合成 fp16 矩阵，以便先完成算子数据和软件执行计划联调。
+本阶段固定使用 `hidden_size=896`，不做 hidden padding。真实模型权重由 `model_weights_32/` 提供（已裁切到 896×1792 维度）。KV cache 通过 mini-prefill 预生成并缓存复用。
 
 ---
 
@@ -532,13 +533,15 @@ Golden 数据和重排文件的命名遵循统一规范：
 - `hidden_size=896`，不做 hidden padding；28 个 slice，每个 hidden slice 恰好 32 个元素。
 - KV cache 初始长度、`sequence_length` 和当前注意力长度均为 32；只生成 step 0，一个 Decode step。
 - **43-op 完整解码层**，严格镜像 Prefill `layer0_0610_remapped.json` 的算子拓扑（19 种算子类型）。
-- 程序 JSON（`layer0_decode.json`）使用 prefill 兼容的 3D 形状约定 `[1, 1, N]`、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）、RoPE 的 `rope_slice_xor2` 输出类型标记。
-- RoPE 按 prefill relayout 规则：sin 表后半自带负号，activation 不做取反，add 做交叉配对合并。
+- 程序 JSON（`layer0_decode.json`）使用 prefill 兼容的 3D 形状约定 `[1, 1, N]`、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）。
+- **RoPE 无需跨 slice 数据交换**：通过重排 sin table（`[+sin,-sin]` → `[-sin,+sin]`）和半区交换 op8/op18 的激活输入，op9/op19 可直接做逐元素 ADD 得到正确 RoPE 结果。`rope_slice_xor2` 类型标记已移除。
+- 程序 JSON 中 op22/op29 的 K/V cache 来自 `ext`（外部存储），而非 op19/op21（仅当前 token）。
+- Attention 链（op22~op28）shape 为 decode 向量语义（`[1, 1, attention_length]`），非 prefill 矩阵语义。
 - mul_cast（RMS Norm scale）使用 `hidden_size` 维随机权重向量，非标量 1.0。
 - 端口顺序与 prefill 一致：add_residual 的 A=外部残差/B=数据路径；mul_cast 的 A=scale/B=data。
 - GEMV 权重复用 GEMM 的 Ring/Local relayout 规则（`N8K2N4K` / `N8M2N4`），B/B' 对半拆分。
 - install 数据按 `op0`~`op42` 编号命名文件夹（通过 manifest 中的 `layer_idx` 字段）。
-- 暂不加载真实权重，GEMV 权重及 scale 向量由 `random_seed=0` 确定性合成。
+- 真实权重由 `decode_data_loader.py` 从 `model_weights_32/` 加载，KV cache 首次运行自动生成并缓存到 `kv_cache/`。`build_decode_golden_cases(config, weights=..., kv_cache=...)` 传 `None` 可回退随机合成。
 
 ### 背景：Prefill vs Decode 的计算特征差异
 
@@ -556,9 +559,17 @@ Golden 数据和重排文件的命名遵循统一规范：
 
 1. **向量按 slice 切分但不做二维重排**：hidden 向量按 28 份连续切分（每份 32 元素）；注意力向量先按 head，再按每 head 的 4 个 slice 切分。slice 内元素顺序不变；长度为 1 的标量按需复制到所有 slice。
 
-2. **程序 JSON 严格镜像 Prefill**：43-op 解码层使用 prefill 兼容的 3D 形状约定（如 `[1, 1, "hidden_size//used_slices"]`）、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）。RoPE sin 表后半自带负号，activation 不做取反，add 做交叉配对合并（`y0=cos₀+sin₁, y1=sin₀+cos₁`），op8/op18 输出标记 `"type": "rope_slice_xor2"`。
+2. **程序 JSON 严格镜像 Prefill**：43-op 解码层使用 prefill 兼容的 3D 形状约定（如 `[1, 1, "hidden_size//used_slices"]`）、正确的分支/汇合 source 引用、`fp16` 显式 dtype（fp32 隐式）。
 
-3. **GEMV 复用 GEMM 重排规则**：Ring 权重按 N 轴切片 → ring reorder → `N8K2N4K` relayout → B/B' 对半拆分。Local 权重按 K 轴切片 → `N8M2N4` relayout → B/B' 对半拆分。
+3. **RoPE 通过 table 重排消除跨 slice 路由**：sin table 重排为 `[-sin, +sin]`（前后半区交换），op8/op18 的激活输入做半区交换，op9/op19 直接逐元素 ADD 即得正确 RoPE。不再需要 `rope_slice_xor2` 类型标记。
+
+4. **GQA 支持（num_kv_heads=1）**：K/V 分支输出维度 `kv_dim=128`（仅 1 个 KV head），使用独立 RoPE table（128 维）。K/V GEMV ring 使用 `KV_HW_PARAMS`（4 slices），K/V passthrough 自动检测并降为 4 slices。K/V cache 形状 `(128, 32, 1)`，通过 `np.tile` 广播到 7 个 Q head。
+
+5. **真实权重加载**：`decode_data_loader.py` 从 `model_weights_32/` 加载已裁切权重，`build_decode_golden_cases(config, weights=..., kv_cache=...)` 可选传参，传 `None` 回退随机生成。
+
+6. **KV cache 预生成**：运行一次 mini-prefill（真实权重 + K/V 投影 + RoPE），生成 `kv_cache/layer0_kv_cache.npz`，后续 decode 直接加载复用，确保测试数据与实际 pipeline 一致。
+
+7. **GEMV 复用 GEMM 重排规则**：Ring 权重按 N 轴切片 → ring reorder → `N8K2N4K` relayout → B/B' 对半拆分。Local 权重按 K 轴切片 → `N8M2N4` relayout → B/B' 对半拆分。
 
 4. **mul_cast 使用真实 scale 向量**：RMS Norm 的 scale 步骤使用 `hidden_size` 维随机权重向量（范围 0.5~1.5），非标量 1.0。
 
@@ -673,6 +684,7 @@ flowchart TD
 ```
 generate_python_golden/
 ├── decode_ops.py                         # [新建] 19 种算子注册表 + 43-op 全层 Golden 模型
+├── decode_data_loader.py                 # [新建] 真实权重加载 + KV cache 生成/加载
 ├── tensor_io.py                          # [新建] 统一 Golden/install I/O
 ├── deepseek1.5b_decode_golden.py         # [新建] Phase A 入口
 ├── run_single_op_decode.py               # [新建] Phase B 调度器
@@ -696,8 +708,8 @@ generate_python_golden/
 │   └── output/layer0_decode/              # [生成] bitstream/execplan/sca_cfg
 │
 └── single_op_data/
-    ├── decode_passthrough.py              # [新建] 向量 slice 切分 + 标量复制
-    ├── relayout_gemv.py                   # [新建] Ring/Local GEMV 重排 + B/B' 拆分（3D 适配）
+    ├── decode_passthrough.py              # [新建] 向量 slice 切分 + 标量复制（K/V 自动 4-slice）
+    ├── relayout_gemv.py                   # [新建] Ring/Local GEMV 重排 + B/B' 拆分（K/V 自动 KV_HW_PARAMS）
     └── install_decode/op0...op42/slice00...slice27/
 ```
 
@@ -715,7 +727,7 @@ generate_python_golden/
 | `prefill_gemm_ring_4slice` | `decode_gemv_ring` | Ring All-Reduce 矩阵-向量乘 |
 | `prefill_add_fp16MN_fp32N_fp32MN` | `decode_add_fp16N_fp32N_fp32N` | fp16 + fp32 残差加 |
 | `prefill_mul_fp32MN_fp32MN_fp32MN` | `decode_mul_fp32N_fp32N_fp32N` | 向量×向量（RoPE cos/sin） |
-| `prefill_add_fp32MN_fp32MN_fp16MN` | `decode_add_fp32N_fp32N_fp16N` | RoPE 交叉配对合并 |
+| `prefill_add_fp32MN_fp32MN_fp16MN` | `decode_add_fp32N_fp32N_fp16N` | RoPE 合并（table 重排后逐元素 ADD，无需跨 slice 路由） |
 | `prefill_max_fp32MN_fp32MN` | `decode_max_fp32N_fp32N` | 每 head 局部最大值 |
 | `prefill_sub_SFU_fp32MN_fp32M_fp32MN` | `decode_sub_SFU_fp32N_fp32_fp32N` | 向量−标量（scores − max） |
 | `prefill_sum_rec_fp32MN_fp32MN` | `decode_sum_rec_fp32N_fp32N` | 求和倒数（Softmax） |

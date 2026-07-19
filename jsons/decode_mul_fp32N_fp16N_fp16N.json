@@ -42,7 +42,7 @@
             "last_index": 2
         }
     },
-"lc_pe_configs": {
+    "lc_pe_configs": {
         "PE0": {
             "alu_opcode": "mul",
             "inport2":{

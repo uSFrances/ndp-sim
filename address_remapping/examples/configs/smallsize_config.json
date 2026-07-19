@@ -1,4 +1,5 @@
 {
+    "model_name": "smallsize",
     "hidden_size": 896,
     "intermediate_size": 1792,
     "num_attention_heads": 7,
@@ -8,14 +9,8 @@
     "sequence_length": 32,
     "slice_per_head": 4,
     "used_slices": 28,
-    "kv_padding": 256,
+    "kv_padding": 512,
     "kv_padding_a": 256,
     "kv_padding_b": 1024,
-    "target_op": "all",
-    "target_op_decode": "all",
-    "kv_cache_initial_length": 32,
-    "decode_steps": 1,
-    "decode_attention_length": 32,
-    "random_seed": 0
+    "target_op": "all"
 }
-
