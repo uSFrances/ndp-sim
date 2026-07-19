@@ -193,25 +193,31 @@ def _apply_graph_level_write_reg_annotations(
     if result.status != "ok":
         return result
 
+    producer = str(edge["producer"])
     consumer = str(edge["consumer"])
     consumer_port = str(edge.get("consumer_port", ""))
     tensor_name = str(edge.get("tensor", edge.get("tensor_name", "")))
+    producer_spec = ops[producer]
     consumer_spec = ops[consumer]
+    if (
+        producer_spec.op_type == "ring_gemm_fp16_fp16_fp16"
+        and str(edge.get("producer_port", "")) == "out"
+        and consumer_spec.op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
+        and consumer_port == "inB"
+    ):
+        # The graph-level n8/m8 override is a physical register reorder.
+        result = replace(
+            result,
+            write_reg_required=True,
+            write_reg_hint=_merge_write_reg_hints(
+                result.write_reg_hint,
+                "reorder(n8,m8)->(m8,n8)",
+            ),
+        )
     if _is_rope_slice_exchange_edge(consumer_spec, consumer_port, tensor_name):
         hint = _merge_write_reg_hints(
             result.write_reg_hint,
             "cross_slice_base_addr_exchange(rope_half_swap_for_local_add)",
-        )
-        result = replace(
-            result,
-            write_reg_required=True,
-            write_reg_hint=hint,
-        )
-
-    if _is_v_row_writeback_edge(edge=edge, ops=ops):
-        hint = _merge_write_reg_hints(
-            result.write_reg_hint,
-            "row_writeback(reorder(n8,m8)->(m8,n8))",
         )
         result = replace(
             result,
@@ -228,19 +234,6 @@ def _is_rope_slice_exchange_edge(consumer_spec: OpSpec, consumer_port: str, tens
     if consumer_port != "inB":
         return False
     return tensor_name in {"q_sin_fp32", "k_sin_fp32"}
-
-
-def _is_v_row_writeback_edge(edge: Dict[str, object], ops: Dict[str, OpSpec]) -> bool:
-    producer = str(edge["producer"])
-    consumer = str(edge["consumer"])
-    producer_port = str(edge.get("producer_port", ""))
-    consumer_port = str(edge.get("consumer_port", ""))
-    return (
-        ops[producer].op_type == "ring_gemm_fp16_fp16_fp16"
-        and producer_port == "out"
-        and ops[consumer].op_type == "prefill_add_V_fp16MN_fp32N_fp16MN"
-        and consumer_port == "inB"
-    )
 
 
 def _merge_write_reg_hints(*hints: str) -> str:
