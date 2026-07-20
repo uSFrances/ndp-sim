@@ -892,18 +892,19 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc5.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
+        "iga_lc6.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
-            port2 = 32,
+            port1 = (a_m or 0) * 4,
+            port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 16,
+            port1 = (a_m or 0) * 2,
             port2 = 16,
         ),
     }
@@ -919,21 +920,20 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n if d_n is not None else 0,
         "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc7.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc8.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc6.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 16,
+            port1 = (a_m or 0) * 2,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
-            port2 = 32,
+            port1 = (a_m or 0) * 4,
+            port2 = 16,
         ),
     }
 
@@ -1690,7 +1690,7 @@ def _compute_decode_add_fp32N_fp32N_fp16N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 
@@ -1715,7 +1715,7 @@ def _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
@@ -1758,7 +1758,7 @@ def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
     
     return {
         "iga_lc0.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 OP_CONTROL_REGISTER_FN = {

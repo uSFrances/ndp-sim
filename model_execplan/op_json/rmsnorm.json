@@ -32,11 +32,10 @@
     {
       "id": "op1",
       "type": "prefill_remote_sum_fp32MN_fp32MN",
-      "used_slices": "0b1111111111111111111111111111",
+      "used_slices": "0b1000000000000000000000000000",
       "inputs": {
         "A": {
           "shape": [1, "used_slices", "sequence_length"],
-          "type": "slice0",
           "source": "op0"
         }
       },
@@ -51,6 +50,7 @@
       "inputs": {
         "A": {
           "shape": ["hidden_size", 1, "sequence_length"],
+          "type": "slice0",
           "source":"op1"
         }
       },

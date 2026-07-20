@@ -20,6 +20,7 @@
       "inputs": {
         "A": {
           "shape": [1, "sequence_length", "sequence_length"],
+          "type": "slice4",
           "remapping": null,
           "source": "op-1"
         },
