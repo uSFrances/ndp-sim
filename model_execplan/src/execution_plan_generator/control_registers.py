@@ -1227,9 +1227,9 @@ def _compute_decode_gemv_ring_control_register_updates(
     b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (a_k, a_n, a_m) = a_shape if a_shape is not None else (None, None, None)
-    (b_k, b_n, b_m) = b_shape if b_shape is not None else (None, None, None)
-    (b_prime_k, b_prime_n, b_prime_m) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_k, b_prime_m, b_prime_n) = b_prime_shape if b_prime_shape is not None else (None, None, None)
 
 
     updates: dict[str, int] = {

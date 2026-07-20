@@ -20,6 +20,7 @@ try:
     from .relayout_gemm import (
         BASE_HW_PARAMS,
         KV_HW_PARAMS,
+        install_target_slices,
         relayout_in0_N8K2N4K,
         reorder_in0_slice_by_ring,
     )
@@ -28,6 +29,7 @@ except ImportError:  # Standalone: python single_op_data/relayout_gemv.py
     from relayout_gemm import (  # type: ignore[no-redef]
         BASE_HW_PARAMS,
         KV_HW_PARAMS,
+        install_target_slices,
         relayout_in0_N8K2N4K,
         reorder_in0_slice_by_ring,
     )
@@ -83,49 +85,56 @@ def write_gemv_ring_case(
         raise ValueError(f"decode_gemv_ring weight must be 2D, got {weight.shape}")
 
     k_size, n_size = weight.shape
-    # All GEMV ring ops use 28-slice BASE_HW_PARAMS (matching prefill).
-    # K/V GEMV (GQA): replicate N from kv_dim=128 → 7×128=896
-    # so both K=896 and N=896 divide evenly into 28 slices.
-    hw_params = BASE_HW_PARAMS
-    num_slices = hw_params["num_slices"]  # 28
 
+    # --- Select HW params following prefill OP_SPECS convention ---
+    # q_gen: BASE (28 slices)  |  k_gen/v_gen: KV (4 logical → 28 physical)
     kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])  # 128
-    heads = int(config["num_attention_heads"])  # 7
+    is_kv_gemv = (n_size == kv_dim and n_size < k_size)
+    hw_params = KV_HW_PARAMS if is_kv_gemv else BASE_HW_PARAMS
+    logical_slices = hw_params["num_slices"]  # 4 for KV, 28 otherwise
 
-    # --- K/V GEMV: replicate N (128 → 7×128=896) for GQA broadcast ---
-    if n_size == kv_dim and n_size < k_size and n_size % num_slices != 0:
-        weight = np.tile(weight, (1, heads))  # (896, 128) → (896, 896)
-        n_size = weight.shape[1]
-        output = np.tile(output, heads)       # (128,) → (896,)
+    # --- kv_padding for K/V: pad K-dim to multiple of logical_slices ---
+    kv_pad_k = int(config.get("kv_padding_b", 0))
+    if is_kv_gemv and kv_pad_k > k_size:
+        weight_pad = np.zeros((kv_pad_k, n_size), dtype=weight.dtype)
+        weight_pad[:k_size, :] = weight
+        weight = weight_pad
+        k_size = kv_pad_k
 
-    if k_size % num_slices or n_size % num_slices:
+    kv_pad_a = int(config.get("kv_padding_a", 0))
+    if is_kv_gemv and kv_pad_a > 0:
+        pad_total = kv_pad_a * logical_slices
+        if pad_total > activation.size:
+            act_pad = np.zeros(pad_total, dtype=activation.dtype)
+            act_pad[:activation.size] = activation
+            activation = act_pad
+
+    if k_size % logical_slices or n_size % logical_slices:
         raise ValueError(
-            f"ring GEMV dimensions K={k_size}, N={n_size} must divide {num_slices} slices"
+            f"ring GEMV dimensions K={k_size}, N={n_size} must divide {logical_slices} slices"
         )
     if activation.size != k_size:
         raise ValueError(
             f"ring GEMV activation size {activation.size} != K={k_size} (after kv_padding)"
         )
     if output.size != n_size:
-        raise ValueError(
-            f"ring GEMV output size {output.size} != N={n_size} (after N-padding)"
-        )
+        raise ValueError("ring GEMV output dimensions do not match the weight N")
 
-    slice_k = k_size // num_slices
-    slice_n = n_size // num_slices
+    slice_k = k_size // logical_slices
+    slice_n = n_size // logical_slices
     physical_mapping = list(hw_params["physical_mapping"])
     ring_order = list(hw_params["ring_order"])
     entry_id = op_label or str(case_entry.get("instance_id", case_entry.get("id", case_entry.get("name", ""))))
     op_dir = install_dir / entry_id
 
-    for logical_slice in range(num_slices):
+    for logical_slice in range(logical_slices):
         k_start = logical_slice * slice_k
         n_start = logical_slice * slice_n
         weight_slice = weight[:, n_start : n_start + slice_n]
         weight_ring = reorder_in0_slice_by_ring(
             weight_slice,
             logical_slice,
-            num_slices,
+            logical_slices,
             slice_k,
             ring_order,
         )
@@ -133,15 +142,19 @@ def write_gemv_ring_case(
             weight_ring,
             k_size,
             slice_n,
-            num_slices,
+            logical_slices,
         )
-        physical_slice = physical_mapping[logical_slice]
-        _write_gemv_slice(
-            op_dir / f"slice{physical_slice:02d}",
-            activation[k_start : k_start + slice_k],
-            weight_linearized,
-            output[n_start : n_start + slice_n],
-        )
+
+        # Write to ALL physical slices for this logical slice
+        #   Q/FFN:   logical == physical (1 target each)
+        #   K/V:     4 logical, each → 7 physical (via install_targets)
+        for physical_slice in install_target_slices(hw_params, logical_slice):
+            _write_gemv_slice(
+                op_dir / f"slice{physical_slice:02d}",
+                activation[k_start : k_start + slice_k],
+                weight_linearized,
+                output[n_start : n_start + slice_n],
+            )
 
 
 def write_gemv_local_case(

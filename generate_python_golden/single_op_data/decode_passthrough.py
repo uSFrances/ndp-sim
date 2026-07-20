@@ -115,41 +115,45 @@ def slice_passthrough_case(
         }
         output_chunks = replicate_scalar(output, slice_count)
     elif policy == "hidden_elementwise":
-        # K/V ops (GQA) produce kv_dim=128 vectors — replicate 7× to 896
-        # so they can be split into 28 slices (matching prefill broadcast).
-        hidden = int(config["hidden_size"])
-        heads = int(config["num_attention_heads"])
+        # K/V element-wise ops (kv_dim=128): split into 4 logical slices,
+        # replicate to 28 physical slices via KV_HW_PARAMS.install_targets.
+        # NO kv_padding — 128/4=32 is already integer.
         kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
-        def _split_or_replicate(tensor: np.ndarray, sc: int) -> list[np.ndarray]:
-            flat = np.asarray(tensor).reshape(-1, order="F")
-            if flat.size == 1:
-                return replicate_scalar(tensor, sc)
-            if flat.size == kv_dim and flat.size < hidden:
-                # GQA broadcast: replicate 7× for all Q heads
-                flat = np.tile(flat, heads)  # 128 → 896
-            return split_vector(flat, sc)
-        # Auto-tile K/V tensors in-place
-        all_tensors = list(inputs.values()) + [output]
-        need_tile = any(
+        is_kv_elemwise = any(
             np.asarray(t).reshape(-1, order="F").size == kv_dim
-            and kv_dim < hidden
-            for t in all_tensors
+            for t in (list(inputs.values()) + [output])
         )
-        if need_tile:
-            tiled_inputs = {}
-            for port, tensor in inputs.items():
+        if is_kv_elemwise:
+            from single_op_data.relayout_gemm import KV_HW_PARAMS, install_target_slices
+            logical_slices = KV_HW_PARAMS["num_slices"]  # 4
+            def _split_kv_4(tensor: np.ndarray) -> list[np.ndarray]:
                 flat = np.asarray(tensor).reshape(-1, order="F")
-                if flat.size == kv_dim:
-                    flat = np.tile(flat, heads)
-                tiled_inputs[port] = flat.reshape(tensor.shape[0], -1) if tensor.ndim > 1 else flat
-            inputs = tiled_inputs
-            flat_out = np.asarray(output).reshape(-1, order="F")
-            if flat_out.size == kv_dim:
-                output = np.tile(flat_out, heads).reshape(output.shape[0], -1) if output.ndim > 1 else np.tile(flat_out, heads)
-        input_chunks = {
-            port: _split_or_replicate(tensor, slice_count) for port, tensor in inputs.items()
-        }
-        output_chunks = _split_or_replicate(output, slice_count)
+                if flat.size == 1:
+                    return [flat.copy() for _ in range(logical_slices)]
+                return split_vector(tensor, logical_slices)
+            logical_input_chunks = {port: _split_kv_4(t) for port, t in inputs.items()}
+            logical_output_chunks = _split_kv_4(output)
+
+            # Replicate to physical slices
+            input_chunks = {}
+            for port in inputs:
+                input_chunks[port] = [None] * slice_count
+            output_chunks = [None] * slice_count
+            for logical_idx in range(logical_slices):
+                for phys_idx in install_target_slices(KV_HW_PARAMS, logical_idx):
+                    for port in inputs:
+                        input_chunks[port][phys_idx] = logical_input_chunks[port][logical_idx]
+                    output_chunks[phys_idx] = logical_output_chunks[logical_idx]
+        else:
+            def _split_or_replicate(tensor: np.ndarray, sc: int) -> list[np.ndarray]:
+                flat = np.asarray(tensor).reshape(-1, order="F")
+                if flat.size == 1:
+                    return replicate_scalar(tensor, sc)
+                return split_vector(tensor, sc)
+            input_chunks = {
+                port: _split_or_replicate(tensor, slice_count) for port, tensor in inputs.items()
+            }
+            output_chunks = _split_or_replicate(output, slice_count)
     elif policy == "remote_sum":
         input_chunks = {"A": split_one_value_per_slice(inputs["A"], slice_count)}
         output_chunks = replicate_scalar(output, slice_count)
