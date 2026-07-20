@@ -113,14 +113,15 @@ def _format_port_shapes(op_data: Mapping[str, object], direction: str) -> str:
         # External dimensions retain fan-in axes that are intentionally absent
         # from the logical layout of remote-reduction input ports.
         shape = debug.get("external_dims") or _shape_list(port_data)
+        if len(shape) == 3:
+            shape = shape[1:]
         formatted.append(f"{port_name}=[{' x '.join(str(value) for value in shape)}]")
     return "; ".join(formatted)
 
 
 def _format_remote_sum_geometry(geometry: Mapping[str, object]) -> str:
     fan_in = int(geometry["remote_fan_in"])
-    output_elements = int(geometry["remote_output_elements"])
-    return f"fan-in={fan_in} partial slices -> 1 result ({output_elements} elements)"
+    return f"fan_in={fan_in}"
 
 
 def _count_used_slices(value: object) -> Optional[int]:
@@ -238,8 +239,11 @@ def _remote_sum_geometry(op_data: Mapping[str, object]) -> Dict[str, int]:
     fan_in = int(external_dims[1]) if len(external_dims) > 1 else int(op_data.get("used_slices", 1))
     output_shape = _shape_list(outputs[output_port])
     output_elements = _shape_product(output_shape)
+    active_slices = _count_used_slices(op_data.get("used_slices")) or fan_in
     return {
         "remote_fan_in": max(1, fan_in),
+        "remote_active_slices": max(1, active_slices),
+        "remote_group_count": max(1, (active_slices + fan_in - 1) // fan_in),
         "remote_output_elements": int(output_elements),
     }
 
@@ -259,6 +263,8 @@ def _remote_sum_tensor_bytes(
     input_dtype = str(inputs[input_port].get("dtype", getattr(input_layout, "dtype", "fp32")))
     output_dtype = str(outputs[output_port].get("dtype", getattr(output_layout, "dtype", "fp32")))
     fan_in = int(geometry["remote_fan_in"])
+    active_slices = int(geometry["remote_active_slices"])
+    group_count = int(geometry["remote_group_count"])
     output_elements = int(geometry["remote_output_elements"])
     input_bytes_per_element = dtype_bits_fn(input_dtype) // 8
     local_write_bytes = output_elements * dtype_bits_fn(output_dtype) // 8
@@ -280,15 +286,23 @@ def _remote_sum_tensor_bytes(
     if remote_sum_transport != REMOTE_SUM_TRANSPORT_AXI_PULL:
         raise ValueError(f"Unsupported remote_sum transport: {remote_sum_transport}")
 
-    global_read_bytes = fan_in * output_elements * input_bytes_per_element
+    # Each active slice reads every partial in its fan-in group through the
+    # shared global AXI interface, including its local partial.
+    global_read_bytes = active_slices * fan_in * output_elements * input_bytes_per_element
+    total_local_write_bytes = active_slices * local_write_bytes
+    centralized_global_read_bytes = group_count * fan_in * output_elements * input_bytes_per_element
+    centralized_global_return_bytes = group_count * max(0, fan_in - 1) * local_write_bytes
     return (
         global_read_bytes,
-        local_write_bytes,
+        total_local_write_bytes,
         {
-            "byte_scope": "remote_pull_global_read_local_write",
+            "byte_scope": "remote_pull_global_read_total_local_write",
             "global_read_bytes": global_read_bytes,
             "local_write_bytes": local_write_bytes,
-            "global_bandwidth_bytes_per_cycle": _remote_axi_bandwidth_bytes_per_cycle(),
+            "total_local_write_bytes": total_local_write_bytes,
+            "centralized_global_read_bytes": centralized_global_read_bytes,
+            "centralized_global_return_bytes": centralized_global_return_bytes,
+            "global_bandwidth_bytes_per_cycle": _global_axi_total_bandwidth_bytes_per_cycle(),
             **geometry,
         },
     )
@@ -464,9 +478,11 @@ def _build_rows(
                     local_read_bytes / peak_memory_bandwidth_bytes_per_cycle if local_read_bytes else 0.0
                 )
                 ring_transfer_bound_cycles = ring_transfer_bytes / ring_bw if ring_bw and ring_transfer_bytes else 0.0
+                # The local partial is read before remote partials arrive, so
+                # these two stages form one serial input path.
+                ring_read_path_cycles = local_read_bound_cycles + ring_transfer_bound_cycles
                 bandwidth_bound_cycles = max(
-                    local_read_bound_cycles,
-                    ring_transfer_bound_cycles,
+                    ring_read_path_cycles,
                     local_write_bound_cycles,
                 )
             roofline_cycles = max(compute_bound_cycles, bandwidth_bound_cycles)
@@ -879,6 +895,9 @@ def _summarize_domain_operators(rows: Sequence[Mapping[str, object]]) -> List[Di
             "name": _operator_label(row),
             "op_id": row["op_id"],
             "op_type": row["op_type"],
+            "input_shapes": row.get("input_shapes"),
+            "output_shapes": row.get("output_shapes"),
+            "remote_sum_geometry": row.get("remote_sum_geometry"),
             "compute_domain": row.get("compute_domain"),
             "work_ops": row["work_ops"],
             "total_bytes": row["total_bytes"],
@@ -1154,10 +1173,9 @@ def _remote_sum_rows_by_op_id(rows: Sequence[Mapping[str, object]]) -> Dict[str,
 
 
 def _centralized_global_remote_sum_roofline_cycles(row: Mapping[str, object]) -> float:
-    fan_in = int(row.get("remote_fan_in", 1))
-    global_read_bytes = float(row.get("global_read_bytes", 0.0))
+    global_read_bytes = float(row.get("centralized_global_read_bytes", 0.0))
+    global_return_bytes = float(row.get("centralized_global_return_bytes", 0.0))
     local_write_bytes = float(row.get("local_write_bytes", 0.0))
-    global_return_bytes = max(0, fan_in - 1) * local_write_bytes
     global_bound_cycles = (global_read_bytes + global_return_bytes) / _global_axi_total_bandwidth_bytes_per_cycle()
     local_write_bound_cycles = (
         local_write_bytes / float(row["peak_memory_bandwidth_bytes_per_cycle"]) if local_write_bytes else 0.0
@@ -1301,15 +1319,19 @@ def _append_remote_sum_transport_comparison(
             "slice partial results through the slice-to-slice n2n datapath. The ring datapath bandwidth is modeled "
             "as 256 bit/cycle = 32 B/cycle per slice.",
             "",
+            "AXI-pull model: all active slices read every `fan_in` partial in their group through AXI, including "
+            "their local partial. The global read traffic is `active_slices * fan_in * output_elements * dtype_bytes` "
+            "and is divided by the total 8 B/cycle global AXI bandwidth.",
+            "",
             "For each remote-sum op: `local_read_bytes = output_elements * dtype_bytes`, "
             "`ring_transfer_bytes = (fan_in - 1) * output_elements * dtype_bytes`, "
             "`local_write_bytes = output_elements * output_dtype_bytes`, and "
-            "`ring2ring_roofline_cycles = max(local_read_bytes / local_bw, "
+            "`ring2ring_roofline_cycles = max(local_read_bytes / local_bw + "
             "ring_transfer_bytes / 32, local_write_bytes / local_bw, reduction_ops / general_peak)`.",
             "",
-            "Centralized-global remote-sum projection: one slice reads all partial results through global AXI, "
-            "performs the reduction, then sends the reduced result back to the other participating slices through "
-            "global AXI. The global AXI bandwidth is modeled as 128 bit at half slice frequency, i.e. 8 B/cycle. "
+            "Centralized-global remote-sum projection: each group has one central slice read all `fan_in` partials, "
+            "perform the reduction, then return the result to the other `(fan_in - 1)` slices. Read and return "
+            "traffic are both accumulated across `active_slices / fan_in` groups and use the total 8 B/cycle global AXI bandwidth. "
             "This projection keeps all non-remote-sum measured cycles unchanged and scales each remote-sum measured "
             "cycle count by `centralized_global_roofline_cycles / axi_pull_roofline_cycles`.",
             "",
@@ -1552,10 +1574,12 @@ def _append_remote_sum_transport_comparison(
                 "Reduction geometry",
                 "Fan-in",
                 "AXI roofline cycles",
+                "Centralized global roofline cycles",
                 "Ring2Ring roofline cycles",
                 "Speedup",
                 "Measured cycles",
-                "Projected measured cycles",
+                "Projected measured cycles (centralized global)",
+                "Projected measured cycles (Ring2Ring)",
                 "AXI roofline layer share",
                 "Ring2Ring roofline layer share",
                 "Ring transfer bytes",
@@ -1569,11 +1593,23 @@ def _append_remote_sum_transport_comparison(
                     str(axi_remote_rows[op_id].get("remote_sum_geometry", "N/A")),
                     str(axi_remote_rows[op_id].get("remote_fan_in", "N/A")),
                     _fmt_number(axi_remote_rows[op_id].get("roofline_cycles"), digits=0),
+                    _fmt_number(
+                        _centralized_global_remote_sum_roofline_cycles(axi_remote_rows[op_id]),
+                        digits=0,
+                    ),
                     _fmt_number(ring_remote_rows[op_id].get("roofline_cycles"), digits=0),
                     f"{_safe_div(float(axi_remote_rows[op_id]['roofline_cycles']), float(ring_remote_rows[op_id]['roofline_cycles'])):.2f}x"
                     if float(ring_remote_rows[op_id]["roofline_cycles"])
                     else "N/A",
                     _fmt_number(axi_remote_rows[op_id].get("measured_cycles"), digits=0),
+                    _fmt_number(
+                        float(axi_remote_rows[op_id].get("measured_cycles", 0.0))
+                        * _safe_div(
+                            _centralized_global_remote_sum_roofline_cycles(axi_remote_rows[op_id]),
+                            float(axi_remote_rows[op_id]["roofline_cycles"]),
+                        ),
+                        digits=0,
+                    ),
                     _fmt_number(
                         float(axi_remote_rows[op_id].get("measured_cycles", 0.0))
                         * _safe_div(
@@ -1674,12 +1710,6 @@ def _write_summary_tables(
                 f"`num_hidden_layers={graph_params.get('num_hidden_layers')}`",
             ]
         )
-    if model_scaled_ttft_summary is not None:
-        _append_model_scaled_summary(lines, model_scaled_ttft_summary)
-        _append_model_scaled_operator_projection(lines, model_scaled_ttft_summary)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return
-
     lines.extend(
         [
             "",
@@ -1779,7 +1809,7 @@ def _write_summary_tables(
         )
     )
 
-    lines.extend(["", "## Calibration GEMM Operators", ""])
+    lines.extend(["", "## GEMM Operators", ""])
     lines.extend(
         _markdown_table(
             [
@@ -1824,7 +1854,7 @@ def _write_summary_tables(
         )
     )
 
-    lines.extend(["", "## Calibration non-GEMM Operators", ""])
+    lines.extend(["", "## non-GEMM Operators", ""])
     lines.extend(
         _markdown_table(
             [

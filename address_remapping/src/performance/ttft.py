@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import json
-import math
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -143,19 +142,22 @@ def _format_operator_port_shapes(
     raw_ports = operator[direction]
     ports = {"out": raw_ports} if direction == "output" else dict(raw_ports)
     return "; ".join(
-        f"{port_name}=[{' x '.join(str(_eval_shape_expr(value, values)) for value in dict(port_spec)['shape'])}]"
+        f"{port_name}=[{' x '.join(str(value) for value in _display_shape(dict(port_spec)['shape'], values))}]"
         for port_name, port_spec in ports.items()
     )
+
+
+def _display_shape(shape: Sequence[object], values: Mapping[str, int]) -> List[int]:
+    resolved = [_eval_shape_expr(value, values) for value in shape]
+    return resolved[1:] if len(resolved) == 3 else resolved
 
 
 def _model_remote_sum_geometry(operator: Mapping[str, object], values: Mapping[str, int]) -> str:
     inputs = dict(operator["inputs"])
     input_port = next(iter(inputs.values()))
     input_shape = [_eval_shape_expr(value, values) for value in dict(input_port)["shape"]]
-    output_shape = [_eval_shape_expr(value, values) for value in dict(operator["output"])["shape"]]
     fan_in = input_shape[1] if len(input_shape) > 1 else int(values["used_slices"])
-    output_elements = math.prod(output_shape)
-    return f"fan-in={fan_in} partial slices -> 1 result ({output_elements} elements)"
+    return f"fan_in={fan_in}"
 
 
 def estimate_operator_work_bytes(
