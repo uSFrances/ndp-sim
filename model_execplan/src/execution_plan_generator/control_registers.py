@@ -899,12 +899,12 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
     }
@@ -927,12 +927,12 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
     }
