@@ -899,12 +899,12 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
     }
@@ -927,12 +927,12 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
     }
@@ -1227,9 +1227,9 @@ def _compute_decode_gemv_ring_control_register_updates(
     b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (a_k, a_n, a_m) = a_shape if a_shape is not None else (None, None, None)
-    (b_k, b_n, b_m) = b_shape if b_shape is not None else (None, None, None)
-    (b_prime_k, b_prime_n, b_prime_m) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_k, b_prime_m, b_prime_n) = b_prime_shape if b_prime_shape is not None else (None, None, None)
 
 
     updates: dict[str, int] = {
