@@ -1642,7 +1642,7 @@ def _compute_decode_silu_fp16N_fp32N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc3.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates(
