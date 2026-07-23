@@ -1006,7 +1006,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
             "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
-    if _has_hint(output_d, "reorder(m8)->(n8)"):
+    if _has_hint(output_d, "reorder(m8)->(n8)") or _has_hint(output_d, "reorder(n8,m8)->(m8,n8)"):
         updates.update({
             "special_array0.special_array.outport.mode": 1, #row = 1, col = 0
         })
