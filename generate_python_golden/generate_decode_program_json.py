@@ -70,7 +70,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op2  mac_SFU (RMS norm part 3)
     {
         "id": "op2", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "source": "op1"}},
+        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op1"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op3  mul_scale (RMS norm apply — A=external hidden, B=op2 scale)
@@ -154,7 +154,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op12 mac_SFU (KV RMS norm part 3)
     {
         "id": "op12", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "source": "op11"}},
+        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op11"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op13 mul_scale (KV RMS norm apply — A=external kv, B=op12) kv_padding_a
@@ -267,7 +267,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     {
         "id": "op24", "type": "decode_add_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "source": "op23"},
+            "A": {"shape": [1, 1, _ATN], "type": "slice0", "source": "op23"},
             "B": {"shape": [1, 1, _ATN], "source": "ext"},
         },
         "output": {"shape": [1, 1, _ATN]},
@@ -351,7 +351,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op34 mac_SFU (FFN RMS norm part 3)
     {
         "id": "op34", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "source": "op33"}},
+        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op33"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op35 mul_scale (FFN RMS apply — A←op31, B←op34)
@@ -493,6 +493,8 @@ def generate_program_json(
                 inp["dtype"] = dtype
             if inp_spec.get("remapping") is not None:
                 inp["remapping"] = inp_spec["remapping"]
+            if inp_spec.get("type"):
+                inp["type"] = inp_spec["type"]
             inp["source"] = _resolve_source(inp_spec["source"])
             op_entry["inputs"][port] = inp
 
