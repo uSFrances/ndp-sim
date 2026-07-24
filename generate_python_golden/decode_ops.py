@@ -539,8 +539,12 @@ def build_decode_golden_cases(
     _add("q_rope_merge",  "decode_add_fp32N_fp32N_fp16N", (_hvec(op7_out), _hvec(op8_out)), _hvec(op9_out))
 
     # op10-op14 KV RMS Norm
+    # KV uses 4-slice (slice_per_head) unlike attn/ffn which use 28-slice (used_slices).
+    # kv_input is 896 dim; hardware pads to 1024 (4×256).  The golden computes
+    # summac on the unpadded 896 elements split 4 ways (224 per logical slice)
+    # so the partial count matches the hardware's 4 logical slices.
     kv_input = rng.uniform(-1.0, 1.0, hidden).astype(np.float32)
-    op10_out = summac_partials(kv_input, used_slices)
+    op10_out = summac_partials(kv_input, slice_per_head)
     _add("kv_summac",       "decode_summac_fp32N_fp32N", (_hvec(kv_input),), _hvec(op10_out))
     op11_out = np.asarray([remote_sum_fp32(op10_out)], dtype=np.float32)
     _add("kv_remote_sum",   "decode_remote_sum_fp32N_fp32N", (_hvec(op10_out),), _hvec(op11_out))
@@ -589,6 +593,10 @@ def build_decode_golden_cases(
     _add("v_add_residual","decode_add_fp16N_fp32N_fp16N", (_hvec(op20_out), _hvec(res_v)), _hvec(op21_out))
 
     # op22-op29 Attention (GQA: num_kv_heads=1 shared by 7 Q heads)
+    # ── Prefill-consistent pattern: golden produces (N, heads) matrices;
+    #     passthrough splits by head (Mode B) → each head replicated to
+    #     slice_per_head=4 slices.  Per-slice data = full attention vector
+    #     for that head (32 elements after remote_sum). ──
     q_per_head = op9_out.reshape(heads, head_dim).astype(np.float16)
 
     if kv_cache is not None and hasattr(kv_cache, "k_cache"):
@@ -611,7 +619,6 @@ def build_decode_golden_cases(
                 k_cache[start:end, :, h].astype(np.float32),
                 q_per_head[h, start:end].astype(np.float32),
             )
-            # Clip to fp16 range before cast
             scores_fp32 = np.clip(scores_fp32, -65504, 65504)
             qkt_partial[:, s, h] = scores_fp32.astype(np.float16)
     _add("attn_qkt",       "decode_gemv_local",
@@ -619,53 +626,53 @@ def build_decode_golden_cases(
           q_per_head.T.reshape(head_dim, heads, 1, order="F").astype(np.float16)),
          qkt_partial.reshape(attention_length, slice_per_head, heads, order="F"))
 
-    attn_scores_2d = qkt_partial.reshape(attention_length, slice_per_head, heads, order="F").sum(axis=1).astype(np.float32)
-    op23_out = np.asarray([remote_sum_fp32(attn_scores_2d.reshape(-1))], dtype=np.float32)
-    _add("attn_qkt_remote_sum", "decode_remote_sum_fp32N_fp32N", (_hvec(np.ones(used_slices, dtype=np.float32)),), _hvec(op23_out))
+    # Full attention scores per head (sum partials across slices)
+    # NOTE: qkt_partial is fp16; sum in fp32 to avoid overflow (4×65504 > fp16 max)
+    attn_scores_2d = qkt_partial.astype(np.float32).reshape(attention_length, slice_per_head, heads, order="F").sum(axis=1)  # (32, 7)
+    # Apply softmax scale: standard attention = softmax(QK^T / sqrt(head_dim))
+    sm_scale = np.float32(1.0 / np.sqrt(float(head_dim)))  # 1/sqrt(128) ≈ 0.088
+    attn_scores_2d = attn_scores_2d * sm_scale
+    # op23 remote_sum: aggregates 4 slice partials → full (32,) vector per head.
+    # The golden produces (32, 7) for Mode B split (7 heads × 4 slices).
+    _add("attn_qkt_remote_sum", "decode_remote_sum_fp32N_fp32N",
+         (attn_scores_2d.reshape(attention_length, heads, 1, order="F"),),
+         attn_scores_2d.reshape(attention_length, heads, 1, order="F"))
 
+    # ── ops 24-28: per-head attention chain (Mode B) ──
+    # Each head has a full 32-element attention vector; replicated to
+    # slice_per_head=4 slices by the passthrough.
     attn_mask = rng.uniform(-0.5, 0.5, (attention_length, heads)).astype(np.float32)
-    op24_out = _elementwise_add(attn_scores_2d, attn_mask)
-    _add("attn_add_mask",  "decode_add_fp32N_fp32N_fp32N", (attn_scores_2d.reshape(attention_length, heads, 1, order="F"), attn_mask.reshape(attention_length, heads, 1, order="F")), op24_out.reshape(attention_length, heads, 1, order="F"))
+    op24_out = _elementwise_add(attn_scores_2d, attn_mask)  # (32, 7)
+    _add("attn_add_mask",  "decode_add_fp32N_fp32N_fp32N",
+         (attn_scores_2d.reshape(attention_length, heads, 1, order="F"),
+          attn_mask.reshape(attention_length, heads, 1, order="F")),
+         op24_out.reshape(attention_length, heads, 1, order="F"))
 
-    op25_out = head_local_maxima(op24_out, heads, slice_per_head)
-    _add("attn_max",       "decode_max_fp32N_fp32N", (op24_out.reshape(attention_length, heads, 1, order="F"),), op25_out.reshape(slice_per_head, heads, 1, order="F"))
+    # op25 max: per-head global max → (1, 7)
+    op25_out = np.max(op24_out, axis=0, keepdims=True).astype(np.float32)  # (1, 7)
+    _add("attn_max",       "decode_max_fp32N_fp32N",
+         (op24_out.reshape(attention_length, heads, 1, order="F"),),
+         op25_out.reshape(1, heads, 1, order="F"))
 
-    # op26: sub_SFU  scores = scores - max  (A←op24, B←op25)
-    # Broadcast op25 back to attention_length per head
-    max_broadcast = np.empty((attention_length, heads), dtype=np.float32, order="F")
-    for h in range(heads):
-        for s in range(slice_per_head):
-            start, end = s * (attention_length // slice_per_head), (s + 1) * (attention_length // slice_per_head)
-            max_broadcast[start:end, h] = op25_out[s, h]
-    op26_out = _vector_sub_scalar(op24_out.reshape(-1), max_broadcast.reshape(-1)[:1])  # use scalar sub for all
-    # Actually compute element-wise: scores - max per head
-    op26_out = np.empty_like(op24_out)
-    for h in range(heads):
-        for s in range(slice_per_head):
-            start, end = s * (attention_length // slice_per_head), (s + 1) * (attention_length // slice_per_head)
-            op26_out[start:end, h] = op24_out[start:end, h] - np.float32(op25_out[s, h])
+    # op26 sub_SFU: scores - max  per head → (32, 7)
+    op26_out = op24_out - op25_out  # broadcast (1,7) over (32,7)
     _add("attn_sub_SFU",   "decode_sub_SFU_fp32N_fp32_fp32N",
          (op24_out.reshape(attention_length, heads, 1, order="F"),
-          op25_out.reshape(slice_per_head, heads, 1, order="F")),
+          op25_out.reshape(1, heads, 1, order="F")),
          op26_out.reshape(attention_length, heads, 1, order="F"))
 
-    # op27: sum_rec  exp(x-max) → per-head sum reciprocals
-    exp_attn = np.exp(op26_out).astype(np.float32)
-    op27_out = head_local_sum_reciprocals(exp_attn, heads, slice_per_head)
+    # op27 sum_rec: exp(x-max) → per-head sum → reciprocal → (1, 7)
+    exp_attn = np.exp(op26_out).astype(np.float32)  # (32, 7)
+    op27_out = (np.float32(1.0) / exp_attn.sum(axis=0, keepdims=True)).astype(np.float32)  # (1, 7)
     _add("attn_sum_rec",   "decode_sum_rec_fp32N_fp32N",
          (op26_out.reshape(attention_length, heads, 1, order="F"),),
-         op27_out.reshape(slice_per_head, heads, 1, order="F"))
+         op27_out.reshape(1, heads, 1, order="F"))
 
-    # op28: mul_softmax  exp(x-max) * 1/sum  (A←op26, B←op27)
-    sr_broadcast = np.empty((attention_length, heads), dtype=np.float32, order="F")
-    for h in range(heads):
-        for s in range(slice_per_head):
-            start, end = s * (attention_length // slice_per_head), (s + 1) * (attention_length // slice_per_head)
-            sr_broadcast[start:end, h] = op27_out[s, h]
-    op28_out = _elementwise_mul(exp_attn, sr_broadcast).astype(np.float16)
+    # op28 mul_softmax: exp(x-max) * 1/sum → (32, 7) → fp16
+    op28_out = (exp_attn * op27_out).astype(np.float16)  # (32, 7)
     _add("attn_mul_softmax","decode_mul_fp32N_fp32_fp16N",
          (op26_out.reshape(attention_length, heads, 1, order="F"),
-          op27_out.reshape(slice_per_head, heads, 1, order="F")),
+          op27_out.reshape(1, heads, 1, order="F")),
          op28_out.reshape(attention_length, heads, 1, order="F"))
 
     sv_weight = v_cache.astype(np.float16)  # (128, 32, 7) after GQA broadcast
