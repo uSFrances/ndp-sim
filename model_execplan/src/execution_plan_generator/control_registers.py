@@ -1586,8 +1586,8 @@ def _compute_decode_mul_fp32N_fp16N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_mac_fp32N_fp32N_fp32N_control_register_updates(
@@ -1641,8 +1641,8 @@ def _compute_decode_silu_fp16N_fp32N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc3.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates(
@@ -1714,8 +1714,8 @@ def _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
@@ -1738,8 +1738,8 @@ def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
