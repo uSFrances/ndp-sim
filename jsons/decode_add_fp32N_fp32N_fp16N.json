@@ -21,7 +21,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 2,
+            "end": 4,
             "stride": 1,
             "last_index": 1
         },

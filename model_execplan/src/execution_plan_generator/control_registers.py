@@ -899,12 +899,12 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
     }
@@ -927,12 +927,12 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
         "iga_lc6.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 2,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_m or 0) * 4,
+            port1 = (d_m or 0) * 4,
             port2 = 16,
         ),
     }
@@ -989,7 +989,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     }
 
 
-    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
+    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)") or _has_hint(input_a, "reorder(m8,k2)->(k2,m8)"):
         updates.update({
             "iga_col_lc0.buffer_loop_configs.COL_LC.end": 4,
             "iga_col_lc0.buffer_loop_configs.COL_LC.stride": 2,
@@ -1006,7 +1006,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
             "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
-    if _has_hint(output_d, "reorder(m8)->(n8)"):
+    if _has_hint(output_d, "reorder(m8)->(n8)") or _has_hint(output_d, "reorder(n8,m8)->(m8,n8)"):
         updates.update({
             "special_array0.special_array.outport.mode": 1, #row = 1, col = 0
         })
@@ -1587,7 +1587,7 @@ def _compute_decode_mul_fp32N_fp16N_fp16N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 def _compute_decode_mac_fp32N_fp32N_fp32N_control_register_updates(
@@ -1642,7 +1642,7 @@ def _compute_decode_silu_fp16N_fp32N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc3.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates(
@@ -1739,7 +1739,7 @@ def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
     return {
 
         "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
     }
 
 def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(

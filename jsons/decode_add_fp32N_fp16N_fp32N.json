@@ -320,7 +320,7 @@
         "outport":{
             "mask": [1,1,1,1,1,1,1,1],
             "src_id": 0,
-            "fp32tofp16": "true",
+            "fp32tofp16": "false",
             "fp32tobf16": "false",
             "int32touint8": "false"
         },
