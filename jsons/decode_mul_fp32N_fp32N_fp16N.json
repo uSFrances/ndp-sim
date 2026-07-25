@@ -11,7 +11,7 @@
         },
         "LC5": {
             "src_id": "DRAM_LC.LC0",
-            "outmost_loop": 1,
+            "outmost_loop": 0,
             "start": 0,
             "end": 2,
             "stride": 1,
