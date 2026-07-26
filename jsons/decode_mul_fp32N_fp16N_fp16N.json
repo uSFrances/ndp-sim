@@ -66,7 +66,7 @@
                     "constant": 1
             },
             "inport0":{
-                    "src_id": "DRAM_LC.LC4",
+                    "src_id": "DRAM_LC.LC5",
                     "mode": "buffer",
                     "keep_last_index": null,
                     "constant": 0
@@ -132,7 +132,6 @@
                 "stride": 16,
                 "last_index": 4
             }
-
         },
         "GROUP1":{
             "target": "B",
@@ -177,7 +176,7 @@
             "mem_idx_mode": ["buffer", "keep", null],
             "mem_idx_keep_last_index": [null, 2, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["DRAM_LC.LC1", "LC_PE.PE2", null],
+            "idx": ["DRAM_LC.LC1", "DRAM_LC.LC4", null],
             "idx_size": [0, 31, null],
             "dim_stride": [32, 32, null],
             "padding_enable": [0, 0, 0],
@@ -207,7 +206,7 @@
             "mem_idx_mode": ["buffer", "keep", null],
             "mem_idx_keep_last_index": [null, 2, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["DRAM_LC.LC2", "DRAM_LC.LC5", null],
+            "idx": ["DRAM_LC.LC2", "LC_PE.PE2", null],
             "idx_size": [0, 31, null],
             "dim_stride": [32, 32, null],
             "padding_enable": [0, 0, 0],
@@ -237,7 +236,7 @@
             "mem_idx_mode": ["buffer", "keep", null],
             "mem_idx_keep_last_index": [null, 2, null],
             "mem_idx_constant": [null, null, null],
-            "idx": ["DRAM_LC.LC3", "DRAM_LC.LC5", null],
+            "idx": ["DRAM_LC.LC3", "LC_PE.PE1", null],
             "idx_size": [3, 7, null],
             "dim_stride": [32, 32, null],
             "tailing_enable": [0, 0, 0],
