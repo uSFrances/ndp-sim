@@ -43,12 +43,13 @@ _KV_PAD_A = "kv_padding_a"   # 256
 _KV_PAD_B = "kv_padding_b"   # 1024
 _KV_N = "num_key_value_heads*head_dim//slice_per_head"  # 32
 
-# GEMV B/B' port helper — prefill convention: [K, 1, N_slice], bank_interleave=1
+# GEMV B/B' port helper — prefill convention: [K, 1, N_slice], bank_interleave=2
+_GEMV_REMAP = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25]
 def _gemv_b(shape: list[Any], source: str = "ext") -> dict[str, Any]:
-    return {"shape": shape, "dtype": "fp16", "bank_interleave": 1, "source": source}
+    return {"shape": shape, "dtype": "fp16", "bank_interleave": 2, "remapping": list(_GEMV_REMAP), "source": source}
 
 def _gemv_bp(shape: list[Any], source: str = "ext") -> dict[str, Any]:
-    return {"shape": shape, "dtype": "fp16", "bank_interleave": 1, "source": source}
+    return {"shape": shape, "dtype": "fp16", "bank_interleave": 2, "remapping": list(_GEMV_REMAP), "source": source}
 
 # ---------------------------------------------------------------------------
 # 43-op decode layer: shape definitions and source references
