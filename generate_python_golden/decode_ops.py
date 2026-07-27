@@ -110,13 +110,13 @@ SUPPORTED_DECODE_OPERATORS: tuple[DecodeOperatorSpec, ...] = (
         "op17", "decode_mul_fp32N_fp16N_fp16N",
         ("A", "B"), "hidden_elementwise", "decode_mul_fp32N_fp32N_fp16N.json",
     ),
-    DecodeOperatorSpec(
-        "op18", "decode_add_fp16N_fp32N_fp16N",
-        ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
-    ),
     # -- Additional element-wise ops used in the 43-op layer -----------------
     DecodeOperatorSpec(
         "op_add_fp32_fp32", "decode_add_fp32N_fp32N_fp32N",
+        ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
+    ),
+    DecodeOperatorSpec(
+        "op_add_fp32_fp16", "decode_add_fp32N_fp16N_fp16N",
         ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
     ),
 )
@@ -404,6 +404,27 @@ def _rope_merge(cos_out: np.ndarray, sin_out: np.ndarray) -> np.ndarray:
     return result
 
 
+def _rope_swap_route(data: np.ndarray, n_slices: int) -> np.ndarray:
+    """Per-head Neox RoPE swap on logical slices: slice i → slice i^2.
+
+    Within each head (4 slices), XOR-2 pairs (0↔2, 1↔3), matching the
+    prefill RoPE offset of ``head_dim/2`` = 2 slices.  When combined with
+    ``physical_mapping`` or ``install_targets`` at the install step, this
+    is equivalent to the hardware ``rope_slice_xor2`` (physical XOR-3).
+    """
+    v = np.asarray(data, dtype=np.float32).reshape(-1)
+    if v.size % n_slices != 0:
+        raise ValueError(f"vector size {v.size} not divisible by {n_slices} slices")
+    sz = v.size // n_slices
+    routed = np.empty_like(v)
+    for log_src in range(n_slices):
+        log_dst = log_src ^ 2
+        if log_dst >= n_slices:
+            raise ValueError(f"XOR-2 destination {log_dst} >= {n_slices} slices")
+        routed[log_dst * sz : (log_dst + 1) * sz] = v[log_src * sz : (log_src + 1) * sz]
+    return routed
+
+
 def _silu_fp32(x: np.ndarray) -> np.ndarray:
     """SiLU: x * sigmoid(x) = x / (1 + exp(-x))."""
     v = np.asarray(x, dtype=np.float32).reshape(-1)
@@ -445,20 +466,26 @@ def build_decode_golden_cases(
     reg = DECODE_OP_REGISTRY
 
     def _add(inst_id: str, op_name: str, inputs: tuple[np.ndarray, ...], output: np.ndarray) -> np.ndarray:
-        cases.append(DecodeGoldenCase(instance_id=inst_id, spec=reg[op_name], inputs=inputs, output=output))
+        # Convert all tensors to Fortran order before storing — golden I/O
+        # (save_golden_tensor / load_golden_tensor) is F-order throughout.
+        # Multi-dim C-order arrays silently scramble when ravel('F') is used.
+        inputs_f = tuple(np.require(np.asarray(t), requirements="F") for t in inputs)
+        output_f = np.require(np.asarray(output), requirements="F")
+        cases.append(DecodeGoldenCase(instance_id=inst_id, spec=reg[op_name], inputs=inputs_f, output=output_f))
         return output
 
     def _hvec(v: np.ndarray, dtype=None) -> np.ndarray:
         return as_vector(v, dtype=dtype)
 
     def _rope_tables() -> tuple[np.ndarray, np.ndarray]:
-        """Build cos/sin tables for local RoPE (no cross-slice data routing).
+        """Build cos/sin tables for RoPE with hardware slice routing.
 
         cos-table:  same value for pos and pos+half within each head; repeated
                     identically for every head.
-        sin-table:  **rearranged** — ``[-sin_raw | +sin_raw]`` (negation in first
-                    half) so that when combined with the half-swapped activation
-                    at op8, element-wise ADD at op9 yields the correct RoPE.
+        sin-table:  **prefill style** — ``[+sin_raw | -sin_raw]`` (negation in
+                    second half) so that when combined with ``rope_slice_xor2``
+                    output routing on op8, element-wise ADD at op9 yields the
+                    correct RoPE result.
         """
         half_head = head_dim // 2  # 64
         theta = 10000.0 ** (-2.0 * np.arange(0, half_head, dtype=np.float64) / head_dim)
@@ -470,10 +497,10 @@ def build_decode_golden_cases(
         cos_1head[0:half_head]       = cos_theta
         cos_1head[half_head:head_dim] = cos_theta
 
-        # per-head sin: REARRANGED — first half: -sin, second half: +sin
+        # per-head sin: prefill style — first half: +sin, second half: -sin
         sin_1head = np.empty(head_dim, dtype=np.float32)
-        sin_1head[0:half_head]       = -sin_theta   # negated in first half
-        sin_1head[half_head:head_dim] =  sin_theta   # positive in second half
+        sin_1head[0:half_head]       =  sin_theta   # positive in first half
+        sin_1head[half_head:head_dim] = -sin_theta   # negated in second half
 
         # repeat for all heads → hidden_size
         cos = np.tile(cos_1head, heads)
@@ -481,7 +508,7 @@ def build_decode_golden_cases(
         return cos, sin
 
     def _rope_tables_1head() -> tuple[np.ndarray, np.ndarray]:
-        """Single-head RoPE tables — rearranged for local computation."""
+        """Single-head RoPE tables — prefill style for hardware slice routing."""
         half_head = head_dim // 2
         theta = 10000.0 ** (-2.0 * np.arange(0, half_head, dtype=np.float64) / head_dim)
         cos_theta = np.cos(theta).astype(np.float32)
@@ -491,10 +518,10 @@ def build_decode_golden_cases(
         cos[0:half_head]       = cos_theta
         cos[half_head:head_dim] = cos_theta
 
-        # REARRANGED: -sin in first half, +sin in second half
+        # prefill style: +sin in first half, -sin in second half
         sin = np.empty(head_dim, dtype=np.float32)
-        sin[0:half_head]       = -sin_theta
-        sin[half_head:head_dim] =  sin_theta
+        sin[0:half_head]       =  sin_theta
+        sin[half_head:head_dim] = -sin_theta
         return cos, sin
 
     # =========================================================================
@@ -523,20 +550,22 @@ def build_decode_golden_cases(
         q_weight = rng.uniform(-0.25, 0.25, (hidden, hidden)).astype(np.float16)
         res_q = rng.uniform(-0.5, 0.5, hidden).astype(np.float32)
     op5_out = gemv_fp32_accumulate(q_weight, op4_out.reshape(-1)).astype(np.float16)
-    _add("q_gemv",        "decode_gemv_ring", (q_weight.reshape(hidden, hidden, 1, order="F"), _hvec(op4_out)), _hvec(op5_out))
+    _add("q_gemv",        "decode_gemv_ring", (np.expand_dims(q_weight, 2), _hvec(op4_out)), _hvec(op5_out))
     op6_out = _elementwise_add(op5_out, res_q).astype(np.float32)
     _add("q_add_residual","decode_add_fp16N_fp32N_fp32N", (_hvec(op5_out), _hvec(res_q)), _hvec(op6_out))
     cos_q, sin_q = _rope_tables()
     op7_out = _elementwise_mul(op6_out, cos_q)
     _add("q_rope_cos",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op6_out), _hvec(cos_q)), _hvec(op7_out))
-    # op8: sin mul — activation is half-swapped so that element-wise ADD at op9
-    # yields the correct RoPE result without cross-slice data routing.
-    op6_out_swapped = _half_swap_vector(op6_out)
-    op8_out = _elementwise_mul(op6_out_swapped, sin_q)
-    _add("q_rope_sin",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op6_out_swapped), _hvec(sin_q)), _hvec(op8_out))
-    # op9: RoPE merge — simple element-wise ADD, no routing needed
-    op9_out = (op7_out + op8_out).astype(np.float16)
-    _add("q_rope_merge",  "decode_add_fp32N_fp32N_fp16N", (_hvec(op7_out), _hvec(op8_out)), _hvec(op9_out))
+    # op8: sin mul — prefill style: A = x (direct), B = [+sin, -sin].
+    # Hardware "rope_slice_xor2" routes op8 output across slices so that
+    # op9 receives the half-swapped data for a simple element-wise ADD.
+    op8_out = _elementwise_mul(op6_out, sin_q)
+    _add("q_rope_sin",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op6_out), _hvec(sin_q)), _hvec(op8_out))
+    # op9: RoPE merge — hardware routes op8 via rope_slice_xor2, then simple ADD.
+    # Golden mirrors this: route op8 in logical space, store as op9's B input.
+    op8_routed = _rope_swap_route(op8_out, used_slices)
+    op9_out = (op7_out + op8_routed).astype(np.float16)
+    _add("q_rope_merge",  "decode_add_fp32N_fp32N_fp16N", (_hvec(op7_out), _hvec(op8_routed)), _hvec(op9_out))
 
     # op10-op14 KV RMS Norm
     # KV uses 4-slice (slice_per_head) unlike attn/ffn which use 28-slice (used_slices).
@@ -565,20 +594,22 @@ def build_decode_golden_cases(
         k_weight = rng.uniform(-0.25, 0.25, (hidden, kv_dim)).astype(np.float16)
         res_k = rng.uniform(-0.5, 0.5, kv_dim).astype(np.float32)
     op15_out = gemv_fp32_accumulate(k_weight, op14_out.reshape(-1)).astype(np.float16)
-    _add("k_gemv",        "decode_gemv_ring", (k_weight.reshape(hidden, kv_dim, 1, order="F"), _hvec(op14_out)), _hvec(op15_out))
+    _add("k_gemv",        "decode_gemv_ring", (np.expand_dims(k_weight, 2), _hvec(op14_out)), _hvec(op15_out))
     op16_out = _elementwise_add(op15_out, res_k).astype(np.float32)
     _add("k_add_residual","decode_add_fp16N_fp32N_fp32N", (_hvec(op15_out), _hvec(res_k)), _hvec(op16_out))
     # K RoPE: only kv_dim=128 elements (1 KV head).  Build per-head tables.
     cos_k, sin_k = _rope_tables_1head()
     op17_out = _elementwise_mul(op16_out, cos_k)
     _add("k_rope_cos",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op16_out), _hvec(cos_k)), _hvec(op17_out))
-    # K RoPE sin: half-swapped activation + rearranged sin table → local ADD
-    op16_out_swapped = _half_swap_vector(op16_out)
-    op18_out = _elementwise_mul(op16_out_swapped, sin_k)
-    _add("k_rope_sin",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op16_out_swapped), _hvec(sin_k)), _hvec(op18_out))
-    # op19: RoPE merge — simple element-wise ADD, no routing
-    op19_out = (op17_out + op18_out).astype(np.float16)
-    _add("k_rope_merge",  "decode_add_fp32N_fp32N_fp16N", (_hvec(op17_out), _hvec(op18_out)), _hvec(op19_out))
+    # K RoPE sin: prefill style — A = x (direct), B = [+sin, -sin],
+    # hardware "rope_slice_xor2" routes output across slices.
+    op18_out = _elementwise_mul(op16_out, sin_k)
+    _add("k_rope_sin",    "decode_mul_fp32N_fp32N_fp32N", (_hvec(op16_out), _hvec(sin_k)), _hvec(op18_out))
+    # op19: RoPE merge — hardware routes op18 via rope_slice_xor2, then simple ADD.
+    # Golden mirrors this: route op18 in logical space, store as op19's B input.
+    op18_routed = _rope_swap_route(op18_out, slice_per_head)
+    op19_out = (op17_out + op18_routed).astype(np.float16)
+    _add("k_rope_merge",  "decode_add_fp32N_fp32N_fp16N", (_hvec(op17_out), _hvec(op18_routed)), _hvec(op19_out))
 
     # op20-op21 V Projection
     if _W is not None and hasattr(_W, "v_weight"):
@@ -588,9 +619,9 @@ def build_decode_golden_cases(
         v_weight = rng.uniform(-0.25, 0.25, (hidden, kv_dim)).astype(np.float16)
         res_v = rng.uniform(-0.5, 0.5, kv_dim).astype(np.float32)
     op20_out = gemv_fp32_accumulate(v_weight, op14_out.reshape(-1)).astype(np.float16)
-    _add("v_gemv",        "decode_gemv_ring", (v_weight.reshape(hidden, kv_dim, 1, order="F"), _hvec(op14_out)), _hvec(op20_out))
-    op21_out = _elementwise_add(op20_out, res_v).astype(np.float16)
-    _add("v_add_residual","decode_add_fp16N_fp32N_fp16N", (_hvec(op20_out), _hvec(res_v)), _hvec(op21_out))
+    _add("v_gemv",        "decode_gemv_ring", (np.expand_dims(v_weight, 2), _hvec(op14_out)), _hvec(op20_out))
+    op21_out = _elementwise_add(res_v, op20_out).astype(np.float16)
+    _add("v_add_residual","decode_add_fp32N_fp16N_fp16N", (_hvec(res_v), _hvec(op20_out)), _hvec(op21_out))
 
     # op22-op29 Attention (GQA: num_kv_heads=1 shared by 7 Q heads)
     # ── Prefill-consistent pattern: golden produces (N, heads) matrices;
@@ -621,22 +652,28 @@ def build_decode_golden_cases(
             )
             scores_fp32 = np.clip(scores_fp32, -65504, 65504)
             qkt_partial[:, s, h] = scores_fp32.astype(np.float16)
-    _add("attn_qkt",       "decode_gemv_local",
-         (k_cache.reshape(head_dim, attention_length, heads, order="F"),
-          q_per_head.T.reshape(head_dim, heads, 1, order="F").astype(np.float16)),
-         qkt_partial.reshape(attention_length, slice_per_head, heads, order="F"))
 
-    # Full attention scores per head (sum partials across slices)
-    # NOTE: qkt_partial is fp16; sum in fp32 to avoid overflow (4×65504 > fp16 max)
-    attn_scores_2d = qkt_partial.astype(np.float32).reshape(attention_length, slice_per_head, heads, order="F").sum(axis=1)  # (32, 7)
-    # Apply softmax scale: standard attention = softmax(QK^T / sqrt(head_dim))
+    # Per-slice partial QK^T — apply softmax scale 1/sqrt(head_dim) to each
+    # partial so that op23 (pure remote_sum) naturally produces scaled scores.
+    # This prevents fp32 overflow in downstream exp() — unscaled scores ~30516
+    # would overflow.  The scale is distributed:  scale·sum(partials) = sum(scale·partials).
+    # NOTE: qkt_partial is fp16; convert to fp32 before scaling to preserve precision.
+    qkt_partial_fp32 = qkt_partial.astype(np.float32)  # preserves F-order, (32, 4, 7)
     sm_scale = np.float32(1.0 / np.sqrt(float(head_dim)))  # 1/sqrt(128) ≈ 0.088
-    attn_scores_2d = attn_scores_2d * sm_scale
-    # op23 remote_sum: aggregates 4 slice partials → full (32,) vector per head.
-    # The golden produces (32, 7) for Mode B split (7 heads × 4 slices).
+    qkt_partial_scaled = qkt_partial_fp32 * sm_scale                # (32, 4, 7) — scaled partials
+    qkt_partial_scaled_fp16 = qkt_partial_scaled.astype(np.float16)  # fp16 for op22 output
+    attn_scores_2d = qkt_partial_scaled.sum(axis=1)                  # (32, 7) — scaled full sum
+    # op22 gemv_local output: scaled per-slice partials (fp16)
+    _add("attn_qkt",       "decode_gemv_local",
+         (k_cache,
+          np.asarray(np.expand_dims(q_per_head.T, 2), dtype=np.float16)),
+         qkt_partial_scaled_fp16)                                              # (32, 4, 7) SCALED
+    # op23 remote_sum: sums 4 scaled partials → full scaled scores.
+    # Input:  (32, 4, 7) scaled partials (matches op22 D)
+    # Output: (32, 7, 1) full scaled attention scores
     _add("attn_qkt_remote_sum", "decode_remote_sum_fp32N_fp32N",
-         (attn_scores_2d.reshape(attention_length, heads, 1, order="F"),),
-         attn_scores_2d.reshape(attention_length, heads, 1, order="F"))
+         (qkt_partial_scaled,),                                                # (32, 4, 7) SCALED
+         np.expand_dims(attn_scores_2d, 2))                                           # (32, 7, 1)
 
     # ── ops 24-28: per-head attention chain (Mode B) ──
     # Each head has a full 32-element attention vector; replicated to
@@ -644,36 +681,36 @@ def build_decode_golden_cases(
     attn_mask = rng.uniform(-0.5, 0.5, (attention_length, heads)).astype(np.float32)
     op24_out = _elementwise_add(attn_scores_2d, attn_mask)  # (32, 7)
     _add("attn_add_mask",  "decode_add_fp32N_fp32N_fp32N",
-         (attn_scores_2d.reshape(attention_length, heads, 1, order="F"),
-          attn_mask.reshape(attention_length, heads, 1, order="F")),
-         op24_out.reshape(attention_length, heads, 1, order="F"))
+         (np.expand_dims(attn_scores_2d, 2),
+          np.expand_dims(attn_mask, 2)),
+         np.expand_dims(op24_out, 2))
 
     # op25 max: per-head global max → (1, 7)
     op25_out = np.max(op24_out, axis=0, keepdims=True).astype(np.float32)  # (1, 7)
     _add("attn_max",       "decode_max_fp32N_fp32N",
-         (op24_out.reshape(attention_length, heads, 1, order="F"),),
-         op25_out.reshape(1, heads, 1, order="F"))
+         (np.expand_dims(op24_out, 2),),
+         np.expand_dims(op25_out, 2))
 
     # op26 sub_SFU: scores - max  per head → (32, 7)
     op26_out = op24_out - op25_out  # broadcast (1,7) over (32,7)
     _add("attn_sub_SFU",   "decode_sub_SFU_fp32N_fp32_fp32N",
-         (op24_out.reshape(attention_length, heads, 1, order="F"),
-          op25_out.reshape(1, heads, 1, order="F")),
-         op26_out.reshape(attention_length, heads, 1, order="F"))
+         (np.expand_dims(op24_out, 2),
+          np.expand_dims(op25_out, 2)),
+         np.expand_dims(op26_out, 2))
 
     # op27 sum_rec: exp(x-max) → per-head sum → reciprocal → (1, 7)
     exp_attn = np.exp(op26_out).astype(np.float32)  # (32, 7)
     op27_out = (np.float32(1.0) / exp_attn.sum(axis=0, keepdims=True)).astype(np.float32)  # (1, 7)
     _add("attn_sum_rec",   "decode_sum_rec_fp32N_fp32N",
-         (op26_out.reshape(attention_length, heads, 1, order="F"),),
-         op27_out.reshape(1, heads, 1, order="F"))
+         (np.expand_dims(op26_out, 2),),
+         np.expand_dims(op27_out, 2))
 
     # op28 mul_softmax: exp(x-max) * 1/sum → (32, 7) → fp16
     op28_out = (exp_attn * op27_out).astype(np.float16)  # (32, 7)
     _add("attn_mul_softmax","decode_mul_fp32N_fp32_fp16N",
-         (op26_out.reshape(attention_length, heads, 1, order="F"),
-          op27_out.reshape(1, heads, 1, order="F")),
-         op28_out.reshape(attention_length, heads, 1, order="F"))
+         (np.expand_dims(op26_out, 2),
+          np.expand_dims(op27_out, 2)),
+         np.expand_dims(op28_out, 2))
 
     sv_weight = v_cache.astype(np.float16)  # (128, 32, 7) after GQA broadcast
     # Current-token V (kv_dim=128) → broadcast to 7 heads for GQA
@@ -684,9 +721,9 @@ def build_decode_golden_cases(
             start, end = s * local_k, (s + 1) * local_k
             sv_partial[:, s, h] = gemv_fp32_accumulate(sv_weight[start:end, :, h], v_cur[start:end, h]).astype(np.float16)
     _add("attn_sv",        "decode_gemv_local",
-         (sv_weight.reshape(head_dim, attention_length, heads, order="F"),
-          v_cur.reshape(head_dim, heads, 1, order="F")),
-         sv_partial.reshape(attention_length, slice_per_head, heads, order="F"))
+         (sv_weight,
+          np.asarray(np.expand_dims(v_cur, 2), dtype=np.float16)),
+         sv_partial)
 
     # op30-op31 Output GEMV + residual
     attn_flat = sv_partial.reshape(-1, order="F")[:hidden].astype(np.float16)
@@ -695,7 +732,7 @@ def build_decode_golden_cases(
     else:
         o_weight = rng.uniform(-0.25, 0.25, (hidden, hidden)).astype(np.float16)
     op30_out = gemv_fp32_accumulate(o_weight, attn_flat).astype(np.float16)
-    _add("out_gemv",       "decode_gemv_ring", (o_weight.reshape(hidden, hidden, 1, order="F"), _hvec(attn_flat)), _hvec(op30_out))
+    _add("out_gemv",       "decode_gemv_ring", (np.expand_dims(o_weight, 2), _hvec(attn_flat)), _hvec(op30_out))
     op31_out = _elementwise_add(op30_out, res_q).astype(np.float32)
     _add("out_add_residual","decode_add_fp32N_fp16N_fp32N", (_hvec(res_q), _hvec(op30_out)), _hvec(op31_out))
 
@@ -723,15 +760,15 @@ def build_decode_golden_cases(
         up_w = rng.uniform(-0.25, 0.25, (hidden, intermediate)).astype(np.float16)
         out2_w = rng.uniform(-0.25, 0.25, (intermediate, hidden)).astype(np.float16)
     op37_out = gemv_fp32_accumulate(gate_w, op36_out.reshape(-1)).astype(np.float16)
-    _add("ffn_gate_gemv",  "decode_gemv_ring", (gate_w.reshape(hidden, intermediate, 1, order="F"), _hvec(op36_out)), _hvec(op37_out))
+    _add("ffn_gate_gemv",  "decode_gemv_ring", (np.expand_dims(gate_w, 2), _hvec(op36_out)), _hvec(op37_out))
     op38_out = gemv_fp32_accumulate(up_w, op36_out.reshape(-1)).astype(np.float16)
-    _add("ffn_up_gemv",    "decode_gemv_ring", (up_w.reshape(hidden, intermediate, 1, order="F"), _hvec(op36_out)), _hvec(op38_out))
+    _add("ffn_up_gemv",    "decode_gemv_ring", (np.expand_dims(up_w, 2), _hvec(op36_out)), _hvec(op38_out))
     op39_out = _silu_fp32(op37_out).astype(np.float32)
     _add("ffn_silu",       "decode_silu_fp16N_fp32N", (_hvec(op37_out),), _hvec(op39_out))
     op40_out = _elementwise_mul(op39_out, op38_out.astype(np.float32)).astype(np.float16)
     _add("ffn_gate_up_mul","decode_mul_fp32N_fp16N_fp16N", (_hvec(op39_out), _hvec(op38_out)), _hvec(op40_out))
     op41_out = gemv_fp32_accumulate(out2_w, op40_out.reshape(-1)).astype(np.float16)
-    _add("ffn_out_gemv",   "decode_gemv_ring", (out2_w.reshape(intermediate, hidden, 1, order="F"), _hvec(op40_out)), _hvec(op41_out))
+    _add("ffn_out_gemv",   "decode_gemv_ring", (np.expand_dims(out2_w, 2), _hvec(op40_out)), _hvec(op41_out))
     op42_out = _elementwise_add(op41_out, ffn_src).astype(np.float32)
     _add("ffn_add_residual","decode_add_fp32N_fp16N_fp32N", (_hvec(ffn_src), _hvec(op41_out)), _hvec(op42_out))
 

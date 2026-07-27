@@ -51,6 +51,9 @@ def _gemv_b(shape: list[Any], source: str = "ext") -> dict[str, Any]:
 def _gemv_bp(shape: list[Any], source: str = "ext") -> dict[str, Any]:
     return {"shape": shape, "dtype": "fp16", "bank_interleave": 2, "remapping": list(_GEMV_REMAP), "source": source}
 
+def _gemv_local_b(shape: list[Any], source: str = "ext") -> dict[str, Any]:
+    return {"shape": shape, "dtype": "fp16", "bank_interleave": 2, "remapping": list(_GEMV_REMAP), "source": source}
+
 # ---------------------------------------------------------------------------
 # 43-op decode layer: shape definitions and source references
 # ---------------------------------------------------------------------------
@@ -121,14 +124,15 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _HID]},
     },
-    # op8  RoPE sin mul (A←op6, B←external sin_rot — table rearranged, no routing)
+    # op8  RoPE sin mul (A←op6, B←external sin_rot — prefill style,
+    #       output routed via rope_slice_xor2 for half-swap at op9 ADD)
     {
         "id": "op8", "type": "decode_mul_fp32N_fp32N_fp32N",
         "inputs": {
             "A": {"shape": [1, 1, _HID], "source": "op6"},
             "B": {"shape": [1, 1, _HID], "source": "ext"},
         },
-        "output": {"shape": [1, 1, _HID]},
+        "output": {"shape": [1, 1, _HID], "type": "rope_slice_xor2"},
     },
     # op9  RoPE merge add (A←op7, B←op8)
     {
@@ -205,14 +209,14 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _KV_N]},
     },
-    # op18 RoPE sin mul (K) — KV_N, table rearranged, no routing
+    # op18 RoPE sin mul (K) — KV_N, prefill style, output routed via rope_slice_xor2
     {
         "id": "op18", "type": "decode_mul_fp32N_fp32N_fp32N",
         "inputs": {
             "A": {"shape": [1, 1, _KV_N], "source": "op16"},
             "B": {"shape": [1, 1, _KV_N], "source": "ext"},
         },
-        "output": {"shape": [1, 1, _KV_N]},
+        "output": {"shape": [1, 1, _KV_N], "type": "rope_slice_xor2"},
     },
     # op19 RoPE merge add (K) — KV_N
     {
@@ -234,12 +238,12 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
-    # op21 add residual (V) — A=fp16 from op20, B=fp32 external
+    # op21 add residual (V) — A=external residual, B=fp16 from op20
     {
-        "id": "op21", "type": "decode_add_fp16N_fp32N_fp16N",
+        "id": "op21", "type": "decode_add_fp32N_fp16N_fp16N",
         "inputs": {
-            "A": {"shape": [1, 1, _KV_N], "dtype": "fp16", "source": "op20"},
-            "B": {"shape": [1, 1, _KV_N], "source": "ext"},
+            "A": {"shape": [1, 1, _KV_N], "source": "ext"},
+            "B": {"shape": [1, 1, _KV_N], "dtype": "fp16", "source": "op20"},
         },
         "output": {"shape": [1, 1, _KV_N], "dtype": "fp16"},
     },
@@ -252,8 +256,8 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "used_slices_mask": _USL,
         "inputs": {
             "A": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16", "source": "op9"},
-            "B": {"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
-            "B'": {"shape": [1, _ATN, _HD_SLICE], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
+            "B": _gemv_local_b([1, _ATN, _HD_SLICE]),
+            "B'": _gemv_local_b([1, _ATN, _HD_SLICE]),
         },
         "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
     },
@@ -311,8 +315,8 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "used_slices_mask": _USL,
         "inputs": {
             "A": {"shape": [1, 1, _ATN], "dtype": "fp16", "source": "op28"},
-            "B": {"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
-            "B'": {"shape": [1, _HD_SLICE, _ATN], "dtype": "fp16", "bank_interleave": 1, "source": "ext"},
+            "B": _gemv_local_b([1, _HD_SLICE, _ATN]),
+            "B'": _gemv_local_b([1, _HD_SLICE, _ATN]),
         },
         "output": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16"},
     },

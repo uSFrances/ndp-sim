@@ -16,6 +16,11 @@ if str(PROJECT_DIR) not in sys.path:
 
 from tensor_io import load_golden_tensor, save_install_tensor
 
+try:
+    from .relayout_gemm import BASE_HW_PARAMS, KV_HW_PARAMS, install_target_slices
+except ImportError:
+    from relayout_gemm import BASE_HW_PARAMS, KV_HW_PARAMS, install_target_slices  # type: ignore[no-redef]
+
 
 def split_vector(values: np.ndarray, slice_count: int) -> list[np.ndarray]:
     vector = np.asarray(values).reshape(-1, order="F")
@@ -92,6 +97,31 @@ def split_head_full_vectors(
     return chunks
 
 
+def split_per_slice_partials(
+    values: np.ndarray,
+    heads: int,
+    slices_per_head: int,
+) -> list[np.ndarray]:
+    """GEMV-local→remote_sum: (N, slices_per_head, heads) → per-slice partials.
+
+    Each (head, slice) pair gets its own N-vector (partial QK^T or partial
+    attention-weighted V), NOT a replicated full-head vector.  Order:
+    head=0 slices 0..SPH-1, then head=1 slices 0..SPH-1, etc.
+    """
+    array = np.asarray(values)  # (N, slices_per_head, heads) in F-order
+    if array.ndim != 3 or array.shape[1] != slices_per_head or array.shape[2] != heads:
+        raise ValueError(
+            f"per-slice partials expected shape (N, {slices_per_head}, {heads}), got {array.shape}"
+        )
+    length = array.shape[0]
+    chunks: list[np.ndarray] = []
+    for head in range(heads):
+        for sl in range(slices_per_head):
+            # array[:, sl, head] in F-order: first dim varies fastest
+            chunks.append(np.asarray(array[:, sl, head], dtype=array.dtype).copy())
+    return chunks
+
+
 # ---------------------------------------------------------------------------
 # KV element-wise linear (round-robin) physical slice mapping.
 # Prefill relayout_rmsnorm uses  global_idx = head * slices_per_head + i,
@@ -159,7 +189,7 @@ def slice_passthrough_case(
             input_chunks = {"A": [None] * slice_count}
             output_chunks = [None] * slice_count
             for lidx in range(logical_slices):
-                for pidx in _kv_elemwise_phys_slices(lidx, heads, slices_per_head):
+                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
         else:
@@ -229,7 +259,7 @@ def slice_passthrough_case(
                     input_chunks[port] = [None] * slice_count
                 output_chunks = [None] * slice_count
                 for logical_idx in range(logical_slices):
-                    for phys_idx in _kv_elemwise_phys_slices(logical_idx, heads, slices_per_head):
+                    for phys_idx in install_target_slices(KV_HW_PARAMS, logical_idx):
                         for port in inputs:
                             input_chunks[port][phys_idx] = logical_input_chunks[port][logical_idx]
                         output_chunks[phys_idx] = logical_output_chunks[logical_idx]
@@ -249,7 +279,15 @@ def slice_passthrough_case(
         def _is_mode_b(tensor: np.ndarray) -> bool:
             arr = np.asarray(tensor)
             return (arr.ndim == 3 and arr.shape[1] == heads and arr.shape[2] == 1)
-        if _is_mode_b(output):
+        # Per-slice partials: input is (N, slices_per_head, heads), each
+        # (head, slice) pair has its own partial vector (from op22 GEMV local).
+        def _is_per_slice_partials(tensor: np.ndarray) -> bool:
+            arr = np.asarray(tensor)
+            return (arr.ndim == 3 and arr.shape[1] == slices_per_head and arr.shape[2] == heads)
+        if _is_mode_b(output) and _is_per_slice_partials(inputs.get("A", np.empty(0))):
+            input_chunks = {"A": split_per_slice_partials(inputs["A"], heads, slices_per_head)}
+            output_chunks = split_head_full_vectors(output, heads, slices_per_head)
+        elif _is_mode_b(output):
             input_chunks = {"A": split_head_full_vectors(inputs["A"], heads, slices_per_head)}
             output_chunks = split_head_full_vectors(output, heads, slices_per_head)
         # K/V remote_sum: 4 logical slices (slice_per_head), linear round-robin.
@@ -262,7 +300,7 @@ def slice_passthrough_case(
             input_chunks = {"A": [None] * slice_count}
             output_chunks = [None] * slice_count
             for lidx in range(logical_slices):
-                for pidx in _kv_elemwise_phys_slices(lidx, heads, slices_per_head):
+                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
         else:
@@ -342,15 +380,41 @@ def write_passthrough_case(
         else:
             log_output = [np.asarray(output_padded).copy() for _ in range(logical_slices)]
 
-        # Replicate to 28 physical slices (linear round-robin, not GEMV interleaved)
+        # Replicate to 28 physical slices via KV install_targets
         input_chunks = {port: [None] * 28 for port in inputs_padded}
         output_chunks = [None] * 28
         for lidx in range(logical_slices):
-            for pidx in _kv_elemwise_phys_slices(lidx, heads, slices_per_head):
+            for pidx in install_target_slices(KV_HW_PARAMS, lidx):
                 for port in inputs_padded:
                     input_chunks[port][pidx] = log_input[port][lidx]
                 output_chunks[pidx] = log_output[lidx]
         slice_count = 28
+
+    # Non-KV chunks are in logical order → apply physical_mapping before writing.
+    kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
+    is_kv = instance_id.startswith("kv_") or any(
+        ch is not None and np.asarray(ch).size == kv_dim
+        for ch in output_chunks
+    )
+    # Also check original golden tensor sizes (before splitting into chunks).
+    # ops like k_rope_sin/k_rope_cos have instance_id "k_..." (not "kv_...")
+    # and their per-slice chunks are 32, not kv_dim=128.
+    if not is_kv:
+        inputs_raw, output_raw = _load_case_tensors(case_entry, golden_dir)
+        _tensors = list(inputs_raw.values()) + [output_raw]
+        is_kv = any(np.asarray(t).size == kv_dim for t in _tensors)
+
+    if not is_kv:
+        phys = BASE_HW_PARAMS["physical_mapping"]
+        remapped_input = {port: [None] * slice_count for port in input_chunks}
+        remapped_output = [None] * slice_count
+        for logical_idx in range(slice_count):
+            physical_idx = phys[logical_idx]
+            for port in input_chunks:
+                remapped_input[port][physical_idx] = input_chunks[port][logical_idx]
+            remapped_output[physical_idx] = output_chunks[logical_idx]
+        input_chunks = remapped_input
+        output_chunks = remapped_output
 
     for slice_index in range(slice_count):
         slice_dir = op_dir / f"slice{slice_index:02d}"
