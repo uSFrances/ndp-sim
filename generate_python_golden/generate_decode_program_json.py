@@ -257,18 +257,18 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         },
         "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
     },
-    # op23 remote_sum (QK^T aggregation) — only slice 0
+    # op23 remote_sum (QK^T aggregation) — one slice per 4-slice group, type=slice4
     {
-        "id": "op23", "type": "decode_remote_sum_fp32N_fp32N",
-        "used_slices_mask": "0b1",
-        "inputs": {"A": {"shape": [1, 1, _ATN], "type": "slice0", "source": "op22"}},
+        "id": "op23", "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
+        "used_slices_mask": "0b0001000100010001000100010001",
+        "inputs": {"A": {"shape": [1, _SPH, _ATN], "source": "op22"}},
         "output": {"shape": [1, 1, _ATN]},
     },
-    # op24 add_mask (scores + mask — A←op23 broadcast, B←external mask)
+    # op24 add_mask (scores + mask — A←op23, type=slice4 read from computing slice)
     {
         "id": "op24", "type": "decode_add_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "type": "slice0", "source": "op23"},
+            "A": {"shape": [1, 1, _ATN], "type": "slice4", "source": "op23"},
             "B": {"shape": [1, 1, _ATN], "source": "ext"},
         },
         "output": {"shape": [1, 1, _ATN]},
