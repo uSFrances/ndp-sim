@@ -1,0 +1,44 @@
+{
+  "graph_name": "gemv_ring",
+  "mode": "layout_remap",
+  "mode_total_latency_cycles": 3642.0,
+  "hardware": {
+    "peak_memory_bandwidth_bytes_per_cycle": 32.0,
+    "general_peak_ops_per_cycle": 16.0,
+    "gemm_peak_ops_per_cycle": 256.0,
+    "general_ridge_point_ops_per_byte": 0.5,
+    "gemm_ridge_point_ops_per_byte": 8.0
+  },
+  "operators": [
+    {
+      "op_name": "op0",
+      "op_type": "prefill_gemv_ring",
+      "arithmetic_intensity_ops_per_byte": 0.49203734211971445,
+      "roofline_limit_ops_per_cycle": 15.745194947830862,
+      "roofline_limit_bound": "bandwidth",
+      "roofline_compute_utilization": 0.061504667764964306,
+      "roofline_bandwidth_utilization": 1.0,
+      "achieved_ops_per_cycle": 15.745194947830862,
+      "hardware_measured_cycles": 4296.0,
+      "measured_ops_per_cycle": 13.348230912476723,
+      "peak_compute_ops_per_cycle": 256.0,
+      "latency_cycles": 3642.0,
+      "latency_share_of_total": 1.0,
+      "work_ops": 57344.0,
+      "total_bytes": 116544,
+      "analytical_bandwidth_bytes_per_cycle": 32.0,
+      "measured_bandwidth_bytes_per_cycle": 27.12849162011173,
+      "analytical_bandwidth_utilization": 1.0,
+      "measured_bandwidth_utilization": 0.8477653631284916,
+      "analytical_efficiency": 1.0,
+      "measured_efficiency": 0.8477653631284916,
+      "measured_vs_analytical_ratio": 0.8477653631284916,
+      "utilization": {
+        "analytical_compute": "100.00%",
+        "measured_compute": "84.78%",
+        "analytical_bandwidth": "100.00%",
+        "measured_bandwidth": "84.78%"
+      }
+    }
+  ]
+}

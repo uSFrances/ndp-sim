@@ -1,13 +1,21 @@
 {
     "CONFIG": "11111111",
     "dram_loop_configs": {
-        "LC0": {
+        "LC14": {
             "src_id": null,
             "outmost_loop": 1,
             "start": 0,
-            "end": 2,
+            "end": 1,
             "stride": 1,
             "last_index": 0
+        },
+        "LC0": {
+            "src_id": "DRAM_LC.LC14",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
+            "last_index": 1
         },
         "LC1": {
             "src_id": "DRAM_LC.LC0",
@@ -15,7 +23,7 @@
             "start": 0,
             "end": 2,
             "stride": 1,
-            "last_index": 1
+            "last_index": 2
         },
         "LC2": {
             "src_id": "DRAM_LC.LC1",
@@ -23,7 +31,31 @@
             "start": 0,
             "end": 1,
             "stride": 1,
+            "last_index": 3
+        },
+        "LC11": {
+            "src_id": "DRAM_LC.LC14",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
+            "last_index": 1
+        },
+        "LC12": {
+            "src_id": "DRAM_LC.LC11",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
             "last_index": 2
+        },
+        "LC13": {
+            "src_id": "DRAM_LC.LC12",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 1,
+            "stride": 1,
+            "last_index": 3
         },
         "LC3": {
             "src_id": "DRAM_LC.LC2",
@@ -31,7 +63,7 @@
             "start": 0,
             "end": 1,
             "stride": 1,
-            "last_index": 3
+            "last_index": 4
         },
         "LC4": {
             "src_id": "DRAM_LC.LC3",
@@ -39,7 +71,7 @@
             "start": 0,
             "end": 2,
             "stride": 1,
-            "last_index": 4
+            "last_index": 5
         },
         "LC5": {
             "src_id": "DRAM_LC.LC4",
@@ -47,7 +79,7 @@
             "start": 0,
             "end": 4,
             "stride": 1,
-            "last_index": 5
+            "last_index": 6
         },
         "LC6": {
             "src_id": "DRAM_LC.LC2",
@@ -55,7 +87,7 @@
             "start": 0,
             "end": 1,
             "stride": 1,
-            "last_index": 3
+            "last_index": 4
         },
         "LC7": {
             "src_id": "DRAM_LC.LC6",
@@ -63,7 +95,31 @@
             "start": 0,
             "end": 4,
             "stride": 1,
+            "last_index": 5
+        },
+        "LC8": {
+            "src_id": "DRAM_LC.LC13",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 1,
+            "stride": 1,
             "last_index": 4
+        },
+        "LC9": {
+            "src_id": "DRAM_LC.LC8",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 2,
+            "stride": 1,
+            "last_index": 5
+        },
+        "LC10": {
+            "src_id": "DRAM_LC.LC9",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 4,
+            "stride": 1,
+            "last_index": 6
         }
     },
     "lc_pe_configs": {
@@ -84,7 +140,7 @@
             "inport0": {
                 "src_id": "DRAM_LC.LC4",
                 "mode": "keep",
-                "keep_last_index": 5,
+                "keep_last_index": 6,
                 "constant": 0
             }
         },
@@ -105,7 +161,7 @@
             "inport0": {
                 "src_id": "DRAM_LC.LC3",
                 "mode": "keep",
-                "keep_last_index": 4,
+                "keep_last_index": 5,
                 "constant": 0
             }
         },
@@ -126,7 +182,7 @@
             "inport0": {
                 "src_id": "DRAM_LC.LC6",
                 "mode": "keep",
-                "keep_last_index": 4,
+                "keep_last_index": 5,
                 "constant": 0
             }
         },
@@ -147,7 +203,28 @@
             "inport0": {
                 "src_id": "DRAM_LC.LC0",
                 "mode": "keep",
-                "keep_last_index": 1,
+                "keep_last_index": 2,
+                "constant": 0
+            }
+        },
+        "PE7": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC12",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 2
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC11",
+                "mode": "keep",
+                "keep_last_index": 2,
                 "constant": 0
             }
         },
@@ -171,6 +248,48 @@
                     "keep_last_index": null,
                     "constant": 0
             }    
+        },
+        "PE5": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC10",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 4
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC9",
+                "mode": "keep",
+                "keep_last_index": 6,
+                "constant": 0
+            }
+        },
+        "PE6": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "LC_PE.PE5",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 8
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC8",
+                "mode": "keep",
+                "keep_last_index": 5,
+                "constant": 0
+            }
         }
     },
     "buffer_loop_configs": {
@@ -181,14 +300,14 @@
                 "start": 0,
                 "end": 4,
                 "stride": 1,
-                "last_index": 4
+                "last_index": 5
             },
             "COL_LC": {
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 5
+                "last_index": 6
             }
         },
         "GROUP1": {
@@ -198,31 +317,31 @@
                 "start": 0,
                 "end": 4,
                 "stride": 1,
-                "last_index": 5
+                "last_index": 6
             },
             "COL_LC": {
                 "src_id": "GROUP1.ROW_LC",
                 "start": 0,
                 "end": 4,
                 "stride": 2,
-                "last_index": 6
+                "last_index": 7
             }
         },
         "GROUP2": {
             "target": "B'",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC4",
+                "src_id": "DRAM_LC.LC9",
                 "start": 0,
                 "end": 4,
                 "stride": 1,
-                "last_index": 5
+                "last_index": 6
             },
             "COL_LC": {
                 "src_id": "GROUP2.ROW_LC",
                 "start": 0,
                 "end": 4,
                 "stride": 2,
-                "last_index": 6
+                "last_index": 7
             }
         },
         "GROUP3": {
@@ -232,14 +351,14 @@
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 1
+                "last_index": 2
             },
             "COL_LC": {
                 "src_id": "GROUP3.ROW_LC",
                 "start": 0,
                 "end": 4,
                 "stride": 2,
-                "last_index": 2
+                "last_index": 3
             }
         }
     },
@@ -247,7 +366,7 @@
         "buffer0": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -265,7 +384,7 @@
         "buffer1": {
             "dst_port": 0,
             "nbr_enable": 1,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -283,7 +402,7 @@
         "buffer2": {
             "dst_port": 0,
             "nbr_enable": 0,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 6,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -301,7 +420,7 @@
         "buffer3": {
             "dst_port": 0,
             "nbr_enable": 0,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 6,
             "buffer_life_time": 1,
             "mode": 1,
             "mask": [
@@ -319,7 +438,7 @@
         "buffer4": {
             "dst_port": 0,
             "nbr_enable": 0,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 6,
             "buffer_life_time": 1,
             "mode": 0,
             "mask": [
@@ -337,7 +456,7 @@
         "buffer5": {
             "dst_port": 1,
             "nbr_enable": 0,
-            "buf_full_last_index": 1,
+            "buf_full_last_index": 2,
             "buffer_life_time": 1,
             "mode": 0,
             "mask": [
@@ -429,7 +548,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                5,
+                6,
                 7
             ],
             "buf_spatial_stride": [
@@ -439,9 +558,9 @@
                 3
             ],
             "buf_spatial_size": 4,
-            "buf_full_last_index": 4,
+            "buf_full_last_index": 5,
             "ping_pong": 0,
-            "pingpong_last_index": 4
+            "pingpong_last_index": 5
         },
         "stream1": {
             "target": "B",
@@ -453,7 +572,7 @@
                 null
             ],
             "mem_idx_keep_last_index": [
-                2,
+                3,
                 7,
                 null
             ],
@@ -518,7 +637,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                6,
+                7,
                 7
             ],
             "buf_spatial_stride": [
@@ -540,7 +659,7 @@
                 29
             ],
             "buf_spatial_size": 16,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 6,
             "ping_pong": 0,
             "pingpong_last_index": null
         },
@@ -554,7 +673,7 @@
                 null
             ],
             "mem_idx_keep_last_index": [
-                2,
+                3,
                 null,
                 null
             ],
@@ -564,8 +683,8 @@
                 null
             ],
             "idx": [
-                "LC_PE.PE3",
-                "LC_PE.PE1",
+                "LC_PE.PE7",
+                "LC_PE.PE6",
                 null
             ],
             "idx_size": [
@@ -619,7 +738,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                6,
+                7,
                 7
             ],
             "buf_spatial_stride": [
@@ -641,7 +760,7 @@
                 29
             ],
             "buf_spatial_size": 16,
-            "buf_full_last_index": 5,
+            "buf_full_last_index": 6,
             "ping_pong": 0,
             "pingpong_last_index": null
         },
@@ -702,7 +821,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                2,
+                3,
                 7
             ],
             "buf_spatial_stride": [
@@ -740,17 +859,17 @@
         "mode": "gemv",
         "bias_enable": 0,
         "data_type": "fp16",
-        "transout_last_index": 3,
+        "transout_last_index": 4,
         "inport0": {
             "enable": 1,
             "pingpong_en": 1,
-            "pingpong_last_index": 4,
+            "pingpong_last_index": 5,
             "nbr_enable": 1
         },
         "inport1": {
             "enable": 1,
             "pingpong_en": 1,
-            "pingpong_last_index": 5,
+            "pingpong_last_index": 6,
             "nbr_enable": 0
         },
         "inport2": {
@@ -819,7 +938,7 @@
     "PE_array": {
         "PE00": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -841,7 +960,7 @@
         },
         "PE02": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -863,7 +982,7 @@
         },
         "PE10": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -885,7 +1004,7 @@
         },
         "PE12": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -907,7 +1026,7 @@
         },
         "PE20": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -929,7 +1048,7 @@
         },
         "PE22": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -951,7 +1070,7 @@
         },
         "PE30": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",
@@ -973,7 +1092,7 @@
         },
         "PE32": {
             "alu_opcode": "sum",
-            "transout_last_index": 2,
+            "transout_last_index": 3,
             "inport2": {
                 "src_id": null,
                 "mode": "constant",

@@ -13,7 +13,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 8,
+            "end": 2,
             "stride": 1,
             "last_index": 1
         },
@@ -21,7 +21,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 4,
             "stride": 1,
             "last_index": 1
         },
@@ -32,6 +32,29 @@
             "end": 1,
             "stride": 1,
             "last_index": 2
+        }
+    },
+    "lc_pe_configs": {
+        "PE0": {
+            "alu_opcode": "mac",
+            "inport2": {
+                "src_id": "DRAM_LC.LC3",
+                "mode": "buffer",
+                "keep_last_index": null,
+                "constant": 0
+            },
+            "inport1": {
+                "src_id": null,
+                "mode": "constant",
+                "keep_last_index": null,
+                "constant": 1
+            },
+            "inport0": {
+                "src_id": "DRAM_LC.LC2",
+                "mode": "keep",
+                "keep_last_index": 2,
+                "constant": 0
+            }
         }
     },
     "buffer_loop_configs": {
@@ -91,7 +114,7 @@
         "stream0": {
             "target": "A",
             "mode": "read",
-            "base_addr": 0,
+            "base_addr": "0x0",
             "mem_idx_mode": [
                 "buffer",
                 null,
@@ -192,7 +215,7 @@
         "stream1": {
             "target": "B",
             "mode": "read",
-            "base_addr": 1024,
+            "base_addr": "0x40",
             "mem_idx_mode": [
                 "buffer",
                 null,
@@ -209,7 +232,7 @@
                 null
             ],
             "idx": [
-                "DRAM_LC.LC3",
+                "LC_PE.PE0",
                 null,
                 null
             ],
@@ -293,7 +316,7 @@
         "stream2": {
             "target": "D",
             "mode": "write",
-            "base_addr": 2048,
+            "base_addr": "0xc0",
             "mem_idx_mode": [
                 "buffer",
                 null,

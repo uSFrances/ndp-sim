@@ -282,6 +282,14 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(add_fp32.input_ports["inA"].memory_dtype, "fp32")
         self.assertEqual(add_fp32.input_ports["inB"].memory_dtype, "fp16")
         self.assertEqual(add_fp32.output_ports["out"].memory_dtype, "fp32")
+        add_fp32_inb_layout = add_fp32.input_ports["inB"].build()["layout"]
+        add_fp32_out_layout = add_fp32.output_ports["out"].build()["layout"]
+        self.assertEqual(add_fp32_out_layout.logical_shape, add_fp32_inb_layout.logical_shape)
+        self.assertEqual(add_fp32_out_layout.factors, add_fp32_inb_layout.factors)
+        self.assertEqual(
+            list(add_fp32_out_layout.linear_order),
+            ["N", "M_outer8", "m8"],
+        )
         add_v_fp16 = registry["prefill_add_V_fp16MN_fp32N_fp16MN"]
         self.assertEqual(add_v_fp16.input_ports["inA"].memory_dtype, "fp32")
         self.assertEqual(add_v_fp16.input_ports["inB"].memory_dtype, "fp16")
@@ -346,20 +354,22 @@ class SolverTests(unittest.TestCase):
         )
         self.assertEqual(
             [factor.name for factor in in_b_layout.factors],
-            ["N_outer4", "n4", "M_outer32", "m4", "m8"],
+            ["M_outer8", "N", "m8"],
         )
         self.assertEqual(
             [factor.extent_expr for factor in in_b_layout.factors],
-            ["N//4", 4, "M//32", 4, 8],
+            ["M//8", "N", 8],
         )
         self.assertEqual(
             [factor.name for factor in out_layout.factors],
-            ["N_outer4", "n4", "M_outer64", "m8_a", "m8_b"],
+            ["M_outer8", "N", "m8"],
         )
         self.assertEqual(
             [factor.extent_expr for factor in out_layout.factors],
-            ["N//4", 4, "M//64", 8, 8],
+            ["M//8", "N", 8],
         )
+        self.assertEqual(list(in_b_layout.linear_order), ["N", "M_outer8", "m8"])
+        self.assertEqual(list(out_layout.linear_order), ["N", "M_outer8", "m8"])
 
     def test_gemm_example_produces_expected_swap(self):
         producer = make_layout(
@@ -812,7 +822,7 @@ class SolverTests(unittest.TestCase):
             ],
         )
 
-    def test_v_proj_uses_row_writeback_annotation(self):
+    def test_v_proj_n8_m8_override_requires_write_reg(self):
         graph = json.loads(Path("examples/graphs/transformer_layer_single_slice.json").read_text(encoding="utf-8-sig"))
         results = solve_graph(graph, self.hw)
         v_proj_edge = next(
@@ -823,13 +833,13 @@ class SolverTests(unittest.TestCase):
         )
         self.assertEqual(v_proj_edge.status, "ok")
         self.assertTrue(v_proj_edge.write_reg_required)
-        self.assertIn("row_writeback", v_proj_edge.write_reg_hint)
+        self.assertEqual(v_proj_edge.write_reg_hint, "reorder(n8,m8)->(m8,n8)")
         self.assertEqual(
             [factor["name"] for factor in v_proj_edge.producer_bound_layout["ordered_factors"]],
             ["M_outer32", "N_outer32", "n4", "m4", "m8", "n8"],
         )
 
-    def test_external_add_v_edge_uses_row_writeback_override_for_anonymous_tensor(self):
+    def test_external_add_v_n8_m8_override_requires_write_reg(self):
         payload = {
             "used_slices": 28,
             "operators": [
@@ -861,7 +871,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(edge.tensor_name, "op0__out")
         self.assertEqual(edge.status, "ok")
         self.assertTrue(edge.write_reg_required)
-        self.assertIn("row_writeback", edge.write_reg_hint)
+        self.assertEqual(edge.write_reg_hint, "reorder(n8,m8)->(m8,n8)")
         self.assertEqual(
             [factor["name"] for factor in edge.producer_bound_layout["ordered_factors"]],
             ["M_outer32", "N_outer32", "n4", "m4", "m8", "n8"],

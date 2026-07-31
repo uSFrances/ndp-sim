@@ -5,6 +5,13 @@ import glob
 import re
 from pathlib import Path
 
+BEFORE_RELAYOUT_TEMPLATE_NAMES = {
+    "prefill_add_fp16mn_fp32n_fp32mn",
+    "add_fp16mn_fp32n_fp32mn",
+    "prefill_mul_fp32mn_fp32n_fp16mn",
+    "mul_fp32mn_fp32n_fp16mn",
+}
+
 def _resolve_search_name(lower_name, count):
     search_name = lower_name
     if lower_name == "rmsnorm" and count == 1:
@@ -102,10 +109,33 @@ def get_category_and_prefix(template_name, base_data_dir, count):
 
     return category, prefixes[0] if prefixes else None
 
+def should_use_before_relayout(template_info):
+    """根据算子类型判断是否使用未 relayout 的数据。"""
+    normalized_name = template_info.lower()
+    return normalized_name in BEFORE_RELAYOUT_TEMPLATE_NAMES
+
+def load_layer0_operator_types(layer0_json_path):
+    """读取 layer0.json 中每个 op 的完整算子类型。"""
+    if not layer0_json_path.exists():
+        print(f"⚠️ layer0 json not found: {layer0_json_path}")
+        return {}
+
+    with layer0_json_path.open("r", encoding="utf-8") as f:
+        layer0_config = json.load(f)
+
+    op_types = {}
+    for operator in layer0_config.get("operators", []):
+        op_id = operator.get("id")
+        op_type = operator.get("type")
+        if op_id and op_type:
+            op_types[op_id] = op_type
+    return op_types
+
 def build_layer0():
     current_dir = Path(__file__).resolve().parent
     base_data_dir = current_dir.parent.parent / "model_execplan" / "data"
     mapping_file = current_dir.parent.parent / "model_execplan" / "layer0_op_listing.json"
+    layer0_json_file = current_dir.parent.parent / "model_execplan" / "layer0.json"
     layer0_install_dir = base_data_dir / "layer0" / "install"
 
     if not mapping_file.exists():
@@ -114,6 +144,7 @@ def build_layer0():
 
     with mapping_file.open("r", encoding="utf-8") as f:
         op_mapping = json.load(f)
+    op_types = load_layer0_operator_types(layer0_json_file)
 
     if layer0_install_dir.exists():
         shutil.rmtree(layer0_install_dir)
@@ -154,12 +185,16 @@ def build_layer0():
             print(f"  ⚠️ Could not find prefix for {template_name} in category {category}. Skipping {new_op}.")
             continue
 
-        src_op_dir = base_data_dir / category / prefix / "install" / old_op
+        op_type = op_types.get(new_op, template_name)
+        source_stage = "install_beforerelayout" if should_use_before_relayout(op_type) else "install"
+        src_op_dir = base_data_dir / category / prefix / source_stage / old_op
         dst_op_dir = layer0_install_dir / new_op
 
         if src_op_dir.exists():
             shutil.copytree(src_op_dir, dst_op_dir)
-            print(f"✅ Merged [{new_op}]: {category}/{prefix} ({old_op}) -> {dst_op_dir.relative_to(base_data_dir)}")
+            if source_stage == "install_beforerelayout":
+                print(f"🔁 Using install_beforerelayout [{new_op}]: {op_type} -> {category}/{prefix}/{source_stage}/{old_op}")
+            print(f"✅ Merged [{new_op}]: {category}/{prefix}/{source_stage} ({old_op}) -> {dst_op_dir.relative_to(base_data_dir)}")
         else:
             print(f"  ❌ Source NOT FOUND: {src_op_dir}")
 

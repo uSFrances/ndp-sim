@@ -892,18 +892,19 @@ def _compute_prefill_mul_fp32MN_fp32N_fp16MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc5.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
+        "iga_lc6.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
-            port2 = 32,
+            port1 = (d_m or 0) * 4,
+            port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 16,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
     }
@@ -919,21 +920,20 @@ def _compute_prefill_add_fp16MN_fp32N_fp32MN_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc1.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
-        "iga_lc2.dram_loop_configs.end": d_n // 2 if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": d_n if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n if d_n is not None else 0,
         "iga_lc5.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc7.dram_loop_configs.end": d_n if d_n is not None else 0,
-        "iga_lc8.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": d_m // 8 if d_m is not None else 0,
+        "iga_lc6.dram_loop_configs.end": d_m // 4 if d_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 16,
+            port1 = (d_m or 0) * 2,
             port2 = 16,
         ),
         "wr_stream.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
-            port2 = 32,
+            port1 = (d_m or 0) * 4,
+            port2 = 16,
         ),
     }
 
@@ -989,7 +989,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
     }
 
 
-    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
+    if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)") or _has_hint(input_a, "reorder(m8,k2)->(k2,m8)"):
         updates.update({
             "iga_col_lc0.buffer_loop_configs.COL_LC.end": 4,
             "iga_col_lc0.buffer_loop_configs.COL_LC.stride": 2,
@@ -1006,7 +1006,7 @@ def _compute_prefill_gemm_ring_4slice_control_register_updates(
             "rd_stream1.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
             "rd_stream2.stream_engine.stream.buf_spatial_stride": pack_buf_spatial_stride([0, 1, 4, 5, 8, 9, 12, 13, 16, 17, 20, 21, 24, 25, 28, 29]),
         })
-    if _has_hint(output_d, "reorder(m8)->(n8)"):
+    if _has_hint(output_d, "reorder(m8)->(n8)") or _has_hint(output_d, "reorder(n8,m8)->(m8,n8)"):
         updates.update({
             "special_array0.special_array.outport.mode": 1, #row = 1, col = 0
         })
@@ -1227,14 +1227,15 @@ def _compute_decode_gemv_ring_control_register_updates(
     b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (a_k, a_n, a_m) = a_shape if a_shape is not None else (None, None, None)
-    (b_k, b_n, b_m) = b_shape if b_shape is not None else (None, None, None)
-    (b_prime_k, b_prime_n, b_prime_m) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_k, b_prime_m, b_prime_n) = b_prime_shape if b_prime_shape is not None else (None, None, None)
 
 
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
         "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
+        "iga_lc8.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
         "iga_lc6.dram_loop_configs.end": a_k // 8 if a_k is not None else 0,
         "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
@@ -1586,8 +1587,32 @@ def _compute_decode_mul_fp32N_fp16N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+    }
+
+def _compute_decode_add_fp32N_fp16N_fp16N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,) -> dict[str, int]:
+    """Example handler for add operator control-register updates.
+
+    This function is intentionally conservative: it reads shapes and returns no-op
+    updates by default. Replace the returned dict with real register-value logic
+    once add control rules are finalized.
+    """
+
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    return {
+
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_mac_fp32N_fp32N_fp32N_control_register_updates(
@@ -1641,8 +1666,8 @@ def _compute_decode_silu_fp16N_fp32N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc3.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates(
@@ -1689,8 +1714,8 @@ def _compute_decode_add_fp32N_fp32N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 
@@ -1714,8 +1739,8 @@ def _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
@@ -1738,8 +1763,8 @@ def _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
@@ -1757,8 +1782,8 @@ def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     
     return {
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
-        "iga_lc4.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": d_n // 8 if d_n is not None else 0,
+        "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
 OP_CONTROL_REGISTER_FN = {
@@ -1804,6 +1829,7 @@ OP_CONTROL_REGISTER_FN = {
     "decode_mul_fp32N_fp32_fp16N": _compute_decode_mul_fp32N_fp32_fp16N_control_register_updates,
     "decode_mul_fp32N_fp32N_fp32N": _compute_decode_mul_fp32N_fp32N_fp32N_control_register_updates,
     "decode_mul_fp32N_fp16N_fp16N": _compute_decode_mul_fp32N_fp16N_fp16N_control_register_updates,
+    "decode_add_fp32N_fp16N_fp16N": _compute_decode_add_fp32N_fp16N_fp16N_control_register_updates,
     "decode_mac_fp32N_fp32N_fp32N": _compute_decode_mac_fp32N_fp32N_fp32N_control_register_updates,
     "decode_silu_fp16N_fp32N": _compute_decode_silu_fp16N_fp32N_control_register_updates,
     "decode_add_fp32N_fp32N_fp32N": _compute_decode_add_fp32N_fp32N_fp32N_control_register_updates,

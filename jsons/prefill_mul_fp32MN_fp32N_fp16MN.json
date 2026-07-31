@@ -1,8 +1,4 @@
 {
-    "mul_shape": {
-        "M": 64,
-        "N": 32
-    },
     "CONFIG": "11011101",
     "dram_loop_configs": {
         "LC0": {
@@ -17,7 +13,7 @@
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 8,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         },
@@ -25,64 +21,41 @@
             "src_id": "DRAM_LC.LC1",
             "outmost_loop": 0,
             "start": 0,
-            "end": 32,
+            "end": 8,
             "stride": 1,
             "last_index": 2
         },
         "LC3": {
-            "src_id": "DRAM_LC.LC2",
-            "outmost_loop": 0,
-            "start": 0,
-            "end": 8,
-            "stride": 1,
-            "last_index": 3
-        },
-        "LC4": {
             "src_id": "DRAM_LC.LC0",
             "outmost_loop": 0,
             "start": 0,
-            "end": 8,
+            "end": 32,
             "stride": 1,
             "last_index": 1
         },
-        "LC5": {
-            "src_id": "DRAM_LC.LC4",
+        "LC4": {
+            "src_id": "DRAM_LC.LC3",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 4,
             "stride": 1,
             "last_index": 2
+        },
+        "LC5": {
+            "src_id": "DRAM_LC.LC0",
+            "outmost_loop": 0,
+            "start": 0,
+            "end": 32,
+            "stride": 1,
+            "last_index": 1
         },
         "LC6": {
             "src_id": "DRAM_LC.LC5",
             "outmost_loop": 0,
             "start": 0,
-            "end": 2,
+            "end": 4,
             "stride": 1,
-            "last_index": 3
-        }
-    },
-    "lc_pe_configs": {
-        "PE0": {
-            "alu_opcode": "mac",
-            "inport2": {
-                "src_id": "DRAM_LC.LC6",
-                "mode": "buffer",
-                "keep_last_index": null,
-                "constant": 0
-            },
-            "inport1": {
-                "src_id": null,
-                "mode": "constant",
-                "keep_last_index": null,
-                "constant": 2
-            },
-            "inport0": {
-                "src_id": "DRAM_LC.LC5",
-                "mode": "keep",
-                "keep_last_index": 3,
-                "constant": 0
-            }
+            "last_index": 2
         }
     },
     "buffer_loop_configs": {
@@ -98,32 +71,32 @@
             "COL_LC": {
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
-                "end": 32,
-                "stride": 16,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         },
         "GROUP1": {
             "target": "A",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC2",
+                "src_id": "DRAM_LC.LC3",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
-                "last_index": 3
+                "last_index": 2
             },
             "COL_LC": {
                 "src_id": "GROUP1.ROW_LC",
                 "start": 0,
-                "end": 32,
-                "stride": 16,
-                "last_index": 4
+                "end": 1,
+                "stride": 1,
+                "last_index": 3
             }
         },
         "GROUP2": {
             "target": "D",
             "ROW_LC": {
-                "src_id": "DRAM_LC.LC5",
+                "src_id": "DRAM_LC.LC6",
                 "start": 0,
                 "end": 1,
                 "stride": 1,
@@ -132,8 +105,8 @@
             "COL_LC": {
                 "src_id": "GROUP2.ROW_LC",
                 "start": 0,
-                "end": 4,
-                "stride": 2,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         }
@@ -164,13 +137,13 @@
                 null
             ],
             "idx_size": [
+                15,
                 0,
-                31,
                 null
             ],
             "dim_stride": [
-                32,
-                1024,
+                16,
+                128,
                 null
             ],
             "padding_enable": [
@@ -222,18 +195,18 @@
                 1,
                 2,
                 3,
-                4,
-                5,
-                6,
-                7,
                 8,
                 9,
                 10,
                 11,
-                12,
-                13,
-                14,
-                15
+                16,
+                17,
+                18,
+                19,
+                24,
+                25,
+                26,
+                27
             ],
             "buf_spatial_size": 16,
             "buf_full_last_index": 3,
@@ -243,7 +216,7 @@
         "stream1": {
             "target": "A",
             "mode": "read",
-            "base_addr": 131072,
+            "base_addr": 4096,
             "mem_idx_mode": [
                 "buffer",
                 "keep",
@@ -251,7 +224,7 @@
             ],
             "mem_idx_keep_last_index": [
                 7,
-                3,
+                2,
                 null
             ],
             "mem_idx_constant": [
@@ -260,13 +233,13 @@
                 null
             ],
             "idx": [
+                "DRAM_LC.LC4",
                 "DRAM_LC.LC3",
-                "DRAM_LC.LC2",
                 null
             ],
             "idx_size": [
-                3,
                 0,
+                3,
                 null
             ],
             "dim_stride": [
@@ -315,7 +288,7 @@
                 "buffer"
             ],
             "buf_idx_keep_last_index": [
-                4,
+                3,
                 7
             ],
             "buf_spatial_stride": [
@@ -323,28 +296,28 @@
                 1,
                 2,
                 3,
-                4,
-                5,
-                6,
-                7,
                 8,
                 9,
                 10,
                 11,
-                12,
-                13,
-                14,
-                15
+                16,
+                17,
+                18,
+                19,
+                24,
+                25,
+                26,
+                27
             ],
             "buf_spatial_size": 16,
-            "buf_full_last_index": 3,
+            "buf_full_last_index": 2,
             "ping_pong": 0,
             "pingpong_last_index": null
         },
         "stream2": {
             "target": "D",
             "mode": "write",
-            "base_addr": 132096,
+            "base_addr": 8192,
             "mem_idx_mode": [
                 "buffer",
                 "keep",
@@ -361,18 +334,18 @@
                 null
             ],
             "idx": [
-                "LC_PE.PE0",
-                "DRAM_LC.LC4",
+                "DRAM_LC.LC6",
+                "DRAM_LC.LC5",
                 null
             ],
             "idx_size": [
-                0,
                 15,
+                0,
                 null
             ],
             "dim_stride": [
                 16,
-                512,
+                64,
                 null
             ],
             "tailing_enable": [
@@ -404,20 +377,20 @@
             "buf_spatial_stride": [
                 0,
                 1,
-                4,
-                5,
                 8,
                 9,
-                12,
-                13,
                 16,
                 17,
-                20,
-                21,
                 24,
                 25,
-                28,
-                29
+                2,
+                3,
+                10,
+                11,
+                18,
+                19,
+                26,
+                27
             ],
             "buf_spatial_size": 16,
             "ping_pong": 0,
@@ -434,32 +407,32 @@
             "mode": 0,
             "mask": [
                 1,
+                0,
                 1,
+                0,
                 1,
+                0,
                 1,
-                1,
-                1,
-                1,
-                1
+                0
             ],
             "buf_end_row_addr": 0
         },
         "buffer0": {
             "enable": 1,
             "nbr_enable": 0,
-            "buf_full_last_index": 3,
+            "buf_full_last_index": 2,
             "dst_port": 1,
             "buffer_life_time": 1,
             "mode": 0,
             "mask": [
                 1,
+                0,
                 1,
+                0,
                 1,
+                0,
                 1,
-                1,
-                1,
-                1,
-                1
+                0
             ],
             "buf_end_row_addr": 0
         },
@@ -472,13 +445,13 @@
             "mode": 0,
             "mask": [
                 1,
+                0,
                 1,
+                0,
                 1,
+                0,
                 1,
-                1,
-                1,
-                1,
-                1
+                0
             ],
             "buf_end_row_addr": 0
         }
@@ -488,13 +461,13 @@
             "inport0": {
                 "mask": [
                     1,
+                    0,
                     1,
+                    0,
                     1,
+                    0,
                     1,
-                    1,
-                    1,
-                    1,
-                    1
+                    0
                 ],
                 "src_id": 0,
                 "pingpong_en": 0,
@@ -509,13 +482,13 @@
             "inport1": {
                 "mask": [
                     1,
+                    0,
                     1,
+                    0,
                     1,
+                    0,
                     1,
-                    1,
-                    1,
-                    1,
-                    1
+                    0
                 ],
                 "src_id": 0,
                 "pingpong_en": 0,
@@ -552,13 +525,13 @@
         "outport": {
             "mask": [
                 1,
+                0,
                 1,
+                0,
                 1,
+                0,
                 1,
-                1,
-                1,
-                1,
-                1
+                0
             ],
             "src_id": 0,
             "fp32tofp16": "true",
@@ -583,8 +556,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
+                    "mode": "keep",
+                    "keep_last_index": 2,
                     "constant": 0
                 }
             },
@@ -605,52 +578,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE10": {
-                "alu_opcode": "mul",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE12": {
-                "alu_opcode": "mul",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
+                    "mode": "keep",
+                    "keep_last_index": 2,
                     "constant": 0
                 }
             },
@@ -671,8 +600,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
+                    "mode": "keep",
+                    "keep_last_index": 2,
                     "constant": 0
                 }
             },
@@ -693,52 +622,8 @@
                 },
                 "inport0": {
                     "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE30": {
-                "alu_opcode": "mul",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE32": {
-                "alu_opcode": "mul",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
+                    "mode": "keep",
+                    "keep_last_index": 2,
                     "constant": 0
                 }
             }

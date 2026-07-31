@@ -1,4 +1,5 @@
 {
+    "model_name": "deepseek1.5b",
     "hidden_size": 1536,
     "intermediate_size": 8960,
     "num_attention_heads": 12,

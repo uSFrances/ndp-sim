@@ -823,6 +823,7 @@ def write_install_manifest(
         exec_base_addr = _compute_exec_base_after_allocations(address_plan)
     payload["Exec_Base"] = _format_hex32_grouped(exec_base_addr)
     payload["Exec_Length"] = exec_length
+    payload["Repeat_Num"] = len(execution_input.operators)
     payload["ExecutionPlan"] = {
         "base_addr": _format_hex32(exec_base_addr),
         "path": exec_plan_path,

@@ -76,7 +76,7 @@ def rowmajor_mn_fp16_layout(dtype: str) -> LayoutSpec:
     )
 
 
-def v_add_rowmajor_mn_fp16_layout(dtype: str) -> LayoutSpec:
+def colmajor_mn_layout(dtype: str) -> LayoutSpec:
     return make_layout(
         dtype,
         {"M": "M", "N": "N"},
@@ -87,6 +87,26 @@ def v_add_rowmajor_mn_fp16_layout(dtype: str) -> LayoutSpec:
         ],
         ["N_outer8", "m", "n8"],
     )
+
+
+def prefill_mn_m_first_fp16_layout(dtype: str) -> LayoutSpec:
+    return make_layout(
+        dtype,
+        {"M": "M", "N": "N"},
+        [
+            {"name": "M", "parent_axis": "M", "extent": "M", "kind": "outer"},
+            {"name": "N", "parent_axis": "N", "extent": "N", "kind": "outer"},
+        ],
+        ["N", "M"],
+    )
+
+
+def prefill_mn_m_first_fp32_layout(dtype: str) -> LayoutSpec:
+    return prefill_mn_m_first_fp16_layout(dtype)
+
+
+def v_add_rowmajor_mn_fp16_layout(dtype: str) -> LayoutSpec:
+    return colmajor_mn_layout(dtype)
 
 
 
@@ -578,8 +598,8 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
     _register(
         registry,
         "prefill_mul_fp32MN_fp32N_fp16MN",
-        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp32", elementwise_mn_layout)},
-        {"out": _port("fp16", elementwise_mn_layout)},
+        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp32", prefill_mn_m_first_fp32_layout)},
+        {"out": _port("fp16", prefill_mn_m_first_fp16_layout)},
         ("inB", "inA"),
         ("out",),
         _n_mn_resolver,
@@ -632,8 +652,8 @@ def build_default_registry() -> Dict[str, RegisteredOp]:
     _register(
         registry,
         "prefill_add_fp16MN_fp32N_fp32MN",
-        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp16", elementwise_mn_layout)},
-        {"out": _port("fp32", elementwise_mn_layout)},
+        {"inA": _port("fp32", vector_n_fp32_layout), "inB": _port("fp16", prefill_mn_m_first_fp16_layout)},
+        {"out": _port("fp32", prefill_mn_m_first_fp32_layout)},
         ("inB", "inA"),
         ("out",),
         _n_mn_resolver,

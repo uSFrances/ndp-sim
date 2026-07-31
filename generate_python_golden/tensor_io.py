@@ -70,7 +70,10 @@ def parse_tensor_filename(path: str | Path) -> TensorFileInfo:
 def save_golden_tensor(directory: str | Path, name: str, tensor: np.ndarray) -> Path:
     array = np.asarray(tensor)
     dtype = canonical_dtype(array.dtype)
-    array = array.astype(dtype, copy=False)
+    # Force Fortran order before saving — golden files are always F-order on disk.
+    # Without this, a C-order array saved with ravel(order="F") has its
+    # dimensions silently transposed, scrambling the data.
+    array = np.require(array.astype(dtype, copy=False), dtype=dtype, requirements="F")
     output_dir = Path(directory)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / tensor_filename(name, array)

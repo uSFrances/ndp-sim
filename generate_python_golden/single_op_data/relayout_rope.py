@@ -249,6 +249,9 @@ def process_rope_tensors(input_dir, output_dir):
             # 严格根据 F-style 排布恢复出完整形状视图
             file_dtype = dtype_from_filename(filename)
             data = np.fromfile(filepath, dtype=file_dtype).reshape(shape_dims, order='F')
+            if op_id == "op1" and matrix_id == "B":
+                data = (-data).astype(file_dtype, copy=False)
+                print("  🔁 Negated op1/matrix_B input before relayout")
             print(f"📦 Processing: {filename} -> {target_prefix}/{op_id}/{out_name} | F-view Shape: {data.shape}")
 
             # ----------------------------------------------------
