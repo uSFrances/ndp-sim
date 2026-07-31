@@ -614,9 +614,11 @@ class Mapper:
                     with open(_cache_path, "r", encoding="utf-8") as _f:
                         cached = json.load(_f)
                     if isinstance(cached, dict) and len(cached) > 0:
-                        # Apply cached mapping via assign_node.
+                        # Apply cached mapping, but preserve any target-based
+                        # assignments already set (e.g. STREAM.target → READ_STREAM).
                         for node, res in cached.items():
-                            self.assign_node(node, res)
+                            if node not in self.assigned_node:
+                                self.assign_node(node, res)
                         test_cost = _mapping_cost({})
                         if test_cost == 0:
                             print(

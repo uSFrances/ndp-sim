@@ -23,6 +23,7 @@ _MAPPING_REVIEW_CACHE: dict[str, dict[str, str]] = {}
 _BP_INDEPENDENT_ADDR_OPS: set[str] = {
     "decode_gemv_ring",
     "decode_gemv_local",
+    "decode_gemv_local_qkt",
 }
 
 # Support exact-match tag hints from JSON. write_reg_hint is a single string.
@@ -875,8 +876,8 @@ def _compute_prefill_remote_sum_4slice_fp16MN_fp32MN_control_register_updates(
         "iga_lc1.dram_loop_configs.end": a_m // 2 if a_m is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = 32 * 32,
-            port2 = 32,
+            port1 = 16 * 32,
+            port2 = 16,
         ),
     }
 
@@ -1212,6 +1213,41 @@ def _compute_decode_gemv_local_control_register_updates(
     }
     return updates
 
+def _compute_decode_gemv_local_qkt_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for gemv_local control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    input_b_prime = operator.inputs.get("B'")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_m, a_n, a_k) = a_shape if a_shape is not None else (None, None, None)
+    (b_m, b_n, b_k) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_m, b_prime_n, b_prime_k) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+
+
+    updates: dict[str, int] = {
+        "iga_lc0.dram_loop_configs.end": b_n // 8 if b_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+    }
+    return updates
+
 
 def _compute_decode_gemv_ring_control_register_updates(
     operator: OperatorSpec,
@@ -1234,6 +1270,7 @@ def _compute_decode_gemv_ring_control_register_updates(
 
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
+        "iga_lc11.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
         "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
         "iga_lc8.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
         "iga_lc6.dram_loop_configs.end": a_k // 8 if a_k is not None else 0,
@@ -1635,15 +1672,7 @@ def _compute_decode_mac_fp32N_fp32N_fp32N_control_register_updates(
     (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
 
-        "iga_lc0.dram_loop_configs.end": d_n // 16 if a_n is not None else 0,
-        "ga_pe0.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe2.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe4.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe6.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe8.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe10.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe12.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe14.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
+        "iga_lc0.dram_loop_configs.end": d_n // 8 if a_n is not None else 0,
     }
 
 def _compute_decode_silu_fp16N_fp32N_control_register_updates(
@@ -1836,6 +1865,7 @@ OP_CONTROL_REGISTER_FN = {
     "decode_add_fp32N_fp32N_fp16N": _compute_decode_add_fp32N_fp32N_fp16N_control_register_updates,
     "decode_add_fp32N_fp16N_fp32N": _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates,
     "decode_add_fp16N_fp32N_fp16N": _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates,
+    "decode_gemv_local_qkt": _compute_decode_gemv_local_qkt_control_register_updates,
 }
 
 

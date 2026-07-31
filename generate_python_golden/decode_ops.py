@@ -110,14 +110,24 @@ SUPPORTED_DECODE_OPERATORS: tuple[DecodeOperatorSpec, ...] = (
         "op17", "decode_mul_fp32N_fp16N_fp16N",
         ("A", "B"), "hidden_elementwise", "decode_mul_fp32N_fp32N_fp16N.json",
     ),
-    # -- Additional element-wise ops used in the 43-op layer -----------------
+    # -- GEMV Local QK^T (fp32 output, for op22) ----------------------------
     DecodeOperatorSpec(
-        "op_add_fp32_fp32", "decode_add_fp32N_fp32N_fp32N",
-        ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
+        "op_gemv_local_qkt", "decode_gemv_local_qkt",
+        ("B", "A"), "gemv_local", "decode_gemv_local_qkt.json",
     ),
+    # -- remote_sum 4slice fp32→fp32 (for op23, fp32 partials in) -----------
+    DecodeOperatorSpec(
+        "op_remote_sum_4slice_fp32", "prefill_remote_sum_4slice_fp32MN_fp32MN",
+        ("A",), "remote_sum", "prefill_remote_sum_4slice_fp32MN_fp32MN.json",
+    ),
+    # -- Additional element-wise ops used in the 43-op layer -----------------
     DecodeOperatorSpec(
         "op_add_fp32_fp16", "decode_add_fp32N_fp16N_fp16N",
         ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
+    ),
+    DecodeOperatorSpec(
+        "op_mac_fp32_fp32", "decode_mac_fp32N_fp32N_fp32N",
+        ("A", "C"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
     ),
 )
 
@@ -642,7 +652,7 @@ def build_decode_golden_cases(
     v_cache = np.tile(vc, (1, 1, heads // num_kv_heads)).astype(np.float16)
 
     local_k = head_dim // slice_per_head  # 32
-    qkt_partial = np.empty((attention_length, slice_per_head, heads), dtype=np.float16, order="F")
+    qkt_partial = np.empty((attention_length, slice_per_head, heads), dtype=np.float32, order="F")
     for h in range(heads):
         for s in range(slice_per_head):
             start, end = s * local_k, (s + 1) * local_k
@@ -651,36 +661,31 @@ def build_decode_golden_cases(
                 q_per_head[h, start:end].astype(np.float32),
             )
             scores_fp32 = np.clip(scores_fp32, -65504, 65504)
-            qkt_partial[:, s, h] = scores_fp32.astype(np.float16)
+            qkt_partial[:, s, h] = scores_fp32
 
-    # Per-slice partial QK^T — apply softmax scale 1/sqrt(head_dim) to each
-    # partial so that op23 (pure remote_sum) naturally produces scaled scores.
-    # This prevents fp32 overflow in downstream exp() — unscaled scores ~30516
-    # would overflow.  The scale is distributed:  scale·sum(partials) = sum(scale·partials).
-    # NOTE: qkt_partial is fp16; convert to fp32 before scaling to preserve precision.
-    qkt_partial_fp32 = qkt_partial.astype(np.float32)  # preserves F-order, (32, 4, 7)
-    sm_scale = np.float32(1.0 / np.sqrt(float(head_dim)))  # 1/sqrt(128) ≈ 0.088
-    qkt_partial_scaled = qkt_partial_fp32 * sm_scale                # (32, 4, 7) — scaled partials
-    qkt_partial_scaled_fp16 = qkt_partial_scaled.astype(np.float16)  # fp16 for op22 output
-    attn_scores_2d = qkt_partial_scaled.sum(axis=1)                  # (32, 7) — scaled full sum
-    # op22 gemv_local output: scaled per-slice partials (fp16)
-    _add("attn_qkt",       "decode_gemv_local",
+    # op22 gemv_local output: raw (UNSCALED) per-slice partial QK^T (fp32).
+    # No 1/sqrt(d_k) scaling — the softmax max-subtraction trick
+    # (x - max ≤ 0) keeps exp() numerically stable without it.
+    # Hardware GEMV computes raw dot products; golden must match.
+    _add("attn_qkt",       "decode_gemv_local_qkt",
          (k_cache,
           np.asarray(np.expand_dims(q_per_head.T, 2), dtype=np.float16)),
-         qkt_partial_scaled_fp16)                                              # (32, 4, 7) SCALED
-    # op23 remote_sum: sums 4 scaled partials → full scaled scores.
-    # Input:  (32, 4, 7) scaled partials (matches op22 D)
-    # Output: (32, 7, 1) full scaled attention scores
-    _add("attn_qkt_remote_sum", "decode_remote_sum_fp32N_fp32N",
-         (qkt_partial_scaled,),                                                # (32, 4, 7) SCALED
-         np.expand_dims(attn_scores_2d, 2))                                           # (32, 7, 1)
+         qkt_partial)                                                           # (32, 4, 7) UNSCALED fp32
+
+    # op23 remote_sum: sums 4 fp32 partials → full raw scores (fp32).
+    attn_scores_2d = qkt_partial.sum(axis=1)       # (32, 7) — raw full sum
+    _add("attn_qkt_remote_sum", "prefill_remote_sum_4slice_fp32MN_fp32MN",
+         (qkt_partial,),                                                     # (32, 4, 7) fp32 in
+         np.expand_dims(attn_scores_2d, 2))                                  # (32, 7, 1) fp32 out
 
     # ── ops 24-28: per-head attention chain (Mode B) ──
     # Each head has a full 32-element attention vector; replicated to
     # slice_per_head=4 slices by the passthrough.
     attn_mask = rng.uniform(-0.5, 0.5, (attention_length, heads)).astype(np.float32)
-    op24_out = _elementwise_add(attn_scores_2d, attn_mask)  # (32, 7)
-    _add("attn_add_mask",  "decode_add_fp32N_fp32N_fp32N",
+    # op24 mac: scores * (1/sqrt(head_dim)) + mask — hardware applies scale here
+    sm_scale = np.float32(1.0 / np.sqrt(float(head_dim)))  # 1/sqrt(128) ≈ 0.088
+    op24_out = attn_scores_2d * sm_scale + attn_mask       # (32, 7)
+    _add("attn_add_mask",  "decode_mac_fp32N_fp32N_fp32N",
          (np.expand_dims(attn_scores_2d, 2),
           np.expand_dims(attn_mask, 2)),
          np.expand_dims(op24_out, 2))
@@ -691,38 +696,45 @@ def build_decode_golden_cases(
          (np.expand_dims(op24_out, 2),),
          np.expand_dims(op25_out, 2))
 
-    # op26 sub_SFU: scores - max  per head → (32, 7)
-    op26_out = op24_out - op25_out  # broadcast (1,7) over (32,7)
+    # op26 sub_SFU: (scores - max) → exp(scores - max)  per head → (32, 7)
+    # SFU computes the exponential; op27/op28 both read exp values from op26.
+    op26_sub = op24_out - op25_out  # broadcast (1,7) over (32,7)
+    op26_out = np.exp(op26_sub).astype(np.float32)  # (32, 7)
     _add("attn_sub_SFU",   "decode_sub_SFU_fp32N_fp32_fp32N",
          (np.expand_dims(op24_out, 2),
           np.expand_dims(op25_out, 2)),
          np.expand_dims(op26_out, 2))
 
-    # op27 sum_rec: exp(x-max) → per-head sum → reciprocal → (1, 7)
-    exp_attn = np.exp(op26_out).astype(np.float32)  # (32, 7)
-    op27_out = (np.float32(1.0) / exp_attn.sum(axis=0, keepdims=True)).astype(np.float32)  # (1, 7)
+    # op27 sum_rec: sum(exp) → reciprocal → (1, 7)
+    op27_out = (np.float32(1.0) / op26_out.sum(axis=0, keepdims=True)).astype(np.float32)  # (1, 7)
     _add("attn_sum_rec",   "decode_sum_rec_fp32N_fp32N",
          (np.expand_dims(op26_out, 2),),
          np.expand_dims(op27_out, 2))
 
-    # op28 mul_softmax: exp(x-max) * 1/sum → (32, 7) → fp16
-    op28_out = (exp_attn * op27_out).astype(np.float16)  # (32, 7)
+    # op28 mul_softmax: exp (from op26) * reciprocal (from op27) → (32, 7) → fp16
+    op28_out = (op26_out * op27_out).astype(np.float16)  # (32, 7)
     _add("attn_mul_softmax","decode_mul_fp32N_fp32_fp16N",
          (np.expand_dims(op26_out, 2),
           np.expand_dims(op27_out, 2)),
          np.expand_dims(op28_out, 2))
 
     sv_weight = v_cache.astype(np.float16)  # (128, 32, 7) after GQA broadcast
-    # Current-token V (kv_dim=128) → broadcast to 7 heads for GQA
-    v_cur = np.tile(op21_out.reshape(-1), heads).reshape(heads, kv_dim).T.astype(np.float16)  # (128, 7)
+    # op29 A = softmax weights from op28, shape (attention_length, heads) = (32, 7).
+    # NOT K-split — each head has one full 32-element softmax vector applied to
+    # all 4 K-slices of V cache.  The GEMV computes  V_slice @ softmax (not V^T @ softmax).
+    sv_a = op28_out.astype(np.float16)  # (32, 7)
     sv_partial = np.empty((attention_length, slice_per_head, heads), dtype=np.float16, order="F")
     for h in range(heads):
         for s in range(slice_per_head):
             start, end = s * local_k, (s + 1) * local_k
-            sv_partial[:, s, h] = gemv_fp32_accumulate(sv_weight[start:end, :, h], v_cur[start:end, h]).astype(np.float16)
+            # V_slice @ softmax:  gemv_fp32_accumulate(W, x)=W^T@x, so pass V_slice.T
+            sv_partial[:, s, h] = gemv_fp32_accumulate(
+                np.asarray(sv_weight[start:end, :, h].T, dtype=np.float32),
+                sv_a[:, h].astype(np.float32),
+            ).astype(np.float16)
     _add("attn_sv",        "decode_gemv_local",
          (sv_weight,
-          np.asarray(np.expand_dims(v_cur, 2), dtype=np.float16)),
+          np.asarray(np.expand_dims(sv_a, 2), dtype=np.float16)),
          sv_partial)
 
     # op30-op31 Output GEMV + residual

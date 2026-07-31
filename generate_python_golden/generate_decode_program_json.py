@@ -252,14 +252,14 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op19 only produces K for the *current* token → stored to cache externally.
     # op22 reads the full K cache (external), NOT op19.
     {
-        "id": "op22", "type": "decode_gemv_local",
+        "id": "op22", "type": "decode_gemv_local_qkt",
         "used_slices_mask": _USL,
         "inputs": {
             "A": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16", "source": "op9"},
             "B": _gemv_local_b([1, _ATN, _HD_SLICE]),
             "B'": _gemv_local_b([1, _ATN, _HD_SLICE]),
         },
-        "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _ATN]},
     },
     # op23 remote_sum (QK^T aggregation) — one slice per 4-slice group, type=slice4
     {
@@ -268,12 +268,15 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "inputs": {"A": {"shape": [1, _SPH, _ATN], "source": "op22"}},
         "output": {"shape": [1, 1, _ATN]},
     },
-    # op24 add_mask (scores + mask — A←op23, type=slice4 read from computing slice)
+    # op24 mac (scores * scale + mask) — A←op23 type=slice4, C←external mask.
+    # Prefill-compatible: ports A/C, shape [1, _ATN, _ATN] with remapping.
     {
-        "id": "op24", "type": "decode_add_fp32N_fp32N_fp32N",
+        "id": "op24", "type": "decode_mac_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "type": "slice4", "source": "op23"},
-            "B": {"shape": [1, 1, _ATN], "source": "ext"},
+            "A": {"shape": [1, _ATN, _ATN], "type": "slice4",
+                  "remapping": list(range(26)), "source": "op23"},
+            "C": {"shape": [1, _ATN, _ATN],
+                  "remapping": list(range(26)), "source": "ext"},
         },
         "output": {"shape": [1, 1, _ATN]},
     },

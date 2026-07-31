@@ -106,11 +106,11 @@ def relayout_gemv_B_k2n8kr(
 
 
 def _relayout_n8k(weight_slice: np.ndarray) -> np.ndarray:
-    """GEMV B-weight relayout: n8k — N grouped by 8, K consecutive within.
+    """GEMV B-weight relayout: n8k — N grouped by 8 for parallel computation.
 
-    GEMV is vector×matrix (M=1), so the N8M2N4/M8N2M4 matrix layouts are
-    unnecessary.  The hardware reads B in n8k order: outer loop over N//8
-    groups, inner loops over K then the 8 N elements.
+    Hardware processes 8 N positions in parallel (128-bit vector).  Within
+    each N group, all K elements stream through so the 8 parallel N lanes
+    accumulate dot-product partials together.
 
     Parameters
     ----------
@@ -123,9 +123,9 @@ def _relayout_n8k(weight_slice: np.ndarray) -> np.ndarray:
         raise ValueError(f"n8k requires N divisible by 8, got N={N}")
     result = np.empty(K * N, dtype=arr.dtype)
     idx = 0
-    for n_group in range(0, N, 8):      # N//8 groups
-        for k in range(K):               # all K elements
-            for n_off in range(8):       # 8 consecutive N
+    for n_group in range(0, N, 8):       # N//8 parallel groups
+        for k in range(K):               # all K stream through
+            for n_off in range(8):       # 8 N lanes in parallel
                 result[idx] = arr[k, n_group + n_off]
                 idx += 1
     return result
@@ -299,40 +299,61 @@ def write_gemv_local_case(
         )
 
     slice_k = k_size // slices_per_head
+    # Detect whether A is split along the K dimension (head_dim).
+    # op22 (Q): A shape (128,7,1) → K-split, each slice gets A_chunk.
+    # op29 (softmax): A shape (32,7,1) → NOT K-split, full A per slice.
+    # The shared K dimension (attention_length=32) is the reduction dim.
+    a_is_k_split = (activation.shape[0] == k_size)  # k_size = head_dim
     entry_id = op_label or str(case_entry.get("instance_id", case_entry.get("id", case_entry.get("name", ""))))
     op_dir = install_dir / entry_id
 
     for head in range(heads):
-        # ---- B (weight) split by K across slices_per_head ----
+        # ---- Full A per head (when NOT K-split, e.g. op29 softmax) ----
+        if not a_is_k_split:
+            act_head = np.asarray(activation[:, head, 0], dtype=np.float16).reshape(-1)
+
+        # ---- B (weight) split by head_dim across slices_per_head ----
         for local_slice in range(slices_per_head):
             start = local_slice * slice_k
             end = start + slice_k
-            weight_slice = weight[start:end, :, head]          # (K, N)
-            weight_linearized = _relayout_n8k(weight_slice)   # n8k: N//8 groups, K inner
+            weight_slice = weight[start:end, :, head]          # (hd_slice, attn_len)
 
-            # ---- A (activation) split by K, same as B ----
-            # GEMV is vector×matrix: M=1 always (decode single token).
-            # Each slice computes partial QK^T on its K-dim chunk;
-            # remote_sum (op23) aggregates the 4 partial results.
-            # A shape: (slice_k,) = (32,) — matches program JSON [1,1,_HD_SLICE].
-            act_slice = activation[start:end, head, 0]        # (slice_k,)
-            act_linearized = np.asarray(act_slice, dtype=np.float16).reshape(-1)
+            # JSON B shape: op22=(K=attn_len, N=hd_slice), op29=(K=hd_slice, N=attn_len).
+            # n8k groups the N (output) dimension by 8 for parallel computation.
+            # op22 output dim = attn_len → n8k on attn_len
+            # op29 output dim = hd_slice → transpose so hd_slice becomes N
+            if a_is_k_split:
+                # op22: weight_slice=(hd_slice, attn_len), N=attn_len=output dim
+                weight_linearized = _relayout_n8k(weight_slice)
+            else:
+                # op29: weight_slice=(hd_slice, attn_len), transpose so N=hd_slice=output dim
+                weight_linearized = _relayout_n8k(weight_slice.T)
+
+            # ---- A (activation) — K-split for op22, full vector for op29 ----
+            if a_is_k_split:
+                act_slice = activation[start:end, head, 0]    # (slice_k,)
+                act_linearized = np.asarray(act_slice, dtype=np.float16).reshape(-1)
+            else:
+                act_linearized = act_head  # full softmax (attention_length,)
 
             # ---- D (output) split by local_slice ----
-            output_slice = output[:, local_slice, head]
+            output_slice = output[:, local_slice, head]        # (attention_length,)
 
-            # ---- Physical mapping: logical → physical via BASE_HW_PARAMS ----
-            logical_slice = head * slices_per_head + local_slice
-            phys_slices = install_target_slices(BASE_HW_PARAMS, logical_slice)
-            for physical_slice in phys_slices:
-                slice_dir = op_dir / f"slice{physical_slice:02d}"
-                slice_dir.mkdir(parents=True, exist_ok=True)
-
-                weight_b, weight_bp = _split_weight_streams(weight_linearized)
-                save_install_tensor(slice_dir, "matrix_A_linearized_128bit.bin", act_linearized)
-                save_install_tensor(slice_dir, "matrix_B_linearized_128bit.bin", weight_b)
-                save_install_tensor(slice_dir, "matrix_Bp_linearized_128bit.bin", weight_bp)
-                save_install_tensor(slice_dir, "matrix_D_linearized_128bit.bin", output_slice)
+            # ---- Physical mapping ----
+            if a_is_k_split:
+                # op22: 28 logical slices → BASE physical mapping
+                logical_slice = head * slices_per_head + local_slice
+                phys_slices = install_target_slices(BASE_HW_PARAMS, logical_slice)
+                for physical_slice in phys_slices:
+                    _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
+                                      act_linearized, weight_linearized, output_slice)
+            else:
+                # op29: 4 logical slices × 7 heads → KV install_targets
+                # phys_slices[head] is the physical slice for (head, local_slice)
+                phys_slices = install_target_slices(KV_HW_PARAMS, local_slice)
+                physical_slice = phys_slices[head]
+                _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
+                                  act_linearized, weight_linearized, output_slice)
 
 
 def write_gemv_case(
