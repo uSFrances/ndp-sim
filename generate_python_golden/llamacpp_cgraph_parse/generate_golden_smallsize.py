@@ -9,8 +9,8 @@ import golden_ops
 class TensorStore:
     def __init__(self):
         self.store = {}
-        self.debug_save_dir = os.path.join(os.path.dirname(__file__), "python_golden_debug")
-        os.makedirs(self.debug_save_dir, exist_ok=True)
+        #self.debug_save_dir = os.path.join(os.path.dirname(__file__), "python_golden_debug")
+        #os.makedirs(self.debug_save_dir, exist_ok=True)
         
     def get(self, name):
         if name not in self.store:
@@ -20,6 +20,7 @@ class TensorStore:
     def set(self, name, value):
         self.store[name] = value
 
+    '''
     def set_debug(self, name, value):
         """设置张量并将其保存为.bin文件（列优先）"""
         self.store[name] = value  # 这里也改成直接赋值，防止互相触发双重保存
@@ -39,6 +40,7 @@ class TensorStore:
         full_path = os.path.join(self.debug_save_dir, filename)
         value.flatten(order='F').tofile(full_path)
         print(f"[Debug Saved] {name} → {filename}")
+    '''
 
     def load_from_cgraph_json(self, cgraph, input_dir):
         """从 cgraph.json 中读取权重信息和数据"""
@@ -82,38 +84,6 @@ class TensorStore:
             print(f"- {name:<40} | dtype: {tensor.dtype} | shape: {tensor.shape}")
         print("===========================\n")
 
-# TODO: move this to oplib
-def set_rows(src0: np.ndarray, src1: np.ndarray, src2: np.ndarray) -> np.ndarray:
-    """
-    src0: 目标 tensor，4D，列优先
-    src1: 源 tensor，4D，列优先
-    src2: 索引 tensor，shape[0] 代表了行数
-    src1.shape[-2] == src2.shape[-1]
-    返回：根据索引写入后的 src0 的 view，列优先
-    """
-    #print(f"[set_rows]: src0.shape={src0.shape}, src1.shape={src1.shape}, src2.shape={src2.shape}")
-    assert src0.ndim == 4
-    assert src1.ndim == 4
-    assert src2.ndim == 4
-    assert src0.dtype in (np.float16, np.float32)
-    assert src1.dtype in (np.float16, np.float32)
-    assert src2.dtype in (np.int32, np.int64)
-
-    D0_src0, D1_src0, D2_src0, D3_src0 = src0.shape
-    D0_src1, D1_src1, D2_src1, D3_src1 = src1.shape
-    D0_src2, D1_src2, D2_src2, _ = src2.shape
-    assert (D0_src0 == D0_src1), f"set_rows函数中n_embeddings不匹配, {D0_src0} vs {D0_src1}"
-    assert (D1_src1 == D0_src2), f"set_rows函数中n_rows不匹配, {D1_src1} vs {D0_src2}"
-    n_rows = D0_src2
-    assert (D1_src0 > np.max(src2)), f"src2索引值超出src0范围, {np.max(src2)} should in {D1_src0}"
-
-    for i3 in range(D2_src2):
-        for i2 in range(D1_src2):
-            for row_idx in range(n_rows):
-                idx = src2[row_idx, i2, i3]
-                # 加 .reshape(-1)，确保是 (1536,)
-                src0[:, idx, i2, i3] = src1[:, row_idx, i2, i3].reshape(-1)
-    return src0.view()
 
 def run_transformer(store: TensorStore, cgraph: dict, output_dir: str) -> np.ndarray:
     # Create output directory
@@ -130,7 +100,7 @@ def run_transformer(store: TensorStore, cgraph: dict, output_dir: str) -> np.nda
     for i in range(n_nodes):
         node = nodes[i]
         id = node.get("id")
-        name = node.get("name")
+        name : str = node.get("name")
         dtype_str = node.get("dtype")
         shape = node.get("ne", [])
         op = node.get("op")
@@ -145,64 +115,79 @@ def run_transformer(store: TensorStore, cgraph: dict, output_dir: str) -> np.nda
         # TODO: prefix 格式可能需修正
         # TODO: C or F order
         match op:
-            case "RMS_NORM":
-                oplib.current_node_prefix = f"{name}_op-rms_norm"
-                result = oplib.rms_norm(store.get(srcs[0]))
+            case "ADD":
+                oplib.current_node_prefix = f"blk.0_{name}_op-add"
+                if name.startswith("Vcur-"):
+                    # Result should be fp16
+                    result = oplib.add(store.get(srcs[0]), store.get(srcs[1]), dtype=np.float16)
+                else:
+                    result = oplib.add(store.get(srcs[0]), store.get(srcs[1]))
                 store.set(id, result)
             case "MUL":
-                oplib.current_node_prefix = f"{name}_op-mul"
-                result = oplib.mul(store.get(srcs[0]), store.get(srcs[1]))
+                oplib.current_node_prefix = f"blk.0_{name}_op-mul"
+                if name.startswith("attn_norm-") or name.startswith("ffn_norm-"):
+                    # Result should be fp16
+                    result = oplib.mul(store.get(srcs[0]), store.get(srcs[1]), dtype=np.float16)
+                else:
+                    result = oplib.mul(store.get(srcs[0]), store.get(srcs[1]))
                 store.set(id, result)
             case "MUL_MAT":
-                oplib.current_node_prefix = f"{name}_op-mul_mat"
-                result = oplib.mul_mat(store.get(srcs[0]), store.get(srcs[1]))
-                if result is not None and dtype_str == "f16":
-                    result = result.astype(np.float16) 
+                # src0: [K, N, ne02, ne03]
+                # src1: [K, M, ne12, ne13]
+                # dst: [N, M, ne12, ne13]
+                oplib.current_node_prefix = f"blk.0_{name}_op-mul_mat"
+                if (name.startswith("Qcur-")     or 
+                    name.startswith("Kcur-")     or 
+                    name.startswith("Vcur-")     or
+                    name.startswith("kqv-")      or
+                    name.startswith("node_")     or
+                    name.startswith("ffn_gate-") or
+                    name.startswith("ffn_up-")   or
+                    name.startswith("ffn_out-")):
+                    # gemm_ring and gemm_local_sv output should be fp16
+                    result = oplib.mul_mat(store.get(srcs[0]), store.get(srcs[1]), dtype=np.float16)
+                elif name.startswith("kq-"):
+                    # TODO: remote_sum
+                    # gemm_qkt output should be fp32
+                    result = oplib.mul_mat(store.get(srcs[0]), store.get(srcs[1]))
+                else:
+                    result = oplib.mul_mat(store.get(srcs[0]), store.get(srcs[1]))
                 store.set(id, result)
-            case "ADD":
-                oplib.current_node_prefix = f"{name}_op-add"
-                result = oplib.add(store.get(srcs[0]), store.get(srcs[1]))
+            case "RMS_NORM":
+                eps : float = node.get("eps", 1e-6)
+                oplib.current_node_prefix = f"blk.0_{name}_op-rms_norm"
+                result = oplib.rms_norm(store.get(srcs[0]), eps)
                 store.set(id, result)
             case "ROPE":
-                oplib.current_node_prefix = f"{name}_op-rope"
-                oplib.current_node_store_dtype = dtype_str
-                # TODO: where is leaf 6
-                result = oplib.rope(store.get(srcs[0]))
+                oplib.current_node_prefix = f"blk.0_{name}_op-rope"
+                # TODO: where are leaf 6 and params
+                # Rope result should be fp16
+                result = oplib.rope(store.get(srcs[0]), dtype=np.float16)
                 store.set(id, result)
             case "SOFT_MAX":
                 scale = node.get("scale", 1)
-                oplib.current_node_prefix = f"{name}_op-soft_max"
-                oplib.current_node_store_dtype = dtype_str
-                result = oplib.soft_max(store.get(srcs[0]), scale, mask=store.get(srcs[1]))
+                oplib.current_node_prefix = f"blk.0_{name}_op-soft_max"
+                # SoftMax output should be fp16
+                result = oplib.soft_max(store.get(srcs[0]), scale, mask=store.get(srcs[1]), dtype=np.float16)
                 store.set(id, result)
             case "GLU":
                 glu_op = node.get("glu_op")
-                if (glu_op == "SWIGLU"):
-                    # TODO: not match: silu vs swiglu!!
-                    oplib.current_node_prefix = f"{name}_op-unary"
-                    result = oplib.unary(store.get(srcs[0]))
-                    store.set(id, result)
-                else:
-                    raise ValueError(f"Not supported glu_op: {glu_op}")
+                match glu_op:
+                    case "SWIGLU":
+                        # Split to silu and mul
+                        oplib.current_node_prefix = f"blk.0_ffn_silu-0_op-unary"
+                        ffn_silu = oplib.unary(store.get(srcs[0]))
+                        oplib.current_node_prefix = f"blk.0_ffn_gate_par-0_op_mul"
+                        # Result should be fp16
+                        result = oplib.mul(ffn_silu, store.get(srcs[1]), dtype=np.float16)
+                        store.set(id, result)
+                    case _:
+                        raise ValueError(f"Not supported glu_op: {glu_op}")
             case "GET_ROWS":
-                oplib.current_node_prefix = f"{name}_op-get_rows"
+                oplib.current_node_prefix = f"blk.0_{name}_op-get_rows"
                 result = oplib.get_rows(store.get(srcs[0]), store.get(srcs[1]))
                 store.set(id, result)
             # Special ops for llama.cpp
-            case "RESHAPE":     
-                src = store.get(srcs[0])
-                store.set(id, np.reshape(src, shape, order="F"))
-            case "VIEW":
-                src = store.get(srcs[0])
-                # reshape naturally return a view
-                store.set(id, np.reshape(src, shape, order="F"))
-            case "PERMUTE":
-                axis = node.get("axis", [])
-                src = store.get(srcs[0])
-                store.set(id, np.transpose(src, axis))
-            case "CONT":
-                src = store.get(srcs[0])
-                store.set(id, np.reshape(src, shape, order="F"))
             case "SET_ROWS":
                 # The order of srcs follows llama.cpp, may seem weird
                 src = srcs[0]
@@ -210,9 +195,23 @@ def run_transformer(store: TensorStore, cgraph: dict, output_dir: str) -> np.nda
                 dst = srcs[2]
                 #print(f"[set_rows]: src0.id={dst}, src1.id={src}, src2.id={idx}")
                 # TODO: need correct row index data
-                #result = set_rows(store.get(dst), store.get(src), store.get(idx))
+                #result = oplib.set_rows(store.get(dst), store.get(src), store.get(idx))
                 #store.set(id, result)
                 store.set(id, store.get(dst).view())
+            case "RESHAPE":     
+                src = store.get(srcs[0])
+                store.set(id, np.reshape(src, shape, order="F"))
+            case "VIEW":
+                src = store.get(srcs[0])
+                # reshape naturally return a view
+                store.set(id, np.reshape(src, shape, order="F"))
+            case "CONT":
+                src = store.get(srcs[0])
+                store.set(id, np.reshape(src, shape, order="F"))
+            case "PERMUTE":
+                axis = node.get("axis", [])
+                src = store.get(srcs[0])
+                store.set(id, np.transpose(src, axis))
             case _:
                 raise ValueError(f"Unsupported op: {op}")
             

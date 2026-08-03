@@ -2,6 +2,7 @@ import os
 import math
 import numpy as np
 
+
 """ oplib: 执行算子运算，并输出 input/output golden 数据"""
 class oplib:
     def __init__(self, golden_dir, golden_subop_dir, rope_fp32_dir):
@@ -9,7 +10,6 @@ class oplib:
         self.golden_subop_dir = golden_subop_dir    # Golden subop 输出目录
         self.rope_fp32_dir = rope_fp32_dir          # ROPE cos/sin 查找表
         self.current_node_prefix = ""
-        self.current_node_store_dtype = None
         try:
             self.FLOAT_ACCUM = np.float128  # Prefer highest precision available
         except AttributeError:  # pragma: no cover - fallback on platforms without float128
@@ -55,16 +55,18 @@ class oplib:
             return x.astype(np.float32, copy=False)
         return x
     
-    def add(self, x, y):
+    def add(self, x, y, dtype:np.typing.DTypeLike = np.float32):
         dst = self.ensure_fp32(x) + self.ensure_fp32(y)
+        dst = dst.astype(dtype)
         # 新增：非 subop 输入与输出
         self.save_io_tensor(f"{self.current_node_prefix}_in0", x, is_sub_op=False)
         self.save_io_tensor(f"{self.current_node_prefix}_in1", y, is_sub_op=False)
         self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
         return dst
     
-    def mul(self, x, y):
+    def mul(self, x, y, dtype:np.typing.DTypeLike = np.float32):
         dst = self.ensure_fp32(x) * self.ensure_fp32(y)
+        dst = dst.astype(dtype)
         # 新增：非 subop 输入与输出
         self.save_io_tensor(f"{self.current_node_prefix}_in0", x, is_sub_op=False)
         self.save_io_tensor(f"{self.current_node_prefix}_in1", y, is_sub_op=False)
@@ -90,26 +92,58 @@ class oplib:
         assert src0.dtype in (np.float16, np.float32)
         assert src1.dtype == np.int32
 
-        D0, D1_src, D2, D3 = src0.shape
-        _, D1_dst, D2_dst, D3_dst = src1.shape
-        assert (D1_src >= np.max(src1) + 1), "src1索引超出src0范围"
+        D0_src0, D1_src0, D2, D3 = src0.shape
+        D0_src1, D1_src1, D2_src1, _ = src1.shape
+        assert (D1_src0 >= np.max(src1) + 1), "src1索引超出src0范围"
 
-        dst = np.zeros((D0, D1_dst, D2_dst, D3_dst), dtype=src0.dtype, order='F')
+        dst = np.zeros((D0_src0, D0_src1, D1_src1, D2_src1), dtype=src0.dtype, order='F')
 
-        for i1 in range(D1_dst):
-            for i2 in range(D2_dst):
-                for i3 in range(D3_dst):
+        for i1 in range(D0_src1):
+            for i2 in range(D1_src1):
+                for i3 in range(D2_src1):
                     idx = src1[i1, i2, i3]
                     # 加 .reshape(-1)，确保是 (1536,)
                     dst[:, i1, i2, i3] = src0[:, idx, i2, i3].reshape(-1)
 
         # 新增：非 subop 输入与输出
-        self.save_io_tensor(f"{self.current_node_prefix}_in0", src0, is_sub_op=False)
-        self.save_io_tensor(f"{self.current_node_prefix}_in1", src1, is_sub_op=False)
-        self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
+        # TODO: 暂时不生成 get_rows golden 数据
+        #self.save_io_tensor(f"{self.current_node_prefix}_in0", src0, is_sub_op=False)
+        #self.save_io_tensor(f"{self.current_node_prefix}_in1", src1, is_sub_op=False)
+        #self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
         return dst
-    
-    def matmul_2d(self, src0, src1, m, n ,k, out_dtype=np.float32):
+
+    def set_rows(self, dst: np.ndarray, src: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        """
+        dst: 目标 tensor，4D，列优先
+        src: 源 tensor，4D，列优先
+        idx: 索引 tensor，shape[0] 代表了行数
+        返回：根据索引写入后的 src0 的 view，列优先
+        """
+        #print(f"[set_rows]: dst.shape={dst.shape}, src.shape={src.shape}, idx.shape={idx.shape}")
+        assert dst.ndim == 4
+        assert src.ndim == 4
+        assert idx.ndim == 4
+        assert dst.dtype in (np.float16, np.float32)
+        assert src.dtype in (np.float16, np.float32)
+        assert idx.dtype in (np.int32, np.int64)
+
+        D0_dst, D1_dst, D2_dst, D3_dst = dst.shape
+        D0_src, D1_src, D2_src, D3_src = src.shape
+        D0_idx, D1_idx, D2_idx, _ = idx.shape
+        assert (D0_dst == D0_src), f"set_rows函数中n_embeddings不匹配, {D0_dst} vs {D0_src}"
+        assert (D1_src == D0_idx), f"set_rows函数中n_rows不匹配, {D1_src} vs {D0_idx}"
+        n_rows = D0_idx
+        assert (D1_dst > np.max(idx)), f"idx索引值超出dst范围, {np.max(idx)} should in {D1_dst}"
+
+        for i3 in range(D2_idx):
+            for i2 in range(D1_idx):
+                for row_idx in range(n_rows):
+                    idx = idx[row_idx, i2, i3]
+                    # 加 .reshape(-1)，确保是 (1536,)
+                    dst[:, idx, i2, i3] = src[:, row_idx, i2, i3].reshape(-1)
+        return dst.view()
+
+    def matmul_2d(self, src0, src1, m, n ,k, dtype:np.typing.DTypeLike = np.float32):
         dst_py = np.zeros((m,n), dtype=np.float32) 
     
         for i in range(m):          
@@ -125,15 +159,15 @@ class oplib:
                     sum_val += tmp
                 dst_py[i, j] = np.float32(sum_val)  
 
-        dst = dst_py.astype(out_dtype, copy=False)
+        dst = dst_py.astype(dtype, copy=False)
     
         # 新增：非 subop 输入与输出
-        self.save_io_tensor(f"{self.current_node_prefix}_in0", src0, is_sub_op=False)
-        self.save_io_tensor(f"{self.current_node_prefix}_in1", src1, is_sub_op=False)
-        self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
+        #self.save_io_tensor(f"{self.current_node_prefix}_in0", src0, is_sub_op=False)
+        #self.save_io_tensor(f"{self.current_node_prefix}_in1", src1, is_sub_op=False)
+        #self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
         return dst
 
-    def mul_mat(self, src0, src1, out_dtype=np.float32):
+    def mul_mat(self, src0, src1, dtype:np.typing.DTypeLike = np.float32):
         # print("src0.shape:", src0.shape)
         # print("src1.shape:", src1.shape)
 
@@ -157,9 +191,9 @@ class oplib:
 
             src0_re_T = src0_re.T
 
-            dst_py = self.matmul_2d(src0_re_T, src1_re, m, n, k, out_dtype=out_dtype)
+            dst_py = self.matmul_2d(src0_re_T, src1_re, m, n, k, dtype=dtype)
 
-            dst = dst_py.reshape((m,n,1,1), order='F').astype(out_dtype, copy=False)
+            dst = dst_py.reshape((m,n,1,1), order='F').astype(dtype, copy=False)
 
         elif (ne04 == ne14) and (ne04 == 1):#批次为1的三维张量处理
 
@@ -169,13 +203,13 @@ class oplib:
                 return None
 
             #dst_py = np.zeros((1,ne13,n,m), dtype=np.float32) 
-            dst_py = np.zeros((m,n,ne13,1), dtype=out_dtype) 
+            dst_py = np.zeros((m,n,ne13,1), dtype=dtype) 
             for j in range(ne03):
                 for i in range(scale):
                     ex_src0 = src0[:,:,j,0]
                     ex_src1 = src1[:,:,j*scale+i,0]
                     ex_src0_T = ex_src0.T
-                    dst = self.matmul_2d(ex_src0_T, ex_src1, m, n, k, out_dtype=out_dtype)
+                    dst = self.matmul_2d(ex_src0_T, ex_src1, m, n, k, dtype=dtype)
                     dst_py[:,:,j*scale+i,0] = dst
 
             dst = dst_py
@@ -191,7 +225,7 @@ class oplib:
         return dst
 
 
-    def rms_norm(self, x):
+    def rms_norm(self, x, eps = 1e-6):
         nsamples    = x.shape[3]  # ne03
         nchannels   = x.shape[2]  # ne02
         nrows       = x.shape[1]  # ne01 (32)
@@ -222,8 +256,7 @@ class oplib:
                         tmp = self.fp32_fma_accumulate(tmp, x_slice[col], x_slice[col])
 
                     mean = tmp / ncols
-                    # TODO: 可配置的eps?
-                    scale = 1.0 / np.sqrt(mean + 0.000001)
+                    scale = 1.0 / np.sqrt(mean + eps)
                     dst[:, row, channel, sample] =  x_slice * scale
                     
                     # --- 仅用于旁路追踪 Sub-Op 数据 (提取 28 组 slice 平方和) ---
@@ -271,7 +304,7 @@ class oplib:
 
         return dst
 
-    def rope(self, x):
+    def rope(self, x, dtype:np.typing.DTypeLike = np.float32):
         ne2 = x.shape[2]
         ne1 = x.shape[1]
         ne0 = x.shape[0]   
@@ -345,6 +378,8 @@ class oplib:
                     
                     dst[i,  j,  k]       = res1
                     dst[i+ne0//2,  j,  k]    = res2
+
+        dst = dst.astype(dtype)
                     
         if self.current_node_prefix:
             # 新增：非 subop 输入与输出
@@ -370,11 +405,7 @@ class oplib:
             add_in1[ne0//2:,:,:,:] = mul2_out[0:ne0//2,:,:,:] # x0_sin
             self.save_io_tensor(f"{self.current_node_prefix}_subop-add_final_in0", add_in0, is_sub_op=True)
             self.save_io_tensor(f"{self.current_node_prefix}_subop-add_final_in1", add_in1, is_sub_op=True)
-            add_final_out = add_out
-            if self.current_node_store_dtype == "f16":
-                add_final_out = add_out.astype(np.float16)
-            elif self.current_node_store_dtype == "f32":
-                add_final_out = add_out.astype(np.float32)
+            add_final_out = add_out.astype(dtype)
             self.save_io_tensor(
                 f"{self.current_node_prefix}_subop-add_final_out",
                 add_final_out,
@@ -383,7 +414,7 @@ class oplib:
             
         return dst
 
-    def soft_max(self, x, scale, mask=None):
+    def soft_max(self, x, scale, mask=None, dtype:np.typing.DTypeLike = np.float32):
         """
         x: 4D tensor, column-major (Fortran-order)
         mask: optional 4D tensor, also column-major
@@ -434,11 +465,12 @@ class oplib:
         soft_max_f32_simple(src0_flat, mask_flat, dst_python, ncols, nrows_x, nrows_y, scale)
 
         dst_python = dst_python.reshape(src0_shape, order='F')
+        dst = dst_python.astype(dtype)
         
         if self.current_node_prefix:
             # 新增：非 subop 输入与输出
             self.save_io_tensor(f"{self.current_node_prefix}_in0", x, is_sub_op=False)
-            self.save_io_tensor(f"{self.current_node_prefix}_out", dst_python, is_sub_op=False)
+            self.save_io_tensor(f"{self.current_node_prefix}_out", dst, is_sub_op=False)
 
             # 重塑并保存子图操作
             scaled_x_re = scaled_x.reshape(src0_shape, order='F')
@@ -467,11 +499,7 @@ class oplib:
             self.save_io_tensor(f"{self.current_node_prefix}_subop-sub_SFU_out", sub_SFU_out_re, is_sub_op=True)
             # op3 输出：sum_SFU 的结果是倒数
             self.save_io_tensor(f"{self.current_node_prefix}_subop-sum_SFU_out", sum_SFU_out_re, is_sub_op=True)
-            mul_out = dst_python
-            if self.current_node_store_dtype == "f16":
-                mul_out = dst_python.astype(np.float16)
-            elif self.current_node_store_dtype == "f32":
-                mul_out = dst_python.astype(np.float32)
+            mul_out = dst_python.astype(dtype)
             self.save_io_tensor(
                 f"{self.current_node_prefix}_subop-mul_MN_M_out",
                 mul_out,

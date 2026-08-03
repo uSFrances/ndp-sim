@@ -73,57 +73,92 @@ def get_oplist(cgraph_path: str) -> list[str]:
     # Parse cgraph
     for node in nodes:
         id = node.get("id")
-        name = node.get("name")
+        name : str = node.get("name", "")
         dtype_str = node.get("dtype")
         shape = node.get("ne", [])
-        op = node.get("op")
+        node_op = node.get("op")
         srcs = node.get("srcs", [])
 
-        # TODO: only generate one layer now!
+        # TODO: Only generate one layer now!
         if name == "norm-1":
             break
 
-        match op:
-            case "RMS_NORM":
-                # TODO: rmsnorm_kv
-                oplist.append("rmsnorm")
-            case "MUL":
-                # TODO: Unsupported type combination?
-                # TODO: mul_kv select
-                # parse fp type
-                #src0 = get_node(srcs[0])
-                #src1 = get_node(srcs[1])
-                #src0_type = get_fp_type(src0.get("dtype", ""))
-                #src1_type = get_fp_type(src1.get("dtype", ""))
-                #dst_type = get_fp_type(dtype_str)
-                #op = f"mul_{src0_type}MN_{src1_type}N_{dst_type}MN"
-                op = "mul_fp32MN_fp32N_fp16MN"
-                oplist.append(op)
-            case "MUL_MAT":
-                # TODO: gemm type select
-                oplist.append("gemm_ring")
+        # TODO: Only support DeepSeek-R1-Distill-Qwen-1.5B-f16.gguf now!
+        match node_op:
             case "ADD":
-                # TODO: Unsupported type combination?
-                # TODO: add type select
-                # parse fp type
-                #src0 = get_node(srcs[0])
-                #src1 = get_node(srcs[1])
-                #src0_type = get_fp_type(src0.get("dtype", ""))
-                #src1_type = get_fp_type(src1.get("dtype", ""))
-                #dst_type = get_fp_type(dtype_str)
-                #op = f"add_{src0_type}MN_{src1_type}N_{dst_type}MN"
-                op = "add_fp16MN_fp32N_fp32MN"
-                oplist.append(op)
+                if name.startswith("Qcur-"):
+                    oplist.append("add_fp16MN_fp32N_fp32MN")
+                elif name.startswith("Kcur-"):
+                    oplist.append("add_fp16MN_fp32N_fp32MN_k")
+                elif name.startswith("Vcur-"):
+                    oplist.append("add_V_fp16MN_fp32N_fp16MN")
+                elif name.startswith("ffn_inp-"):
+                    oplist.append("add_fp32MN_fp16MN_fp32MN_residual")
+                elif name.startswith("l_out-"):
+                    oplist.append("add_fp32MN_fp16MN_fp32MN_out")
+                else:
+                    oplist.append("add_unknown")
+            case "MUL":
+                if name.startswith("attn_norm-"):
+                    oplist.append("mul_fp32MN_fp32N_fp16MN")
+                    # Insert rmsnorm_kv and mul_kv here, 
+                    # Split attn_norm to two parts, to fit hardware
+                    oplist.append("rmsnorm_kv")
+                    oplist.append("mul_fp32MN_fp32N_fp16MN_kv")
+                elif name.startswith("ffn_norm-"):
+                    oplist.append("mul_fp32MN_fp32N_fp16MN")
+                else:
+                    oplist.append("mul_unknown")
+            case "MUL_MAT":
+                if name.startswith("Qcur-"):
+                    oplist.append("gemm_ring")
+                elif name.startswith("Kcur-"):
+                    oplist.append("gemm_ring_k")
+                elif name.startswith("Vcur-"):
+                    oplist.append("gemm_ring_v")
+                elif name.startswith("kq-"):
+                    oplist.append("gemm_local_qkt")
+                    # Insert remote_sum here, to fit hardware
+                    oplist.append("remote_sum_fp32MN_fp32MN")
+                elif name.startswith("kqv-"):
+                    oplist.append("gemm_local_sv")
+                elif name.startswith("node_"):  # attn output
+                    oplist.append("gemm_ring")
+                elif name.startswith("ffn_gate-"):
+                    oplist.append("gemm_ring_ffn_gate")
+                elif name.startswith("ffn_up-"):
+                    oplist.append("gemm_ring_ffn_up")
+                elif name.startswith("ffn_out-"):
+                    oplist.append("gemm_ring_ffn_out")
+                else:
+                    oplist.append("gemm_unknown")
+            case "RMS_NORM":
+                oplist.append("rmsnorm")
             case "ROPE":
-                # TODO: rope_k
-                oplist.append("rope")
+                if name.startswith("Qcur-"):
+                    oplist.append("rope")
+                elif name.startswith("Kcur-"):
+                    oplist.append("rope_k")
+                else:
+                    oplist.append("rope_unknown")
             case "SOFT_MAX":
                 oplist.append("softmax")
             case "GLU":
-                # TODO: not match: silu vs swiglu!!
-                oplist.append("silu")
-            case _:
+                glu_op = node.get("glu_op", "")
+                match glu_op:
+                    case "SWIGLU":
+                        # Split to silu and mul
+                        oplist.append("silu")
+                        oplist.append("mul_fp32MN_fp16MN_fp16MN")
+                    case _:
+                        raise ValueError(f"Invalid glu op: {glu_op}")
+            case "SET_ROWS" | "GET_ROWS":
+                # TODO: Ignore now
                 continue
+            case "RESHAPE" | "PERMUTE" | "CONT" | "VIEW":
+                continue
+            case _:
+                raise ValueError(f"Invalid cgraph op: {node_op}")
     return oplist
 
 
