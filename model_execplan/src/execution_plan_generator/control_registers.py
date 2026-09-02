@@ -22,8 +22,10 @@ _MAPPING_REVIEW_CACHE: dict[str, dict[str, str]] = {}
 # the allocated address space for each is // 2 of the JSON size.
 _BP_INDEPENDENT_ADDR_OPS: set[str] = {
     "decode_gemv_ring",
+    "decode_gemv_ring_new",
     "decode_gemv_local",
     "decode_gemv_local_qkt",
+    "prefill_summac_fp32MN_fp32MN",
 }
 
 # Support exact-match tag hints from JSON. write_reg_hint is a single string.
@@ -453,17 +455,22 @@ def _compute_prefill_summac_fp32MN_fp32MN_control_register_updates(
     template: OperatorTemplate,
 ) -> dict[str, int]:
     """Placeholder for summac control register logic."""
-    input_a = operator.inputs.get("A")
-    a_shape = input_a.shape if input_a is not None else None
+    input_b = operator.inputs.get("B")
+    b_shape = input_b.shape if input_b is not None else None
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
     return {
-        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
-        "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
-        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+        "iga_lc0.dram_loop_configs.end": b_m // 8 if b_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": b_n // 2 if b_n is not None else 0,
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (a_n or 0) * 32,
+            port1 = (b_n or 0) * 16,
+            port2 = 32,
+        ),
+        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = (b_n or 0) * 16,
             port2 = 32,
         ),
     }
@@ -1141,12 +1148,12 @@ def _compute_prefill_gemm_local_qkt_control_register_updates(
 
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": a_m // 32 if a_m is not None else 0,
-        "iga_lc1.dram_loop_configs.end": a_n // 32 if a_n is not None else 0,
+        "iga_lc1.dram_loop_configs.end": b_n // 32 if b_n is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_k // 2 if a_k is not None else 0,
         "iga_lc4.dram_loop_configs.end": a_k // 4 if a_k is not None else 0,
         "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
         "iga_pe1.lc_pe_configs.inport1.constant": _fit_i16(2 * a_k) if a_k is not None else 0,
-        "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(a_n) if a_n is not None else 0,
+        "iga_pe3.lc_pe_configs.inport1.constant": _fit_i16(b_n) if b_n is not None else 0,
     }
 
     if _has_hint(input_a, "reorder(m8,n2)->(n2,m8)"):
@@ -1270,9 +1277,7 @@ def _compute_decode_gemv_ring_control_register_updates(
 
     updates: dict[str, int] = {
         "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
-        "iga_lc11.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
         "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
-        "iga_lc8.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
         "iga_lc6.dram_loop_configs.end": a_k // 8 if a_k is not None else 0,
         "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
@@ -1296,6 +1301,53 @@ def _compute_decode_gemv_ring_control_register_updates(
     }
 
     return updates
+
+def _compute_decode_gemv_ring_new_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for gemv_ring_new control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    input_b_prime = operator.inputs.get("B'")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    b_prime_shape = input_b_prime.shape if input_b_prime is not None else None
+    b_bank_interleave = input_b.bank_interleave if input_b is not None else 1
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    (b_prime_k, b_prime_m, b_prime_n) = b_prime_shape if b_prime_shape is not None else (None, None, None)
+
+
+    updates: dict[str, int] = {
+        "iga_lc0.dram_loop_configs.end": b_n // 16 if b_n is not None else 0,
+        "iga_lc3.dram_loop_configs.end": b_k // 32 if b_k is not None else 0,
+        "iga_lc6.dram_loop_configs.end": a_k // 8 if a_k is not None else 0,
+        "se_nse0.n2n.mem_loop": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "se_nse0.n2n.src_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, # pyright: ignore[reportOperatorIssue]
+        "se_nse0.n2n.dst_slice_sel": 1 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 0, 
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
+        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = 32,
+            port2 = (b_k or 0) * 8,
+        ),
+    }
+
+    return updates
+
 
 def _compute_prefill_mac_fp32MN_fp32MN_fp32MN_control_register_updates(
     operator: OperatorSpec,
@@ -1815,6 +1867,93 @@ def _compute_decode_mul_fp32N_fp32N_fp16N_control_register_updates(
         "iga_lc5.dram_loop_configs.end": d_n // 16 if d_n is not None else 0,
     }
 
+def _compute_prefill_remote_sum_qkt_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for prefill_remote_sum_qkt_fp32MN_fp32MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_n  if a_n is not None else 0,
+        "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(a_n*a_m//8) if a_n is not None and a_m is not None else 0,
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = a_n * 32 if a_n is not None else 0,
+            port2 = 32,
+        ),
+        "rd_stream1.stream_engine.stream.base_addr": parse_base_addr(6291456),
+    }
+
+
+def _compute_prefill_remote_summac_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for prefill_remote_summac_fp32MN_fp32MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_n * 7 if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = a_n * 32 if a_n is not None else 0,
+            port2 = 32,
+        ),
+        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+    }
+
+def _compute_decode_remote_summac_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for prefill_remote_summac_fp32MN_fp32MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_n * 7 if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = a_n * 4 if a_n is not None else 0,
+            port2 = 4,
+        ),
+        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+    }
+
+
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
     "prefill_gemm_local": _compute_prefill_gemm_local_control_register_updates,
@@ -1866,6 +2005,10 @@ OP_CONTROL_REGISTER_FN = {
     "decode_add_fp32N_fp16N_fp32N": _compute_decode_add_fp32N_fp16N_fp32N_control_register_updates,
     "decode_add_fp16N_fp32N_fp16N": _compute_decode_add_fp16N_fp32N_fp16N_control_register_updates,
     "decode_gemv_local_qkt": _compute_decode_gemv_local_qkt_control_register_updates,
+    "prefill_remote_sum_qkt_fp32MN_fp32MN": _compute_prefill_remote_sum_qkt_fp32MN_fp32MN_control_register_updates,
+    "prefill_remote_summac_fp32MN_fp32MN": _compute_prefill_remote_summac_fp32MN_fp32MN_control_register_updates,
+    "decode_remote_summac_fp32N_fp32N": _compute_decode_remote_summac_fp32N_fp32N_control_register_updates,
+    "decode_gemv_ring_new": _compute_decode_gemv_ring_new_control_register_updates,
 }
 
 

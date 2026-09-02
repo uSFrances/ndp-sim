@@ -95,11 +95,32 @@
                 "constant": 8
             },
             "inport0": {
-                "src_id": "DRAM_LC.LC3",
+                "src_id": "LC_PE.PE6",
                 "mode": "keep",
                 "keep_last_index": 4,
                 "constant": 0
             }
+        },
+        "PE6": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "DRAM_LC.LC3",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
         },
         "PE2": {
             "alu_opcode": "mac",
@@ -116,11 +137,32 @@
                 "constant": 16
             },
             "inport0": {
-                "src_id": "DRAM_LC.LC3",
+                "src_id": "LC_PE.PE7",
                 "mode": "keep",
                 "keep_last_index": 4,
                 "constant": 0
             }
+        },
+        "PE7": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "DRAM_LC.LC3",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
         },
         "PE3": {
             "alu_opcode": "mac",
@@ -137,11 +179,32 @@
                 "constant": 2
             },
             "inport0": {
-                "src_id": "DRAM_LC.LC0",
+                "src_id": "LC_PE.PE8",
                 "mode": "keep",
                 "keep_last_index": 1,
                 "constant": 0
             }
+        },
+        "PE8": {
+            "alu_opcode": "mul",
+            "inport2":{
+                    "src_id": null,
+                    "mode": null,
+                    "keep_last_index": null,
+                    "constant": 0
+                },
+            "inport1": {
+                    "src_id": null,
+                    "mode": "constant",
+                    "keep_last_index": null,
+                    "constant": 1
+            },
+            "inport0":{
+                    "src_id": "DRAM_LC.LC0",
+                    "mode": "buffer",
+                    "keep_last_index": null,
+                    "constant": 0
+            }    
         },
         "PE4": {
             "alu_opcode": "mul",

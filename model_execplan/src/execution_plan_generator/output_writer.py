@@ -1135,17 +1135,22 @@ def _to_128bit_lines(commands: list[int]) -> list[str]:
 
 
 def _compute_exec_base_after_allocations(address_plan: AddressPlan) -> int:
-    # Track next free byte address from tensor and config allocations.
+    # Execplan is fixed to bank0. Allocations in other banks have larger
+    # numeric addresses but must not move the execution plan to those banks.
     max_end_addr = 0
 
     for assignment in address_plan.assignments.values():
         start_addr = assignment.base_address
+        if ((start_addr >> 23) & 0x3) != 0:
+            continue
         words = ceil(assignment.size_bytes / 16)
         end_addr = start_addr + (words * 16)
         if end_addr > max_end_addr:
             max_end_addr = end_addr
 
     for op_id, base_addr in address_plan.operator_config_base_addresses.items():
+        if ((base_addr >> 23) & 0x3) != 0:
+            continue
         start_addr = base_addr
         length_rows_64b = int(address_plan.operator_config_lengths.get(op_id, 0) or 0)
         reserved_addr = _align_up(length_rows_64b * 8, 16 * 64)
@@ -1154,6 +1159,8 @@ def _compute_exec_base_after_allocations(address_plan: AddressPlan) -> int:
             max_end_addr = end_addr
 
     for op_id, base_addr in address_plan.operator_sfu_config_base_addresses.items():
+        if ((base_addr >> 23) & 0x3) != 0:
+            continue
         start_addr = base_addr
         length_rows_64b = int(address_plan.operator_sfu_config_lengths.get(op_id, 0) or 0)
         reserved_addr = _align_up(length_rows_64b * 8, 16 * 64)

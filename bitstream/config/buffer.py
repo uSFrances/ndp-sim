@@ -22,7 +22,7 @@ class BufferConfig(BaseConfigModule):
     def __init__(self, idx: int):
         super().__init__()
         self.idx = idx  # buffer index
-        self.enable = 1  # Track enable separately for empty check
+        self.enable = 0  # Track enable separately for empty check
         self.values["buffer_nbr_cnt"] = None  # Use None to trigger the lambda default
 
     def from_json(self, cfg: dict):

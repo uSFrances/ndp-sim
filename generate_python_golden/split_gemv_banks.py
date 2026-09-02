@@ -4,7 +4,7 @@
 import json
 from pathlib import Path
 
-BANK_JSON = Path(__file__).resolve().parent.parent / "model_execplan" / "examples" / "layer0_decode_bank2.json"
+BANK_JSON = Path(__file__).resolve().parent.parent / "model_execplan" / "examples" / "layer0_decode_bank2_remapped.json"
 INSTALL_DIR = Path(__file__).resolve().parent / "single_op_data" / "install_decode"
 
 

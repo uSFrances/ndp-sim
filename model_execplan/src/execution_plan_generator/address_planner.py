@@ -114,7 +114,15 @@ class AddressPlanner:
         sfu_config_lengths_by_op: dict[str, int] | None,
         sfu_types_by_op: dict[str, str] | None = None,
     ) -> AddressPlan:
-        num_groups = self._group_count(interleave)
+        # interleave=4 plans are split into two 2-bank groups (banks 0/1 and
+        # 2/3) so that ilv=2 tensors (GEMV B/B') can be pinned to a specific
+        # bank pair while ilv=4 tensors (GEMV A/D) span all four banks.
+        if interleave >= 4:
+            num_groups = 2
+            bank_span = 2
+        else:
+            num_groups = self._group_count(interleave)
+            bank_span = interleave
         group_cursors = [_AddressCursor() for _ in range(num_groups)]
 
         assignments: dict[str, AddressAssignment] = {}
@@ -135,6 +143,7 @@ class AddressPlanner:
                 )
 
             last_group: int | None = None
+            a_group: int | None = None
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
@@ -159,6 +168,16 @@ class AddressPlanner:
                         alloc_shape = (k, m, n // 2)
 
                     tensor_ilv = tensor.bank_interleave or 1
+                    force_group: int | None = None
+                    if interleave >= 2 and (op.op_type == "decode_gemv_ring" or op.op_type == "decode_gemv_ring_new"):
+                        # A/B and A/D must live on different banks:
+                        # A → group 0 (banks 0/1), B → group 1 (banks 2/3).
+                        if input_name == "A":
+                            force_group = 0  # banks 0/1
+                        elif input_name == "B":
+                            force_group = 1  # banks 2/3
+                        elif input_name == "B'":
+                            force_group = 0  # banks 0/1
                     assignment, gi, _, _, _ = (
                         self._allocate_tensor_interleaved(
                             tensor_name=tensor_name,
@@ -167,11 +186,15 @@ class AddressPlanner:
                             enabled_slice_ids=enabled_slice_ids,
                             group_cursors=group_cursors,
                             interleave=interleave,
+                            bank_span=bank_span,
+                            force_group_idx=force_group,
                             tensor_interleave=tensor_ilv,
                             avoid_group=last_group,
                         )
                     )
                     last_group = gi
+                    if input_name == "A":
+                        a_group = gi
                     assignments[tensor_name] = assignment
                     io_map[io_key] = tensor_name
                     continue
@@ -187,10 +210,22 @@ class AddressPlanner:
                         f"{source_op_id}."
                     )
                 io_map[io_key] = output_tensor_by_op[source_op_id]
+                if input_name == "A":
+                    src_assignment = assignments[output_tensor_by_op[source_op_id]]
+                    src_bank = (src_assignment.base_address >> 23) & 0x03
+                    a_group = src_bank // bank_span
 
             # output
             output_name = f"{op.op_id}.output.D"
             output_ilv = op.output.bank_interleave or 1
+            output_force: int | None = None
+            if (
+                interleave >= 2
+                and op.op_type in ("decode_gemv_ring", "decode_gemv_ring_new")
+                and a_group is not None
+            ):
+                # D must not share a bank group with A.
+                output_force = 1 - a_group
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,
@@ -199,6 +234,8 @@ class AddressPlanner:
                     enabled_slice_ids=enabled_slice_ids,
                     group_cursors=group_cursors,
                     interleave=interleave,
+                    bank_span=bank_span,
+                    force_group_idx=output_force,
                     tensor_interleave=output_ilv,
                 )
             )
@@ -213,16 +250,16 @@ class AddressPlanner:
         # Align every group cursor to row start.
         for gi in range(num_groups):
             group_cursors[gi] = self._align_cursor_to_row_in_group(
-                group_cursors[gi], interleave
+                group_cursors[gi], bank_span
             )
 
         # Pick the least-used group for config placement.
-        config_group = self._choose_bank_group(group_cursors, interleave)
+        config_group = self._choose_bank_group(group_cursors, bank_span)
         config_cursor = group_cursors[config_group]
 
         config_base = self._pack_address(
             slave=0,
-            bank=self._group_start_bank(config_group, interleave),
+            bank=self._group_start_bank(config_group, bank_span),
             row=config_cursor.row,
             col=0,
             subword=0,
@@ -525,10 +562,12 @@ class AddressPlanner:
         enabled_slice_ids: list[int],
         group_cursors: list[_AddressCursor],
         interleave: int,
+        bank_span: int | None = None,
         force_group_idx: int | None = None,
         tensor_interleave: int | None = None,
         avoid_group: int | None = None,
     ) -> tuple[AddressAssignment, int, int, int, int]:
+        span = bank_span if bank_span is not None else interleave
         size_bytes = self._tensor_size_bytes(
             tensor_name=tensor_name,
             tensor_dtype=tensor_dtype,
@@ -540,13 +579,20 @@ class AddressPlanner:
         per_bank_bytes = size_bytes // ilv_for_size
         words = ceil(per_bank_bytes / self.WORD_BYTES)
 
-        if force_group_idx is not None:
+        # A tensor whose interleave equals the plan interleave covers every
+        # bank.  With a smaller bank span it therefore spans all groups:
+        # take the base address from the first group and advance every
+        # group cursor by the same per-bank word count.
+        spans_all_groups = ilv_for_size >= interleave and span < interleave
+        if spans_all_groups:
+            gi = 0
+        elif force_group_idx is not None:
             gi = force_group_idx
         else:
-            gi = self._choose_bank_group(group_cursors, interleave, avoid_group=avoid_group)
+            gi = self._choose_bank_group(group_cursors, span, avoid_group=avoid_group)
         cursor = group_cursors[gi]
 
-        bank = self._group_start_bank(gi, interleave)
+        bank = self._group_start_bank(gi, span)
         row = cursor.row
         col = cursor.col
 
@@ -560,9 +606,15 @@ class AddressPlanner:
                 slave=slice_id, bank=bank, row=row, col=col, subword=0
             )
 
-        group_cursors[gi] = self._advance_in_group(
-            cursor, words, interleave
-        )
+        if spans_all_groups:
+            for group_idx in range(len(group_cursors)):
+                group_cursors[group_idx] = self._advance_in_group(
+                    group_cursors[group_idx], words, span
+                )
+        else:
+            group_cursors[gi] = self._advance_in_group(
+                cursor, words, span
+            )
 
         return (
             AddressAssignment(
