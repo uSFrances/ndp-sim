@@ -1885,12 +1885,9 @@ def _compute_prefill_remote_sum_qkt_fp32MN_fp32MN_control_register_updates(
         "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
         "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
         "iga_lc4.dram_loop_configs.end": a_n  if a_n is not None else 0,
-        "iga_pe0.lc_pe_configs.inport1.constant": _fit_i16(a_n*a_m//8) if a_n is not None and a_m is not None else 0,
         "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 ,
         "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 ,
         "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 ,
-        "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 ,
-        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 ,
         "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 ,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
@@ -1927,6 +1924,36 @@ def _compute_prefill_remote_summac_fp32MN_fp32MN_control_register_updates(
         "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
+def _compute_prefill_remote_summac_4slice_fp32MN_fp32MN_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for prefill_remote_summac_4slice_fp32MN_fp32MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_n  if a_n is not None else 0,
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = a_n * 32 if a_n is not None else 0,
+            port2 = 32,
+        ),
+        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+    }
+
 def _compute_decode_remote_summac_fp32N_fp32N_control_register_updates(
     operator: OperatorSpec,
     template: OperatorTemplate,
@@ -1953,6 +1980,35 @@ def _compute_decode_remote_summac_fp32N_fp32N_control_register_updates(
         "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
+def _compute_decode_remote_summac_4slice_fp32N_fp32N_control_register_updates(
+    operator: OperatorSpec,
+    template: OperatorTemplate,
+) -> dict[str, int]:
+    """Placeholder for prefill_remote_summac_4slice_fp32MN_fp32MN control register logic."""
+    input_a = operator.inputs.get("A")
+    input_b = operator.inputs.get("B")
+    a_shape = input_a.shape if input_a is not None else None
+    b_shape = input_b.shape if input_b is not None else None
+    d_shape = operator.output.shape
+    (d_k, d_m, d_n) = d_shape
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    
+    return {
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc2.dram_loop_configs.end": a_n // 4 if a_n is not None else 0,
+        "iga_lc4.dram_loop_configs.end": a_n if a_n is not None else 0,
+        "buffer_manager_cluster0.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 ,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
+            port0 = 0,
+            port1 = a_n * 4 if a_n is not None else 0,
+            port2 = 4,
+        ),
+        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+    }
 
 OP_CONTROL_REGISTER_FN = {
     "prefill_max_fp32MN_fp32MN": _compute_prefill_max_fp32MN_fp32MN_control_register_updates,
@@ -2007,8 +2063,11 @@ OP_CONTROL_REGISTER_FN = {
     "decode_gemv_local_qkt": _compute_decode_gemv_local_qkt_control_register_updates,
     "prefill_remote_sum_qkt_fp32MN_fp32MN": _compute_prefill_remote_sum_qkt_fp32MN_fp32MN_control_register_updates,
     "prefill_remote_summac_fp32MN_fp32MN": _compute_prefill_remote_summac_fp32MN_fp32MN_control_register_updates,
+    "prefill_remote_summac_4slice_fp32MN_fp32MN": _compute_prefill_remote_summac_4slice_fp32MN_fp32MN_control_register_updates,
     "decode_remote_summac_fp32N_fp32N": _compute_decode_remote_summac_fp32N_fp32N_control_register_updates,
+    "decode_remote_summac_4slice_fp32N_fp32N": _compute_decode_remote_summac_4slice_fp32N_fp32N_control_register_updates,
     "decode_gemv_ring_new": _compute_decode_gemv_ring_new_control_register_updates,
+    
 }
 
 

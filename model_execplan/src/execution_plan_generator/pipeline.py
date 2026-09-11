@@ -208,14 +208,23 @@ class ExecutionPlanPipeline:
                 self._template_manager._register_db,
             )
 
-            # config_length is measured in 64-bit words; the 128b file gives
-            # a more accurate count because it avoids chunk-boundary padding
-            # artefacts that can appear in the 64b representation.
+            # config_length is measured in 64-bit words.  The 64b dump gives
+            # the exact word count, whereas the 128b dump pads to a 128-bit
+            # boundary and can overcount by one word when the config stream
+            # is not a multiple of 128 bits.
             # The bitstream filename derives from the patched JSON name.
+            bitstream_64b_path = (
+                op_config_dir / f"{op.op_id}_{op.op_type}_bitstream_64b.bin"
+            )
+            if not bitstream_64b_path.is_file():
+                raise FileNotFoundError(
+                    f"Missing regenerated 64-bit bitstream for {op.op_id}: "
+                    f"{bitstream_64b_path}"
+                )
+            regen_config_length = _count_non_empty_lines(bitstream_64b_path)
             bitstream_128b_path = (
                 op_config_dir / f"{op.op_id}_{op.op_type}_bitstream_128b.bin"
             )
-            regen_config_length = _count_non_empty_lines(bitstream_128b_path) * 2
 
             # Compute control register updates with operator-specific mapping.
             # Load the instance mapping directly from the operator's config dir

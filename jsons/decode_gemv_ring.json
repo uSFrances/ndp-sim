@@ -61,7 +61,7 @@
             "src_id": "DRAM_LC.LC6",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 1,
             "stride": 1,
             "last_index": 4
         }
@@ -163,7 +163,7 @@
                 "src_id": null,
                 "mode": "constant",
                 "keep_last_index": null,
-                "constant": 4
+                "constant": 1
             },
             "inport0": {
                 "src_id": "LC_PE.PE7",
@@ -463,12 +463,12 @@
                 null
             ],
             "idx_size": [
-                3,
+                15,
                 null,
                 null
             ],
             "dim_stride": [
-                4,
+                16,
                 null,
                 null
             ],
