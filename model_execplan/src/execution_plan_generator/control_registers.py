@@ -455,22 +455,17 @@ def _compute_prefill_summac_fp32MN_fp32MN_control_register_updates(
     template: OperatorTemplate,
 ) -> dict[str, int]:
     """Placeholder for summac control register logic."""
-    input_b = operator.inputs.get("B")
-    b_shape = input_b.shape if input_b is not None else None
+    input_a = operator.inputs.get("A")
+    a_shape = input_a.shape if input_a is not None else None
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
-    (b_k, b_m, b_n) = b_shape if b_shape is not None else (None, None, None)
+    (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-        "iga_lc0.dram_loop_configs.end": b_m // 8 if b_m is not None else 0,
-        "iga_lc1.dram_loop_configs.end": b_n // 2 if b_n is not None else 0,
-        "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
+        "iga_lc0.dram_loop_configs.end": a_m // 8 if a_m is not None else 0,
+        "iga_lc1.dram_loop_configs.end": a_n  if a_n is not None else 0,
+        "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
-            port1 = (b_n or 0) * 16,
-            port2 = 32,
-        ),
-        "rd_stream2.stream_engine.stream.dim_stride": pack_dim_stride(
-            port0 = 0,
-            port1 = (b_n or 0) * 16,
+            port1 = (a_n or 0) * 32,
             port2 = 32,
         ),
     }
@@ -1921,7 +1916,7 @@ def _compute_prefill_remote_summac_fp32MN_fp32MN_control_register_updates(
             port1 = a_n * 32 if a_n is not None else 0,
             port2 = 32,
         ),
-        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+        "rd_stream1.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
 def _compute_prefill_remote_summac_4slice_fp32MN_fp32MN_control_register_updates(
@@ -1951,7 +1946,7 @@ def _compute_prefill_remote_summac_4slice_fp32MN_fp32MN_control_register_updates
             port1 = a_n * 32 if a_n is not None else 0,
             port2 = 32,
         ),
-        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+        "rd_stream1.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
 def _compute_decode_remote_summac_fp32N_fp32N_control_register_updates(
@@ -1977,7 +1972,7 @@ def _compute_decode_remote_summac_fp32N_fp32N_control_register_updates(
             port1 = a_n * 4 if a_n is not None else 0,
             port2 = 4,
         ),
-        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+        "rd_stream1.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
 def _compute_decode_remote_summac_4slice_fp32N_fp32N_control_register_updates(
@@ -2007,7 +2002,7 @@ def _compute_decode_remote_summac_4slice_fp32N_fp32N_control_register_updates(
             port1 = a_n * 4 if a_n is not None else 0,
             port2 = 4,
         ),
-        "rd_stream2.stream_engine.stream.base_addr": parse_base_addr(6291456),
+        "rd_stream1.stream_engine.stream.base_addr": parse_base_addr(6291456),
     }
 
 OP_CONTROL_REGISTER_FN = {

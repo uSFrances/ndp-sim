@@ -269,13 +269,14 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "output": {"shape": [1, 1, _ATN]},
     },
     # op24 mac (scores * scale + mask) — A←op23 type=slice4, C←external mask.
-    # Prefill-compatible: ports A/C, shape [1, _ATN, _ATN] with remapping.
+    # Decode: only 1 query token → attention scores are (1, attn_len) = 1D,
+    # NOT prefill's (query_len, key_len) = (attn_len, attn_len) 2D matrix.
     {
         "id": "op24", "type": "decode_mac_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, _ATN, _ATN], "type": "slice4",
+            "A": {"shape": [1, 1, _ATN], "type": "slice4",
                   "remapping": list(range(26)), "source": "op23"},
-            "C": {"shape": [1, _ATN, _ATN],
+            "C": {"shape": [1, 1, _ATN],
                   "remapping": list(range(26)), "source": "ext"},
         },
         "output": {"shape": [1, 1, _ATN]},

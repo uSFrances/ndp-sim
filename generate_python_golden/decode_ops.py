@@ -660,7 +660,6 @@ def build_decode_golden_cases(
                 k_cache[start:end, :, h].astype(np.float32),
                 q_per_head[h, start:end].astype(np.float32),
             )
-            scores_fp32 = np.clip(scores_fp32, -65504, 65504)
             qkt_partial[:, s, h] = scores_fp32
 
     # op22 gemv_local output: raw (UNSCALED) per-slice partial QK^T (fp32).

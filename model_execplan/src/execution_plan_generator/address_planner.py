@@ -210,10 +210,12 @@ class AddressPlanner:
                         f"{source_op_id}."
                     )
                 io_map[io_key] = output_tensor_by_op[source_op_id]
+                src_assignment = assignments[output_tensor_by_op[source_op_id]]
+                src_bank = (src_assignment.base_address >> 23) & 0x03
+                src_group = src_bank // bank_span
+                last_group = src_group
                 if input_name == "A":
-                    src_assignment = assignments[output_tensor_by_op[source_op_id]]
-                    src_bank = (src_assignment.base_address >> 23) & 0x03
-                    a_group = src_bank // bank_span
+                    a_group = src_group
 
             # output
             output_name = f"{op.op_id}.output.D"
@@ -226,6 +228,9 @@ class AddressPlanner:
             ):
                 # D must not share a bank group with A.
                 output_force = 1 - a_group
+            output_avoid: int | None = None
+            if interleave == 2 and output_force is None:
+                output_avoid = a_group if a_group is not None else last_group
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,
@@ -237,6 +242,7 @@ class AddressPlanner:
                     bank_span=bank_span,
                     force_group_idx=output_force,
                     tensor_interleave=output_ilv,
+                    avoid_group=output_avoid,
                 )
             )
             assignments[output_name] = output_assignment
