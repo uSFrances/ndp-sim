@@ -38,6 +38,11 @@ class AddressPlanner:
     MAX_BANKS = 4
     MAX_ROWS = 8192
     MAX_COLS = 64
+    # When the heavier bank group carries more than SIZE_DIFF_RATIO times the
+    # lighter group's input data, D is steered to the lighter group.  Below
+    # this threshold inputs are treated as "similar size" and the least-used
+    # heuristic picks D's group to keep everything spread.
+    SIZE_DIFF_RATIO = 2
 
     def __init__(self, element_bytes: int = 4) -> None:
         if element_bytes <= 0:
@@ -142,8 +147,10 @@ class AddressPlanner:
                     f"{self.MAX_SLAVES} slices, got mask {op.used_slices}."
                 )
 
-            largest_input_group: int | None = None
+            input_group_totals: list[int] = [0] * num_groups
             largest_input_size: int = 0
+            largest_input_group: int | None = None
+            second_largest_input_size: int = 0
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
@@ -179,6 +186,13 @@ class AddressPlanner:
                             force_group = 1  # banks 2/3
                         elif input_name == "B'":
                             force_group = 0  # banks 0/1
+                    # Avoid the group that currently holds the most input data,
+                    # so inputs naturally spread across bank groups.
+                    input_avoid: int | None = None
+                    if num_groups > 1 and any(t > 0 for t in input_group_totals):
+                        input_avoid = input_group_totals.index(
+                            max(input_group_totals)
+                        )
                     assignment, gi, _, _, _ = (
                         self._allocate_tensor_interleaved(
                             tensor_name=tensor_name,
@@ -190,12 +204,16 @@ class AddressPlanner:
                             bank_span=bank_span,
                             force_group_idx=force_group,
                             tensor_interleave=tensor_ilv,
-                            avoid_group=largest_input_group,
+                            avoid_group=input_avoid,
                         )
                     )
+                    input_group_totals[gi] += assignment.size_bytes
                     if assignment.size_bytes > largest_input_size:
+                        second_largest_input_size = largest_input_size
                         largest_input_size = assignment.size_bytes
                         largest_input_group = gi
+                    elif assignment.size_bytes > second_largest_input_size:
+                        second_largest_input_size = assignment.size_bytes
                     assignments[tensor_name] = assignment
                     io_map[io_key] = tensor_name
                     continue
@@ -214,25 +232,40 @@ class AddressPlanner:
                 src_assignment = assignments[output_tensor_by_op[source_op_id]]
                 src_bank = (src_assignment.base_address >> 23) & 0x03
                 src_group = src_bank // bank_span
+                input_group_totals[src_group] += src_assignment.size_bytes
                 if src_assignment.size_bytes > largest_input_size:
+                    second_largest_input_size = largest_input_size
                     largest_input_size = src_assignment.size_bytes
                     largest_input_group = src_group
+                elif src_assignment.size_bytes > second_largest_input_size:
+                    second_largest_input_size = src_assignment.size_bytes
 
             # output
             output_name = f"{op.op_id}.output.D"
             output_ilv = op.output.bank_interleave or 1
             output_force: int | None = None
-            if (
-                interleave >= 2
-                and op.op_type in ("decode_gemv_ring", "decode_gemv_ring_new")
-                and largest_input_group is not None
-            ):
-                # D must avoid the bank group of the largest input (typically B,
-                # the weight matrix) to minimize read/write bank conflicts.
-                output_force = 1 - largest_input_group
             output_avoid: int | None = None
-            if interleave == 2 and output_force is None:
-                output_avoid = largest_input_group
+            # Only steer D away from the heaviest input when it is
+            # significantly larger than the runner-up.  When the top two
+            # inputs are comparable (e.g. A ≈ B), skip the forced avoidance
+            # so the least-used heuristic keeps every tensor spread.
+            if (
+                largest_input_group is not None
+                and largest_input_size > 0
+                and (
+                    second_largest_input_size == 0
+                    or largest_input_size
+                    > self.SIZE_DIFF_RATIO * second_largest_input_size
+                )
+            ):
+                if (
+                    interleave >= 2
+                    and op.op_type
+                    in ("decode_gemv_ring", "decode_gemv_ring_new")
+                ):
+                    output_force = 1 - largest_input_group
+                elif interleave == 2:
+                    output_avoid = largest_input_group
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,

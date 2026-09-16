@@ -315,7 +315,7 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 0
+            "buf_end_row_addr": 3
         },
         "buffer1": {
             "dst_port": 0,
@@ -333,7 +333,7 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 0
+            "buf_end_row_addr": 3
         },
         "buffer2": {
             "dst_port": 0,
