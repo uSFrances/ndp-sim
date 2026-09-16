@@ -142,8 +142,8 @@ class AddressPlanner:
                     f"{self.MAX_SLAVES} slices, got mask {op.used_slices}."
                 )
 
-            last_group: int | None = None
-            a_group: int | None = None
+            largest_input_group: int | None = None
+            largest_input_size: int = 0
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
@@ -170,8 +170,9 @@ class AddressPlanner:
                     tensor_ilv = tensor.bank_interleave or 1
                     force_group: int | None = None
                     if interleave >= 2 and (op.op_type == "decode_gemv_ring" or op.op_type == "decode_gemv_ring_new"):
-                        # A/B and A/D must live on different banks:
+                        # A/B must live on different banks:
                         # A → group 0 (banks 0/1), B → group 1 (banks 2/3).
+                        # D avoids the largest input (typically B) → group 0.
                         if input_name == "A":
                             force_group = 0  # banks 0/1
                         elif input_name == "B":
@@ -189,12 +190,12 @@ class AddressPlanner:
                             bank_span=bank_span,
                             force_group_idx=force_group,
                             tensor_interleave=tensor_ilv,
-                            avoid_group=last_group,
+                            avoid_group=largest_input_group,
                         )
                     )
-                    last_group = gi
-                    if input_name == "A":
-                        a_group = gi
+                    if assignment.size_bytes > largest_input_size:
+                        largest_input_size = assignment.size_bytes
+                        largest_input_group = gi
                     assignments[tensor_name] = assignment
                     io_map[io_key] = tensor_name
                     continue
@@ -213,9 +214,9 @@ class AddressPlanner:
                 src_assignment = assignments[output_tensor_by_op[source_op_id]]
                 src_bank = (src_assignment.base_address >> 23) & 0x03
                 src_group = src_bank // bank_span
-                last_group = src_group
-                if input_name == "A":
-                    a_group = src_group
+                if src_assignment.size_bytes > largest_input_size:
+                    largest_input_size = src_assignment.size_bytes
+                    largest_input_group = src_group
 
             # output
             output_name = f"{op.op_id}.output.D"
@@ -224,13 +225,14 @@ class AddressPlanner:
             if (
                 interleave >= 2
                 and op.op_type in ("decode_gemv_ring", "decode_gemv_ring_new")
-                and a_group is not None
+                and largest_input_group is not None
             ):
-                # D must not share a bank group with A.
-                output_force = 1 - a_group
+                # D must avoid the bank group of the largest input (typically B,
+                # the weight matrix) to minimize read/write bank conflicts.
+                output_force = 1 - largest_input_group
             output_avoid: int | None = None
             if interleave == 2 and output_force is None:
-                output_avoid = a_group if a_group is not None else last_group
+                output_avoid = largest_input_group
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,
