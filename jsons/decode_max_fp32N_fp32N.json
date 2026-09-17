@@ -246,7 +246,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": 0
+                    "constant": "-inf"
                 },
                 "inport1": {
                     "src_id": null,

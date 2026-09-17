@@ -38,11 +38,6 @@ class AddressPlanner:
     MAX_BANKS = 4
     MAX_ROWS = 8192
     MAX_COLS = 64
-    # When the heavier bank group carries more than SIZE_DIFF_RATIO times the
-    # lighter group's input data, D is steered to the lighter group.  Below
-    # this threshold inputs are treated as "similar size" and the least-used
-    # heuristic picks D's group to keep everything spread.
-    SIZE_DIFF_RATIO = 2
 
     def __init__(self, element_bytes: int = 4) -> None:
         if element_bytes <= 0:
@@ -141,9 +136,8 @@ class AddressPlanner:
                 )
 
             input_group_totals: list[int] = [0] * num_groups
-            largest_input_size: int = 0
-            largest_input_group: int | None = None
-            second_largest_input_size: int = 0
+            input_group_max_ilv: list[int] = [0] * num_groups
+            input_bank_totals: list[int] = [0] * self.MAX_BANKS
             for input_name, tensor in op.inputs.items():
                 io_key = self._io_key(op.op_id, "input", input_name)
 
@@ -186,7 +180,7 @@ class AddressPlanner:
                         input_avoid = input_group_totals.index(
                             max(input_group_totals)
                         )
-                    assignment, gi, _, _, _ = (
+                    assignment, gi, rel_bank, _, _ = (
                         self._allocate_tensor_interleaved(
                             tensor_name=tensor_name,
                             tensor_dtype=tensor.dtype,
@@ -201,12 +195,14 @@ class AddressPlanner:
                         )
                     )
                     input_group_totals[gi] += assignment.size_bytes
-                    if assignment.size_bytes > largest_input_size:
-                        second_largest_input_size = largest_input_size
-                        largest_input_size = assignment.size_bytes
-                        largest_input_group = gi
-                    elif assignment.size_bytes > second_largest_input_size:
-                        second_largest_input_size = assignment.size_bytes
+                    if tensor_ilv > input_group_max_ilv[gi]:
+                        input_group_max_ilv[gi] = tensor_ilv
+                    abs_bank_start = self._group_start_bank(gi, bank_span)
+                    if tensor_ilv == 1:
+                        input_bank_totals[abs_bank_start + rel_bank] += assignment.size_bytes
+                    else:
+                        for b in range(tensor_ilv):
+                            input_bank_totals[abs_bank_start + b] += assignment.size_bytes // tensor_ilv
                     assignments[tensor_name] = assignment
                     io_map[io_key] = tensor_name
                     continue
@@ -225,40 +221,46 @@ class AddressPlanner:
                 src_assignment = assignments[output_tensor_by_op[source_op_id]]
                 src_bank = (src_assignment.base_address >> 23) & 0x03
                 src_group = src_bank // bank_span
+                tensor_ilv = tensor.bank_interleave or 1
                 input_group_totals[src_group] += src_assignment.size_bytes
-                if src_assignment.size_bytes > largest_input_size:
-                    second_largest_input_size = largest_input_size
-                    largest_input_size = src_assignment.size_bytes
-                    largest_input_group = src_group
-                elif src_assignment.size_bytes > second_largest_input_size:
-                    second_largest_input_size = src_assignment.size_bytes
+                if tensor_ilv > input_group_max_ilv[src_group]:
+                    input_group_max_ilv[src_group] = tensor_ilv
+                if tensor_ilv == 1:
+                    input_bank_totals[src_bank] += src_assignment.size_bytes
+                else:
+                    abs_bank_start = self._group_start_bank(src_group, bank_span)
+                    for b in range(tensor_ilv):
+                        input_bank_totals[abs_bank_start + b] += src_assignment.size_bytes // tensor_ilv
 
             # output
             output_name = f"{op.op_id}.output.D"
             output_ilv = op.output.bank_interleave or 1
             output_force: int | None = None
             output_avoid: int | None = None
-            # Only steer D away from the heaviest input when it is
-            # significantly larger than the runner-up.  When the top two
-            # inputs are comparable (e.g. A ≈ B), skip the forced avoidance
-            # so the least-used heuristic keeps every tensor spread.
-            if (
-                largest_input_group is not None
-                and largest_input_size > 0
-                and (
-                    second_largest_input_size == 0
-                    or largest_input_size
-                    > self.SIZE_DIFF_RATIO * second_largest_input_size
+            output_force_bank: int | None = None
+            if output_ilv == 1 and any(t > 0 for t in input_bank_totals):
+                # Single-bank output: pick the physical bank with the least
+                # input data so D lands on a bank different from every input.
+                output_force_bank = min(
+                    range(self.MAX_BANKS),
+                    key=lambda b: (input_bank_totals[b], b),
                 )
-            ):
+            elif sum(input_group_totals) > 0 and num_groups > 1:
+                # Multi-bank output: avoid the heaviest group, using max
+                # bank_interleave as tiebreaker (higher interleave → worse
+                # read/write conflicts).
+                avoid_g = max(
+                    range(num_groups),
+                    key=lambda g: (input_group_totals[g], input_group_max_ilv[g]),
+                )
                 if (
                     interleave >= 2
                     and op.op_type
                     in ("decode_gemv_ring", "decode_gemv_ring_new")
                 ):
-                    output_force = 1 - largest_input_group
+                    output_force = 1 - avoid_g
                 else:
-                    output_avoid = largest_input_group
+                    output_avoid = avoid_g
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
                     tensor_name=output_name,
@@ -271,6 +273,7 @@ class AddressPlanner:
                     force_group_idx=output_force,
                     tensor_interleave=output_ilv,
                     avoid_group=output_avoid,
+                    force_bank=output_force_bank,
                 )
             )
             assignments[output_name] = output_assignment
@@ -600,6 +603,7 @@ class AddressPlanner:
         force_group_idx: int | None = None,
         tensor_interleave: int | None = None,
         avoid_group: int | None = None,
+        force_bank: int | None = None,
     ) -> tuple[AddressAssignment, int, int, int, int]:
         span = bank_span if bank_span is not None else interleave
         size_bytes = self._tensor_size_bytes(
@@ -618,17 +622,22 @@ class AddressPlanner:
         # take the base address from the first group and advance every
         # group cursor by the same per-bank word count.
         spans_all_groups = ilv_for_size >= interleave and span < interleave
-        if spans_all_groups:
+        if force_bank is not None:
+            gi = force_bank // span
+            alloc_cursor = _AddressCursor(bank=force_bank % span, row=0, col=0)
+        elif spans_all_groups:
             gi = 0
+            alloc_cursor = group_cursors[gi]
         elif force_group_idx is not None:
             gi = force_group_idx
+            alloc_cursor = group_cursors[gi]
         else:
             gi = self._choose_bank_group(group_cursors, span, avoid_group=avoid_group)
-        cursor = group_cursors[gi]
+            alloc_cursor = group_cursors[gi]
 
-        bank = self._group_start_bank(gi, span)
-        row = cursor.row
-        col = cursor.col
+        bank = self._group_start_bank(gi, span) + alloc_cursor.bank
+        row = alloc_cursor.row
+        col = alloc_cursor.col
 
         base_address = self._pack_address(
             slave=0, bank=bank, row=row, col=col, subword=0
@@ -640,15 +649,24 @@ class AddressPlanner:
                 slave=slice_id, bank=bank, row=row, col=col, subword=0
             )
 
+        end_cursor = self._advance_in_group(alloc_cursor, words, span)
         if spans_all_groups:
             for group_idx in range(len(group_cursors)):
                 group_cursors[group_idx] = self._advance_in_group(
                     group_cursors[group_idx], words, span
                 )
-        else:
-            group_cursors[gi] = self._advance_in_group(
-                cursor, words, span
+        elif force_bank is not None:
+            current_flat = self._flatten_in_group(
+                group_cursors[gi].bank, group_cursors[gi].row,
+                group_cursors[gi].col, span,
             )
+            end_flat = self._flatten_in_group(
+                end_cursor.bank, end_cursor.row, end_cursor.col, span,
+            )
+            if end_flat > current_flat:
+                group_cursors[gi] = end_cursor
+        else:
+            group_cursors[gi] = end_cursor
 
         return (
             AddressAssignment(
@@ -659,7 +677,7 @@ class AddressPlanner:
                 shape=shape,
             ),
             gi,
-            cursor.bank,
+            alloc_cursor.bank,
             row,
             col,
         )

@@ -53,7 +53,7 @@
             "src_id": "DRAM_LC.LC3",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 16,
             "stride": 1,
             "last_index": 4
         }
@@ -134,7 +134,7 @@
                 "src_id": null,
                 "mode": "constant",
                 "keep_last_index": null,
-                "constant": 4
+                "constant": 16
             },
             "inport0": {
                 "src_id": "LC_PE.PE7",
@@ -234,7 +234,7 @@
             "ROW_LC": {
                 "src_id": "DRAM_LC.LC6",
                 "start": 0,
-                "end": 4,
+                "end": 1,
                 "stride": 1,
                 "last_index": 5
             },
@@ -315,7 +315,7 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 3
+            "buf_end_row_addr": 0
         },
         "buffer1": {
             "dst_port": 0,
@@ -333,7 +333,7 @@
                 0,
                 0
             ],
-            "buf_end_row_addr": 3
+            "buf_end_row_addr": 0
         },
         "buffer2": {
             "dst_port": 0,
@@ -434,12 +434,12 @@
                 null
             ],
             "idx_size": [
-                15,
+                3,
                 null,
                 null
             ],
             "dim_stride": [
-                16,
+                4,
                 null,
                 null
             ],
