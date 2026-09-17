@@ -2,9 +2,40 @@ from bitstream.config.base import BaseConfigModule
 from bitstream.index import NodeIndex, Connect
 from typing import List, Optional
 from bitstream.bit import Bit
+import math
 import numbers
 import struct
 from fractions import Fraction
+
+
+def _to_float_or_none(text: str) -> Optional[float]:
+    """Parse *text* into a float, accepting fractions and special values.
+
+    Handles ``inf``/``-inf``/``nan`` (which ``Fraction`` rejects), regular
+    decimals, and fraction strings like ``"1/1024"``.  Returns ``None`` when
+    the text cannot be interpreted as a number.
+    """
+    if text is None:
+        return None
+    lower = text.strip().lower()
+    if lower in ("inf", "+inf", "infinity", "+infinity"):
+        return math.inf
+    if lower in ("-inf", "-infinity"):
+        return -math.inf
+    if lower in ("nan",):
+        return math.nan
+    # Fraction handles "1/2", "1e-40", "0.5" and mixed forms, but raises
+    # OverflowError for huge exponents (e.g. "1e400").  Fall back to float()
+    # for those so that subnormal/underflow values still encode correctly.
+    try:
+        return float(Fraction(text))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        pass
+    try:
+        return float(text)
+    except (ValueError, OverflowError):
+        return None
+
 
 class GAInportConfig(BaseConfigModule):
     """General Array inport configuration.
@@ -131,7 +162,15 @@ class GAPEConfig(BaseConfigModule):
 
     @staticmethod
     def _encode_constant(val):
-        """Encode constant to 32-bit int. Floats -> fp32 IEEE754, ints -> int."""
+        """Encode constant to 32-bit int. Floats -> fp32 IEEE754, ints -> int.
+
+        Supports infinitesimal (subnormal) and non-finite values:
+        - Subnormal fp32 values (e.g. 1e-40) are preserved via IEEE754 packing.
+        - ``inf`` / ``-inf`` / ``nan`` produce the canonical IEEE754 bit patterns.
+        - String fractions with overflow/underflow operands (e.g. ``"1/1e400"``)
+          are evaluated via ``math`` rather than ``Fraction`` so that
+          ``OverflowError`` does not abort encoding.
+        """
         if val is None:
             return 0
         if isinstance(val, str):
@@ -149,21 +188,20 @@ class GAPEConfig(BaseConfigModule):
             if "/" in compact:
                 numerator_text, denominator_text = compact.split("/", maxsplit=1)
                 try:
-                    numerator = float(Fraction(numerator_text))
-                    denominator = float(Fraction(denominator_text))
-                    if denominator == 0:
-                        return val
-                    val = numerator / denominator
-                except (ValueError, ZeroDivisionError):
+                    numerator = _to_float_or_none(numerator_text)
+                    denominator = _to_float_or_none(denominator_text)
+                    if numerator is not None and denominator is not None:
+                        # Let float division handle inf/0/subnormal results;
+                        # avoid Fraction OverflowError on huge exponents.
+                        val = numerator / denominator
+                except (ValueError, ZeroDivisionError, OverflowError):
                     pass
             if isinstance(val, str):
-                try:
-                    val = float(Fraction(text))
-                except (ValueError, ZeroDivisionError):
-                    try:
-                        val = float(text)
-                    except ValueError:
-                        return val
+                parsed = _to_float_or_none(text)
+                if parsed is not None:
+                    val = parsed
+                else:
+                    return val  # keep original string for downstream handling
         if isinstance(val, numbers.Integral):
             return int(val)
         if isinstance(val, numbers.Real):

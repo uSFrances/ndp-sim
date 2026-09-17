@@ -252,13 +252,14 @@
                     "src_id": null,
                     "mode": null,
                     "keep_last_index": null,
-                    "constant": 0
+                    "constant": null
                 },
                 "inport0": {
                     "src_id": 0,
                     "mode": "buffer",
                     "keep_last_index": null,
-                    "constant": 0
+                    "constant": "-inf"
+
                 }
             }
         }

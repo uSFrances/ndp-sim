@@ -72,13 +72,6 @@ class AddressPlanner:
     ) -> AddressPlan:
         interleave = self._resolve_plan_interleave(execution_input)
 
-        if interleave <= 1:
-            return self._plan_flat(
-                execution_input,
-                config_lengths_by_op=config_lengths_by_op,
-                sfu_config_lengths_by_op=sfu_config_lengths_by_op,
-                sfu_types_by_op=sfu_types_by_op,
-            )
         return self._plan_interleaved(
             execution_input,
             interleave=interleave,
@@ -264,7 +257,7 @@ class AddressPlanner:
                     in ("decode_gemv_ring", "decode_gemv_ring_new")
                 ):
                     output_force = 1 - largest_input_group
-                elif interleave == 2:
+                else:
                     output_avoid = largest_input_group
             output_assignment, _, _, _, _ = (
                 self._allocate_tensor_interleaved(
