@@ -195,6 +195,45 @@ def slice_passthrough_case(
         else:
             input_chunks = {"A": split_vector(inputs["A"], slice_count)}
             output_chunks = split_one_value_per_slice(output, slice_count)
+    elif policy == "remote_summac":
+        # Optimized prefill_remote_summac: 8 PEs produce 8 partials.
+        instance_id = str(case_entry.get("instance_id", ""))
+        is_kv = instance_id.startswith("kv_")
+        if is_kv:
+            # K/V remote_summac (4-slice): pad 896→1024, split 4×256,
+            # replicate via install_targets (same as original kv summac).
+            logical_slices = slices_per_head  # 4
+            kv_pad_a = int(config["kv_padding_a"])  # 256
+            padded_total = kv_pad_a * logical_slices  # 1024
+
+            a_flat = np.asarray(inputs["A"], dtype=np.float32).reshape(-1, order="F")
+            if a_flat.size < padded_total:
+                a_padded = np.zeros(padded_total, dtype=np.float32)
+                a_padded[:a_flat.size] = a_flat
+            else:
+                a_padded = a_flat[:padded_total]
+
+            log_input = {"A": split_vector(a_padded, logical_slices)}
+            log_output = [output.copy() for _ in range(logical_slices)]
+
+            input_chunks = {"A": [None] * slice_count}
+            output_chunks = [None] * slice_count
+            for lidx in range(logical_slices):
+                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
+                    input_chunks["A"][pidx] = log_input["A"][lidx]
+                    output_chunks[pidx] = log_output[lidx]
+
+            if "B" in inputs:
+                b_flat = np.asarray(inputs["B"], dtype=np.float32).reshape(-1, order="F")
+                input_chunks["B"] = [b_flat.copy() for _ in range(slice_count)]
+        else:
+            # Attn/FFN remote_summac (28-slice): split A into 28 equal parts.
+            a_flat = np.asarray(inputs["A"], dtype=np.float32).reshape(-1, order="F")
+            input_chunks = {"A": split_vector(a_flat, slice_count)}
+            if "B" in inputs:
+                b_flat = np.asarray(inputs["B"], dtype=np.float32).reshape(-1, order="F")
+                input_chunks["B"] = [b_flat.copy() for _ in range(slice_count)]
+            output_chunks = [output.copy() for _ in range(slice_count)]
     elif policy == "head_reduction":
         # ── Attention head reduction: Mode B when output is (1, heads, 1) ──
         def _is_mode_b(tensor: np.ndarray) -> bool:
@@ -284,14 +323,39 @@ def slice_passthrough_case(
         def _is_per_slice_partials(tensor: np.ndarray) -> bool:
             arr = np.asarray(tensor)
             return (arr.ndim == 3 and arr.shape[1] == slices_per_head and arr.shape[2] == heads)
-        if _is_mode_b(output) and _is_per_slice_partials(inputs.get("A", np.empty(0))):
+
+        if "qkt_remote_sum" in instance_id:
+            # Input A = per-slice partials (32 per slice), same as original.
+            # Pad each slice's partial with 3× zeros to 128 elements
+            # (4 chunks of 32; only chunk 0 is real).
+            partials = split_per_slice_partials(inputs["A"], heads, slices_per_head)
+            chunk_size = int(partials[0].size)  # 32
+            input_chunks = {"A": [None] * slice_count}
+            for idx in range(slice_count):
+                padded = np.zeros(4 * chunk_size, dtype=partials[idx].dtype)
+                padded[:chunk_size] = partials[idx]
+                input_chunks["A"][idx] = padded
+            if "B" in inputs:
+                b_flat = np.asarray(inputs["B"], dtype=np.float32).reshape(-1, order="F")
+                input_chunks["B"] = [b_flat.copy() for _ in range(slice_count)]
+            # Output D = same as original (32 per head per slice, Mode B)
+            output_chunks = split_head_full_vectors(output, heads, slices_per_head)
+        elif "decode_sum" in instance_id:
+            # decode_sum: input A is [8, 1, 1] (8 partials from remote_summac),
+            # output is [1, 1, 1] (scalar).  All 28 slices see the same data.
+            input_chunks = {
+                port: [tensor.copy() for _ in range(slice_count)]
+                for port, tensor in inputs.items()
+            }
+            output_chunks = [output.copy() for _ in range(slice_count)]
+        elif _is_mode_b(output) and _is_per_slice_partials(inputs.get("A", np.empty(0))):
             input_chunks = {"A": split_per_slice_partials(inputs["A"], heads, slices_per_head)}
             output_chunks = split_head_full_vectors(output, heads, slices_per_head)
         elif _is_mode_b(output):
             input_chunks = {"A": split_head_full_vectors(inputs["A"], heads, slices_per_head)}
             output_chunks = split_head_full_vectors(output, heads, slices_per_head)
         # K/V remote_sum: 4 logical slices (slice_per_head), linear round-robin.
-        elif instance_id.startswith("kv_"):
+        elif instance_id.startswith("kv_") and "remote_sum" in instance_id and "decode_sum" not in instance_id and "qkt" not in instance_id:
             logical_slices = slices_per_head  # 4 (same as prefill relayout_rmsnorm)
             # Golden produces slice_per_head=4 partial values; split one per logical slice.
             log_input = {"A": split_one_value_per_slice(inputs["A"], logical_slices)}
@@ -303,6 +367,23 @@ def slice_passthrough_case(
                 for pidx in install_target_slices(KV_HW_PARAMS, lidx):
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
+        elif "qkt_remote_sum" in instance_id:
+            # remote_sum_qkt: input A is [attn_len, sph, heads] concatenated
+            # from 4 sub-ops, output is [attn_len, heads, 1].  All 28 slices
+            # see the same data (remote reduction across slices).
+            input_chunks = {
+                port: [tensor.copy() for _ in range(slice_count)]
+                for port, tensor in inputs.items()
+            }
+            output_chunks = [output.copy() for _ in range(slice_count)]
+        elif "decode_sum" in instance_id:
+            # decode_sum: input A is [8, 1, 1] (8 partials from remote_summac),
+            # output is [1, 1, 1] (scalar).  All 28 slices see the same data.
+            input_chunks = {
+                port: [tensor.copy() for _ in range(slice_count)]
+                for port, tensor in inputs.items()
+            }
+            output_chunks = [output.copy() for _ in range(slice_count)]
         else:
             input_chunks = {"A": split_one_value_per_slice(inputs["A"], slice_count)}
             output_chunks = replicate_scalar(output, slice_count)

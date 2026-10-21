@@ -147,9 +147,13 @@ def _split_weight_streams(linearized: np.ndarray) -> tuple[np.ndarray, np.ndarra
 
     Hardware reads B and B' alternately in chunks of 4×256-bit = 128 bytes
     = 64 fp16 values.  Even chunks → B, odd chunks → B'.
+    If the payload is smaller than 128 fp16, no split is performed and the
+    full weight is returned as both B and B' (single-bank mode).
     """
     values = np.asarray(linearized, dtype=np.float16).reshape(-1)
     CHUNK = 64  # fp16 values per ping-pong slice
+    if values.size < (2 * CHUNK):
+        return values, values
     if values.size % (2 * CHUNK) != 0:
         raise ValueError(
             f"weight payload must be multiple of {2 * CHUNK} fp16, got {values.size}"
@@ -282,23 +286,52 @@ def write_gemv_local_case(
     heads = int(config["num_attention_heads"])
     slices_per_head = int(config["slice_per_head"])
 
+    # Squeeze extra singleton dimension if present (QKT sub-ops produce
+    # weight shape (head_dim, attn_len//4, 1, heads) instead of (head_dim, attn_len, heads)).
+    if weight.ndim == 4 and weight.shape[2] == 1:
+        weight = weight[:, :, 0, :]  # (head_dim, attn_len//4, heads)
+
     if weight.shape[2] != heads or activation.shape[1] != heads:
         raise ValueError(
             f"local GEMV head mismatch: weight={weight.shape}, activation={activation.shape}"
         )
     k_size = weight.shape[0]
     vector_length = weight.shape[1]
+    output_slices = output.shape[1]  # slices_per_head for original, 1 for sub-ops
+
+    # Sub-op case: golden B covers 4 slices x sub_k K elements (stacked along K).
+    # Split into 4 chunks of sub_k each, one chunk per slice.
+    # Chunk c for head h → slice h*4+c.
+    if output_slices == 1 and k_size < int(config["head_dim"]):
+        entry_id = op_label or str(case_entry.get("instance_id", case_entry.get("id", case_entry.get("name", ""))))
+        op_dir = install_dir / entry_id
+        sub_k = k_size // slices_per_head  # 32//4 = 8
+
+        for head in range(heads):
+            for c in range(slices_per_head):
+                k_start = c * sub_k
+                k_end = k_start + sub_k
+                weight_chunk = weight[k_start:k_end, :, head]  # (sub_k, attn_len)
+                weight_linearized = _relayout_n8k(weight_chunk)
+                act_chunk = activation[k_start:k_end, head, 0]  # (sub_k,)
+                output_slice = output[:, 0, head]  # (attn_len,)
+                physical_slice = head * slices_per_head + c
+                _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
+                                  act_chunk, weight_linearized, output_slice)
+        return
+
     if k_size % slices_per_head:
         raise ValueError(
             f"local GEMV K={k_size} must divide slices_per_head={slices_per_head}"
         )
-    if output.shape[:3] != (vector_length, slices_per_head, heads):
+    if output.shape[:3] not in ((vector_length, slices_per_head, heads), (vector_length, 1, heads)):
         raise ValueError(
             "local GEMV output must contain one partial vector per head slice; "
             f"got {output.shape}"
         )
 
     slice_k = k_size // slices_per_head
+    output_slices = output.shape[1]  # slices_per_head for original, 1 for sub-ops
     # Detect whether A is split along the K dimension (head_dim).
     # op22 (Q): A shape (128,7,1) → K-split, each slice gets A_chunk.
     # op29 (softmax): A shape (32,7,1) → NOT K-split, full A per slice.
@@ -313,7 +346,7 @@ def write_gemv_local_case(
             act_head = np.asarray(activation[:, head, 0], dtype=np.float16).reshape(-1)
 
         # ---- B (weight) split by head_dim across slices_per_head ----
-        for local_slice in range(slices_per_head):
+        for local_slice in range(output_slices):
             start = local_slice * slice_k
             end = start + slice_k
             weight_slice = weight[start:end, :, head]          # (hd_slice, attn_len)

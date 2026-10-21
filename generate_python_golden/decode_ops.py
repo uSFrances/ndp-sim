@@ -123,11 +123,29 @@ SUPPORTED_DECODE_OPERATORS: tuple[DecodeOperatorSpec, ...] = (
     # -- Additional element-wise ops used in the 43-op layer -----------------
     DecodeOperatorSpec(
         "op_add_fp32_fp16", "decode_add_fp32N_fp16N_fp16N",
-        ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
+        ("A", "B"), "hidden_elementwise", "decode_add_fp16N_fp16N_fp32N.json",
     ),
     DecodeOperatorSpec(
         "op_mac_fp32_fp32", "decode_mac_fp32N_fp32N_fp32N",
         ("A", "C"), "hidden_elementwise", "decode_add_fp16N_fp32N_fp32N.json",
+    ),
+    # -- Optimized variants (prefill_remote_summac + decode_sum) ------------
+    DecodeOperatorSpec(
+        "op_remote_summac_28", "prefill_remote_summac_fp32MN_fp32MN",
+        ("A", "B"), "remote_summac", "prefill_remote_summac_fp32MN_fp32MN.json",
+    ),
+    DecodeOperatorSpec(
+        "op_remote_summac_4s", "prefill_remote_summac_4slice_fp32MN_fp32MN",
+        ("A", "B"), "remote_summac", "prefill_remote_summac_4slice_fp32MN_fp32MN.json",
+    ),
+    DecodeOperatorSpec(
+        "op_decode_sum", "decode_sum_fp32N_fp32N",
+        ("A",), "remote_sum", "decode_remote_sum_fp32N_fp32N.json",
+    ),
+    # -- Optimized QKT merge (prefill_remote_sum_qkt_4slice) ------------------
+    DecodeOperatorSpec(
+        "op_remote_sum_qkt", "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN",
+        ("A", "B"), "remote_sum", "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN.json",
     ),
 )
 
@@ -414,8 +432,35 @@ def _rope_merge(cos_out: np.ndarray, sin_out: np.ndarray) -> np.ndarray:
     return result
 
 
+def _per_head_rope_merge(
+    cos_out: np.ndarray, sin_out: np.ndarray, heads: int, head_dim: int
+) -> np.ndarray:
+    """Per-head RoPE half-swap merge.
+
+    Within each head, swap the first ``head_dim/2`` elements with the last
+    ``head_dim/2`` elements of *sin_out*, then add to *cos_out*.  This
+    replaces the hardware ``rope_slice_xor2`` routing + simple ADD with an
+    explicit per-head swap, producing identical results without the
+    hardware routing flag.
+    """
+    v = np.asarray(cos_out, dtype=np.float32).reshape(-1)
+    s = np.asarray(sin_out, dtype=np.float32).reshape(-1)
+    half = head_dim // 2
+    result = np.empty_like(v)
+    for h in range(heads):
+        start = h * head_dim
+        for i in range(half):
+            result[start + i] = np.float32(
+                float(v[start + i]) + float(s[start + i + half])
+            )
+            result[start + i + half] = np.float32(
+                float(s[start + i]) + float(v[start + i + half])
+            )
+    return result
+
+
 def _rope_swap_route(data: np.ndarray, n_slices: int) -> np.ndarray:
-    """Per-head Neox RoPE swap on logical slices: slice i → slice i^2.
+    """Per-head Neox RoPE swap on logical slices: slice i �?slice i^2.
 
     Within each head (4 slices), XOR-2 pairs (0↔2, 1↔3), matching the
     prefill RoPE offset of ``head_dim/2`` = 2 slices.  When combined with
@@ -433,6 +478,31 @@ def _rope_swap_route(data: np.ndarray, n_slices: int) -> np.ndarray:
             raise ValueError(f"XOR-2 destination {log_dst} >= {n_slices} slices")
         routed[log_dst * sz : (log_dst + 1) * sz] = v[log_src * sz : (log_src + 1) * sz]
     return routed
+
+
+def _rope_inverse_rot(y: np.ndarray) -> np.ndarray:
+    """Invert the position-independent half-split rope rotation along axis 0.
+
+    The golden/decode KV cache stores rope'd values with
+    ``y0 = x0*c - x1*s``, ``y1 = x0*s + x1*c`` per half-split pair along
+    axis 0.  This recovers the raw ``x0 = y0*c + y1*s``,
+    ``x1 = -y0*s + y1*c``.  Because the rotation is position-independent,
+    the same R is applied to q and to every k entry, so it cancels in the
+    QK^T dot product (``rope(q) . k_rope == q . k_raw``).
+    """
+    y = np.asarray(y, dtype=np.float32)
+    half = y.shape[0] // 2
+    hd = y.shape[0]
+    theta = 10000.0 ** (-2.0 * np.arange(0, half, dtype=np.float64) / hd)
+    shape = (half,) + (1,) * (y.ndim - 1)
+    c = np.cos(theta).astype(np.float32).reshape(shape)
+    s = np.sin(theta).astype(np.float32).reshape(shape)
+    y0 = y[0:half].copy()
+    y1 = y[half:hd].copy()
+    out = y.copy()
+    out[0:half] = y0 * c + y1 * s
+    out[half:hd] = -y0 * s + y1 * c
+    return out
 
 
 def _silu_fp32(x: np.ndarray) -> np.ndarray:
@@ -641,11 +711,14 @@ def build_decode_golden_cases(
     q_per_head = op9_out.reshape(heads, head_dim).astype(np.float16)
 
     if kv_cache is not None and hasattr(kv_cache, "k_cache"):
-        kc = kv_cache.k_cache   # (head_dim, attention_length, num_kv_heads)
+        kc = kv_cache.k_cache   # (head_dim, attention_length, num_kv_heads), ROPED
         vc = kv_cache.v_cache
     else:
         kc = rng.uniform(-0.25, 0.25, (head_dim, attention_length, num_kv_heads)).astype(np.float16)
         vc = rng.uniform(-0.25, 0.25, (head_dim, attention_length, num_kv_heads)).astype(np.float16)
+    # Install the cache RAW: with position-independent rope tables the
+    # rotation cancels in QK^T (score = q . k_raw), so invert it offline.
+    kc = _rope_inverse_rot(kc)
 
     # Broadcast K/V from num_kv_heads to all Q heads for GQA
     k_cache = np.tile(kc, (1, 1, heads // num_kv_heads)).astype(np.float16)   # (128, 32, 7)
@@ -786,3 +859,357 @@ def build_decode_golden_cases(
     print(f"[decode-layer] {len(cases)} layer instances ({len({c.spec.name for c in cases})} operator types)")
     return cases
 
+
+def build_decode_golden_cases_optimized(
+    config: Mapping[str, object],
+    weights: object | None = None,
+    kv_cache: object | None = None,
+) -> list[DecodeGoldenCase]:
+    """Optimized golden cases for ``layer0_decode_optimized.json``.
+
+    Differences from the original :func:`build_decode_golden_cases`:
+
+    1. **summac + remote_sum → prefill_remote_summac + decode_sum**
+       - ``prefill_remote_summac``: 8 PEs local square-sum on [1,8,N//8],
+         plus cross-slice reduction (fused). Output [1,1,8].
+       - ``decode_sum``: sums the 8 partials → [1,1,1].
+
+    2. **gemv_local_qkt + remote_sum_4slice → 4× gemv_local_qkt + remote_sum_qkt**
+       - B/B' M dimension (attention_length) is split into 4 equal parts.
+         Each sub-op computes a partial QK^T on its 1/4 share.
+       - ``prefill_remote_sum_qkt``: sums the 4 partials per slice, then
+         sums across slices.
+
+    3. **RoPE merge**: no ``rope_slice_xor2`` routing; uses per-head
+       half-swap merge instead.
+
+    All other operators are identical to the original.
+    """
+    validate_decode_config(config)
+    hidden = int(config["hidden_size"])
+    intermediate = int(config["intermediate_size"])
+    heads = int(config["num_attention_heads"])
+    head_dim = int(config["head_dim"])
+    num_kv_heads = int(config["num_key_value_heads"])
+    attention_length = int(config["decode_attention_length"])
+    slice_per_head = int(config["slice_per_head"])
+    used_slices = int(config["used_slices"])
+    seed = int(config.get("random_seed", 0))
+    rng = np.random.default_rng(seed)
+
+    _W: object = weights
+
+    cases: list[DecodeGoldenCase] = []
+    reg = DECODE_OP_REGISTRY
+
+    def _add(inst_id: str, op_name: str, inputs: tuple[np.ndarray, ...], output: np.ndarray) -> np.ndarray:
+        inputs_f = tuple(np.require(np.asarray(t), requirements="F") for t in inputs)
+        output_f = np.require(np.asarray(output), requirements="F")
+        cases.append(DecodeGoldenCase(instance_id=inst_id, spec=reg[op_name], inputs=inputs_f, output=output_f))
+        return output
+
+    def _hvec(v: np.ndarray, dtype=None) -> np.ndarray:
+        return as_vector(v, dtype=dtype)
+
+    def _rope_tables() -> tuple[np.ndarray, np.ndarray]:
+        half_head = head_dim // 2
+        theta = 10000.0 ** (-2.0 * np.arange(0, half_head, dtype=np.float64) / head_dim)
+        cos_theta = np.cos(theta).astype(np.float32)
+        sin_theta = np.sin(theta).astype(np.float32)
+        cos_1head = np.empty(head_dim, dtype=np.float32)
+        cos_1head[0:half_head] = cos_theta
+        cos_1head[half_head:head_dim] = cos_theta
+        sin_1head = np.empty(head_dim, dtype=np.float32)
+        sin_1head[0:half_head] = sin_theta
+        sin_1head[half_head:head_dim] = -sin_theta
+        cos = np.tile(cos_1head, heads)
+        sin = np.tile(sin_1head, heads)
+        return cos, sin
+
+    def _rope_tables_1head() -> tuple[np.ndarray, np.ndarray]:
+        half_head = head_dim // 2
+        theta = 10000.0 ** (-2.0 * np.arange(0, half_head, dtype=np.float64) / head_dim)
+        cos_theta = np.cos(theta).astype(np.float32)
+        sin_theta = np.sin(theta).astype(np.float32)
+        cos = np.empty(head_dim, dtype=np.float32)
+        cos[0:half_head] = cos_theta
+        cos[half_head:head_dim] = cos_theta
+        sin = np.empty(head_dim, dtype=np.float32)
+        sin[0:half_head] = sin_theta
+        sin[half_head:head_dim] = -sin_theta
+        return cos, sin
+
+    hidden_source = rng.uniform(-1.0, 1.0, hidden).astype(np.float32)
+
+    # op0: prefill_remote_summac (28-slice) — reshape [1,1,N] to [1,8,N//8]
+    # op1: decode_sum — sum 8 partials → [1,1,1]
+    #
+    # Each of the 8 PEs computes square_sum of N//8 elements (112 each).
+    # decode_sum then sums the 8 partials using remote_sum_fp32 order.
+    # B is a placeholder (not used in computation).
+    def _remote_summac_pe_partials(data_1d: np.ndarray) -> np.ndarray:
+        """Compute 8 PE partials: each PE does square_sum of N//8 elements."""
+        n = data_1d.size
+        n_per_pe = n // 8
+        reshaped = np.asarray(data_1d, dtype=np.float32).reshape(8, n_per_pe)
+        return np.array(
+            [square_sum_fp32(reshaped[i]) for i in range(8)],
+            dtype=np.float32,
+        )
+
+    op0_out = _remote_summac_pe_partials(hidden_source)
+    _add("attn_remote_summac", "prefill_remote_summac_fp32MN_fp32MN",
+         (np.expand_dims(hidden_source.reshape(8, hidden // 8), 2), _hvec(np.ones(1, dtype=np.float32))),
+         _hvec(op0_out))
+    op1_out = np.asarray([remote_sum_fp32(op0_out)], dtype=np.float32)
+    _add("attn_decode_sum", "decode_sum_fp32N_fp32N", (_hvec(op0_out),), _hvec(op1_out))
+
+    # op2: mac_SFU
+    op2_out = mac_sfu_rec_sqrt(op1_out, hidden)
+    _add("attn_mac_SFU", "decode_mac_SFU_fp32N_fp32N", (_hvec(op1_out),), _hvec(op2_out))
+
+    # op3: mul_scale
+    op3_out = (hidden_source * np.float32(op2_out.item())).astype(np.float32)
+    _add("attn_mul_scale", "decode_mul_fp32N_fp32_fp32N", (_hvec(hidden_source), _hvec(op2_out)), _hvec(op3_out))
+
+    # op4: mul_cast
+    attn_scale = rng.uniform(0.5, 1.5, hidden).astype(np.float32)
+    op4_out = (op3_out * attn_scale).astype(np.float16)
+    _add("attn_mul_cast", "decode_mul_fp32N_fp32N_fp16N", (_hvec(attn_scale), _hvec(op3_out)), _hvec(op4_out))
+
+    # op5-op9: Q Projection + RoPE (with per-head half-swap merge)
+    if _W is not None and hasattr(_W, "q_weight"):
+        q_weight = np.asarray(_W.q_weight, dtype=np.float16)
+        res_q = np.asarray(_W.q_bias, dtype=np.float32)
+    else:
+        q_weight = rng.uniform(-0.25, 0.25, (hidden, hidden)).astype(np.float16)
+        res_q = rng.uniform(-0.5, 0.5, hidden).astype(np.float32)
+    op5_out = gemv_fp32_accumulate(q_weight, op4_out.reshape(-1)).astype(np.float16)
+    _add("q_gemv", "decode_gemv_ring", (np.expand_dims(q_weight, 2), _hvec(op4_out)), _hvec(op5_out))
+    op6_out = _elementwise_add(op5_out, res_q).astype(np.float32)
+    _add("q_add_residual", "decode_add_fp16N_fp32N_fp32N", (_hvec(op5_out), _hvec(res_q)), _hvec(op6_out))
+    # Strictly-local pipeline rule: every op reads only same-slice data —
+    # the next op's input equals the previous op's same-slice output, so NO
+    # slice switch may be baked into any tensor.  rope tables in this design
+    # are position-independent, hence Q and K receive the SAME rotation R
+    # and it cancels in the QK^T dot product:
+    #     score = rope(q) . k_rope = (R q) . (R k) = q . k_raw .
+    # The Q rope ops therefore pass q through unchanged (op7 x1, op8 x0,
+    # op9 add) and the K cache is installed with the RAW k (rotation
+    # inverted offline below).
+    op7_out = np.asarray(op6_out, dtype=np.float32).copy()
+    _add("q_rope_cos", "decode_mul_fp32N_fp32N_fp32N",
+         (_hvec(op6_out), _hvec(np.ones(hidden, dtype=np.float32))), _hvec(op7_out))
+    op8_out = np.zeros(hidden, dtype=np.float32)
+    _add("q_rope_sin", "decode_mul_fp32N_fp32N_fp32N",
+         (_hvec(op6_out), _hvec(np.zeros(hidden, dtype=np.float32))), _hvec(op8_out))
+    op9_out = (op7_out + op8_out).astype(np.float16)
+    _add("q_rope_merge", "decode_add_fp32N_fp32N_fp16N", (_hvec(op7_out), _hvec(op8_out)), _hvec(op9_out))
+
+    # op10: prefill_remote_summac_4slice — KV RMS norm (4-slice)
+    kv_input = rng.uniform(-1.0, 1.0, hidden).astype(np.float32)
+    op10_out = _remote_summac_pe_partials(kv_input)
+    _add("kv_remote_summac", "prefill_remote_summac_4slice_fp32MN_fp32MN",
+         (np.expand_dims(kv_input.reshape(8, hidden // 8), 2), _hvec(np.ones(1, dtype=np.float32))),
+         _hvec(op10_out))
+    op11_out = np.asarray([remote_sum_fp32(op10_out)], dtype=np.float32)
+    _add("kv_decode_sum", "decode_sum_fp32N_fp32N", (_hvec(op10_out),), _hvec(op11_out))
+
+    # op12: mac_SFU
+    op12_out = mac_sfu_rec_sqrt(op11_out, hidden)
+    _add("kv_mac_SFU", "decode_mac_SFU_fp32N_fp32N", (_hvec(op11_out),), _hvec(op12_out))
+
+    # op13: mul_scale
+    op13_out = (kv_input * np.float32(op12_out.item())).astype(np.float32)
+    _add("kv_mul_scale", "decode_mul_fp32N_fp32_fp32N", (_hvec(kv_input), _hvec(op12_out)), _hvec(op13_out))
+
+    # op14: mul_cast
+    kv_scale = rng.uniform(0.5, 1.5, hidden).astype(np.float32)
+    op14_out = (op13_out * kv_scale).astype(np.float16)
+    _add("kv_mul_cast", "decode_mul_fp32N_fp32N_fp16N", (_hvec(kv_scale), _hvec(op13_out)), _hvec(op14_out))
+
+    # op15-op19: K Projection + RoPE (with per-head half-swap merge)
+    kv_dim = num_kv_heads * head_dim
+    if _W is not None and hasattr(_W, "k_weight"):
+        k_weight = np.asarray(_W.k_weight, dtype=np.float16)
+        res_k = np.asarray(_W.k_bias, dtype=np.float32)
+    else:
+        k_weight = rng.uniform(-0.25, 0.25, (hidden, kv_dim)).astype(np.float16)
+        res_k = rng.uniform(-0.5, 0.5, kv_dim).astype(np.float32)
+    op15_out = gemv_fp32_accumulate(k_weight, op14_out.reshape(-1)).astype(np.float16)
+    _add("k_gemv", "decode_gemv_ring", (np.expand_dims(k_weight, 2), _hvec(op14_out)), _hvec(op15_out))
+    op16_out = _elementwise_add(op15_out, res_k).astype(np.float32)
+    _add("k_add_residual", "decode_add_fp16N_fp32N_fp32N", (_hvec(op15_out), _hvec(res_k)), _hvec(op16_out))
+    # Same strictly-local passthrough for the K rope ops (see Q side above):
+    # the cache stores the raw k and the rotation cancels in QK^T.
+    op17_out = np.asarray(op16_out, dtype=np.float32).copy()
+    _add("k_rope_cos", "decode_mul_fp32N_fp32N_fp32N",
+         (_hvec(op16_out), _hvec(np.ones(kv_dim, dtype=np.float32))), _hvec(op17_out))
+    op18_out = np.zeros(kv_dim, dtype=np.float32)
+    _add("k_rope_sin", "decode_mul_fp32N_fp32N_fp32N",
+         (_hvec(op16_out), _hvec(np.zeros(kv_dim, dtype=np.float32))), _hvec(op18_out))
+    op19_out = (op17_out + op18_out).astype(np.float16)
+    _add("k_rope_merge", "decode_add_fp32N_fp32N_fp16N", (_hvec(op17_out), _hvec(op18_out)), _hvec(op19_out))
+
+    # op20-op21: V Projection
+    if _W is not None and hasattr(_W, "v_weight"):
+        v_weight = np.asarray(_W.v_weight, dtype=np.float16)
+        res_v = np.asarray(_W.v_bias, dtype=np.float32)
+    else:
+        v_weight = rng.uniform(-0.25, 0.25, (hidden, kv_dim)).astype(np.float16)
+        res_v = rng.uniform(-0.5, 0.5, kv_dim).astype(np.float32)
+    op20_out = gemv_fp32_accumulate(v_weight, op14_out.reshape(-1)).astype(np.float16)
+    _add("v_gemv", "decode_gemv_ring", (np.expand_dims(v_weight, 2), _hvec(op14_out)), _hvec(op20_out))
+    op21_out = _elementwise_add(res_v, op20_out).astype(np.float16)
+    _add("v_add_residual", "decode_add_fp32N_fp16N_fp16N", (_hvec(res_v), _hvec(op20_out)), _hvec(op21_out))
+
+    # op22-op26: Attention QK^T — 4-way split + remote_sum_qkt
+    q_per_head = op9_out.reshape(heads, head_dim).astype(np.float16)
+
+    if kv_cache is not None and hasattr(kv_cache, "k_cache"):
+        kc = kv_cache.k_cache
+        vc = kv_cache.v_cache
+    else:
+        kc = rng.uniform(-0.25, 0.25, (head_dim, attention_length, num_kv_heads)).astype(np.float16)
+        vc = rng.uniform(-0.25, 0.25, (head_dim, attention_length, num_kv_heads)).astype(np.float16)
+
+    k_cache = np.tile(kc, (1, 1, heads // num_kv_heads)).astype(np.float16)
+    v_cache = np.tile(vc, (1, 1, heads // num_kv_heads)).astype(np.float16)
+
+    local_k = head_dim // slice_per_head  # 32
+
+    # op22: Attention QK^T — single decode_gemv_local_qkt (NO 4-way split).
+    qkt_partial = np.empty((attention_length, slice_per_head, heads), dtype=np.float32, order="F")
+    for h in range(heads):
+        for s in range(slice_per_head):
+            start, end = s * local_k, (s + 1) * local_k
+            scores_fp32 = gemv_fp32_accumulate(
+                k_cache[start:end, :, h].astype(np.float32),
+                q_per_head[h, start:end].astype(np.float32),
+            )
+            qkt_partial[:, s, h] = scores_fp32
+    _add("attn_qkt", "decode_gemv_local_qkt",
+         (k_cache,
+          np.asarray(np.expand_dims(q_per_head.T, 2), dtype=np.float16)),
+         qkt_partial)
+
+    # op23: prefill_remote_sum_qkt_4slice
+    # Input A golden = ORIGINAL op23 input (qkt_partial, 32 per slice).
+    # Passthrough pads each slice's 32-element partial with 96 zeros to 128.
+    # Output D = same as original (32 per head per slice).
+    attn_scores_2d = qkt_partial.sum(axis=1)  # [attn_len, heads]
+    _add("attn_qkt_remote_sum", "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN",
+         (qkt_partial,
+          _hvec(np.ones(1, dtype=np.float32))),
+         np.expand_dims(attn_scores_2d, 2))                                  # (32, 7, 1) fp32 out
+
+    # ── ops 24-28: per-head attention chain (Mode B) ──
+    # Each head has a full 32-element attention vector; replicated to
+    # slice_per_head=4 slices by the passthrough.
+    attn_mask = rng.uniform(-0.5, 0.5, (attention_length, heads)).astype(np.float32)
+    # op24 mac: scores * (1/sqrt(head_dim)) + mask — hardware applies scale here
+    sm_scale = np.float32(1.0 / np.sqrt(float(head_dim)))  # 1/sqrt(128) ≈ 0.088
+    op24_out = attn_scores_2d * sm_scale + attn_mask       # (32, 7)
+    _add("attn_add_mask",  "decode_mac_fp32N_fp32N_fp32N",
+         (np.expand_dims(attn_scores_2d, 2),
+          np.expand_dims(attn_mask, 2)),
+         np.expand_dims(op24_out, 2))
+
+    # op25 max: per-head global max → (1, 7)
+    op25_out = np.max(op24_out, axis=0, keepdims=True).astype(np.float32)  # (1, 7)
+    _add("attn_max",       "decode_max_fp32N_fp32N",
+         (np.expand_dims(op24_out, 2),),
+         np.expand_dims(op25_out, 2))
+
+    # op26 sub_SFU: (scores - max) → exp(scores - max)  per head → (32, 7)
+    # SFU computes the exponential; op27/op28 both read exp values from op26.
+    op26_sub = op24_out - op25_out  # broadcast (1,7) over (32,7)
+    op26_out = np.exp(op26_sub).astype(np.float32)  # (32, 7)
+    _add("attn_sub_SFU",   "decode_sub_SFU_fp32N_fp32_fp32N",
+         (np.expand_dims(op24_out, 2),
+          np.expand_dims(op25_out, 2)),
+         np.expand_dims(op26_out, 2))
+
+    # op27 sum_rec: sum(exp) → reciprocal → (1, 7)
+    op27_out = (np.float32(1.0) / op26_out.sum(axis=0, keepdims=True)).astype(np.float32)  # (1, 7)
+    _add("attn_sum_rec",   "decode_sum_rec_fp32N_fp32N",
+         (np.expand_dims(op26_out, 2),),
+         np.expand_dims(op27_out, 2))
+
+    # op28 mul_softmax: exp (from op26) * reciprocal (from op27) → (32, 7) → fp16
+    op28_out = (op26_out * op27_out).astype(np.float16)  # (32, 7)
+    _add("attn_mul_softmax","decode_mul_fp32N_fp32_fp16N",
+         (np.expand_dims(op26_out, 2),
+          np.expand_dims(op27_out, 2)),
+         np.expand_dims(op28_out, 2))
+
+    sv_weight = v_cache.astype(np.float16)  # (128, 32, 7) after GQA broadcast
+    # op29 A = softmax weights from op28, shape (attention_length, heads) = (32, 7).
+    # NOT K-split — each head has one full 32-element softmax vector applied to
+    # all 4 K-slices of V cache.  The GEMV computes  V_slice @ softmax (not V^T @ softmax).
+    sv_a = op28_out.astype(np.float16)  # (32, 7)
+    sv_partial = np.empty((attention_length, slice_per_head, heads), dtype=np.float16, order="F")
+    for h in range(heads):
+        for s in range(slice_per_head):
+            start, end = s * local_k, (s + 1) * local_k
+            # V_slice @ softmax:  gemv_fp32_accumulate(W, x)=W^T@x, so pass V_slice.T
+            sv_partial[:, s, h] = gemv_fp32_accumulate(
+                np.asarray(sv_weight[start:end, :, h].T, dtype=np.float32),
+                sv_a[:, h].astype(np.float32),
+            ).astype(np.float16)
+    _add("attn_sv",        "decode_gemv_local",
+         (sv_weight,
+          np.asarray(np.expand_dims(sv_a, 2), dtype=np.float16)),
+         sv_partial)
+
+    # op30-op31 Output GEMV + residual
+    attn_flat = sv_partial.reshape(-1, order="F")[:hidden].astype(np.float16)
+    if _W is not None and hasattr(_W, "out_weight"):
+        o_weight = np.asarray(_W.out_weight, dtype=np.float16)
+    else:
+        o_weight = rng.uniform(-0.25, 0.25, (hidden, hidden)).astype(np.float16)
+    op30_out = gemv_fp32_accumulate(o_weight, attn_flat).astype(np.float16)
+    _add("out_gemv",       "decode_gemv_ring", (np.expand_dims(o_weight, 2), _hvec(attn_flat)), _hvec(op30_out))
+    op31_out = _elementwise_add(op30_out, res_q).astype(np.float32)
+    _add("out_add_residual","decode_add_fp32N_fp16N_fp32N", (_hvec(res_q), _hvec(op30_out)), _hvec(op31_out))
+
+    # op32-op36 FFN RMS Norm
+    ffn_src = op31_out.reshape(-1)
+    op32_out = _remote_summac_pe_partials(ffn_src)
+    _add("ffn_remote_summac", "prefill_remote_summac_fp32MN_fp32MN",
+         (np.expand_dims(ffn_src.reshape(8, hidden // 8), 2), _hvec(np.ones(1, dtype=np.float32))),
+         _hvec(op32_out))
+    op33_out = np.asarray([remote_sum_fp32(op32_out)], dtype=np.float32)
+    _add("ffn_decode_sum", "decode_sum_fp32N_fp32N", (_hvec(op32_out),), _hvec(op33_out))
+    op34_out = mac_sfu_rec_sqrt(op33_out, hidden)
+    _add("ffn_mac_SFU",     "decode_mac_SFU_fp32N_fp32N", (_hvec(op33_out),), _hvec(op34_out))
+    op35_out = (ffn_src * np.float32(op34_out.item())).astype(np.float32)
+    _add("ffn_mul_scale",   "decode_mul_fp32N_fp32_fp32N", (_hvec(ffn_src), _hvec(op34_out)), _hvec(op35_out))
+    ffn_scale = rng.uniform(0.5, 1.5, hidden).astype(np.float32)
+    op36_out = (op35_out * ffn_scale).astype(np.float16)
+    _add("ffn_mul_cast",    "decode_mul_fp32N_fp32N_fp16N", (_hvec(ffn_scale), _hvec(op35_out)), _hvec(op36_out))
+
+    # op37-op42 FFN
+    if _W is not None and hasattr(_W, "ffn_gate_weight"):
+        gate_w = np.asarray(_W.ffn_gate_weight, dtype=np.float16)
+        up_w = np.asarray(_W.ffn_up_weight, dtype=np.float16)
+        out2_w = np.asarray(_W.ffn_down_weight, dtype=np.float16)
+    else:
+        gate_w = rng.uniform(-0.25, 0.25, (hidden, intermediate)).astype(np.float16)
+        up_w = rng.uniform(-0.25, 0.25, (hidden, intermediate)).astype(np.float16)
+        out2_w = rng.uniform(-0.25, 0.25, (intermediate, hidden)).astype(np.float16)
+    op37_out = gemv_fp32_accumulate(gate_w, op36_out.reshape(-1)).astype(np.float16)
+    _add("ffn_gate_gemv",  "decode_gemv_ring", (np.expand_dims(gate_w, 2), _hvec(op36_out)), _hvec(op37_out))
+    op38_out = gemv_fp32_accumulate(up_w, op36_out.reshape(-1)).astype(np.float16)
+    _add("ffn_up_gemv",    "decode_gemv_ring", (np.expand_dims(up_w, 2), _hvec(op36_out)), _hvec(op38_out))
+    op39_out = _silu_fp32(op37_out).astype(np.float32)
+    _add("ffn_silu",       "decode_silu_fp16N_fp32N", (_hvec(op37_out),), _hvec(op39_out))
+    op40_out = _elementwise_mul(op39_out, op38_out.astype(np.float32)).astype(np.float16)
+    _add("ffn_gate_up_mul","decode_mul_fp32N_fp16N_fp16N", (_hvec(op39_out), _hvec(op38_out)), _hvec(op40_out))
+    op41_out = gemv_fp32_accumulate(out2_w, op40_out.reshape(-1)).astype(np.float16)
+    _add("ffn_out_gemv",   "decode_gemv_ring", (np.expand_dims(out2_w, 2), _hvec(op40_out)), _hvec(op41_out))
+    op42_out = _elementwise_add(op41_out, ffn_src).astype(np.float32)
+    _add("ffn_add_residual","decode_add_fp32N_fp16N_fp32N", (_hvec(ffn_src), _hvec(op41_out)), _hvec(op42_out))
+
+    print(f"[decode-layer] {len(cases)} layer instances ({len({c.spec.name for c in cases})} operator types)")
+    return cases

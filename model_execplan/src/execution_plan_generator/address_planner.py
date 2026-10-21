@@ -116,7 +116,9 @@ class AddressPlanner:
         else:
             num_groups = self._group_count(interleave)
             bank_span = interleave
-        group_cursors = [_AddressCursor() for _ in range(num_groups)]
+        bank_cursors: list[_AddressCursor] = [
+            _AddressCursor() for _ in range(self.MAX_BANKS)
+        ]
 
         assignments: dict[str, AddressAssignment] = {}
         io_map: dict[str, str] = {}
@@ -127,6 +129,26 @@ class AddressPlanner:
         operator_sfu_config_lengths: dict[str, int] = {}
 
         # -- tensor data -------------------------------------------------
+        # Detect groups of consecutive decode_gemv_local_qkt sub-ops whose
+        # outputs must be allocated contiguously so that a downstream op
+        # reading the first sub-op's output sees the full concatenated range.
+        _QKT_SPLIT_TYPE = "decode_gemv_local_qkt"
+        qkt_split_groups: list[list[str]] = []
+        _current_qkt_group: list[str] = []
+        for _op in execution_input.operators:
+            if _op.op_type == _QKT_SPLIT_TYPE:
+                _current_qkt_group.append(_op.op_id)
+            else:
+                if len(_current_qkt_group) > 1:
+                    qkt_split_groups.append(_current_qkt_group)
+                _current_qkt_group = []
+        if len(_current_qkt_group) > 1:
+            qkt_split_groups.append(_current_qkt_group)
+        # Map: first sub-op id → list of all sub-op ids in its group
+        qkt_group_map: dict[str, list[str]] = {}
+        for group in qkt_split_groups:
+            qkt_group_map[group[0]] = group
+
         for op in execution_input.operators:
             enabled_slice_ids = op.enabled_slice_ids()
             if not enabled_slice_ids or len(enabled_slice_ids) > self.MAX_SLAVES:
@@ -173,6 +195,14 @@ class AddressPlanner:
                             force_group = 1  # banks 2/3
                         elif input_name == "B'":
                             force_group = 0  # banks 0/1
+                    elif (
+                        op.op_type == _QKT_SPLIT_TYPE
+                        and input_name in ("B", "B'")
+                        and any(op.op_id in g for g in qkt_split_groups)
+                    ):
+                        # QKT sub-op B/B' go to the opposite bank group
+                        # from the outputs so outputs stay contiguous.
+                        force_group = 0  # banks 0/1
                     # Avoid the group that currently holds the most input data,
                     # so inputs naturally spread across bank groups.
                     input_avoid: int | None = None
@@ -186,7 +216,7 @@ class AddressPlanner:
                             tensor_dtype=tensor.dtype,
                             shape=alloc_shape,
                             enabled_slice_ids=enabled_slice_ids,
-                            group_cursors=group_cursors,
+                            bank_cursors=bank_cursors,
                             interleave=interleave,
                             bank_span=bank_span,
                             force_group_idx=force_group,
@@ -217,11 +247,51 @@ class AddressPlanner:
                         f"{io_key} references unknown/unplanned source operator: "
                         f"{source_op_id}."
                     )
-                io_map[io_key] = output_tensor_by_op[source_op_id]
-                src_assignment = assignments[output_tensor_by_op[source_op_id]]
+                src_tn = output_tensor_by_op[source_op_id]
+                src_assignment = assignments[src_tn]
+                tensor_ilv = tensor.bank_interleave or 1
+
+                # If this input's declared size exceeds the source output's
+                # allocated size (e.g. padded/expanded inputs like
+                # prefill_remote_sum_qkt whose A is 4x the gemv output),
+                # allocate an independent region instead of inheriting the
+                # source address — otherwise the input would overflow into
+                # neighbouring tensors.
+                declared_size = self._tensor_size_bytes(
+                    tensor_name=f"{op.op_id}.input.{input_name}",
+                    tensor_dtype=tensor.dtype,
+                    shape=tensor.shape,
+                )
+                if declared_size > src_assignment.size_bytes:
+                    tensor_name = f"{op.op_id}.input.{input_name}"
+                    assignment, gi, rel_bank, _, _ = (
+                        self._allocate_tensor_interleaved(
+                            tensor_name=tensor_name,
+                            tensor_dtype=tensor.dtype,
+                            shape=tensor.shape,
+                            enabled_slice_ids=enabled_slice_ids,
+                            bank_cursors=bank_cursors,
+                            interleave=interleave,
+                            bank_span=bank_span,
+                            tensor_interleave=tensor_ilv,
+                        )
+                    )
+                    assignments[tensor_name] = assignment
+                    io_map[io_key] = tensor_name
+                    input_group_totals[gi] += assignment.size_bytes
+                    if tensor_ilv > input_group_max_ilv[gi]:
+                        input_group_max_ilv[gi] = tensor_ilv
+                    abs_bank_start = self._group_start_bank(gi, bank_span)
+                    if tensor_ilv == 1:
+                        input_bank_totals[abs_bank_start + rel_bank] += assignment.size_bytes
+                    else:
+                        for b in range(tensor_ilv):
+                            input_bank_totals[abs_bank_start + b] += assignment.size_bytes // tensor_ilv
+                    continue
+
+                io_map[io_key] = src_tn
                 src_bank = (src_assignment.base_address >> 23) & 0x03
                 src_group = src_bank // bank_span
-                tensor_ilv = tensor.bank_interleave or 1
                 input_group_totals[src_group] += src_assignment.size_bytes
                 if tensor_ilv > input_group_max_ilv[src_group]:
                     input_group_max_ilv[src_group] = tensor_ilv
@@ -238,6 +308,86 @@ class AddressPlanner:
             output_force: int | None = None
             output_avoid: int | None = None
             output_force_bank: int | None = None
+
+            # For decode_gemv_local_qkt sub-ops that are part of a split
+            # group, allocate outputs contiguously.  The first sub-op
+            # allocates normally; subsequent sub-ops get a directly
+            # computed address right after the previous sub-op's output,
+            # bypassing the cursor to guarantee contiguity.
+            _is_qkt_subsequent = (
+                op.op_type == _QKT_SPLIT_TYPE
+                and any(op.op_id in g for g in qkt_split_groups)
+                and op.op_id not in qkt_group_map  # not the first in its group
+            )
+            if _is_qkt_subsequent:
+                _group = None
+                for g in qkt_split_groups:
+                    if op.op_id in g:
+                        _group = g
+                        break
+                if _group is not None:
+                    _prev_tn = f"{_group[_group.index(op.op_id) - 1]}.output.D"
+                    if _prev_tn in assignments:
+                        _prev_a = assignments[_prev_tn]
+                        _prev_bank = (_prev_a.base_address >> 23) & 0x03
+                        _prev_ilv = output_ilv
+                        _prev_pbw = ceil(_prev_a.size_bytes / 16) // max(_prev_ilv, 1)
+                        if _prev_pbw == 0:
+                            _prev_pbw = 1
+                        # Compute the next address right after the previous
+                        # output on the same bank(s), but never before the
+                        # current cursor (which accounts for inputs already
+                        # allocated on this bank).
+                        _prev_row = (_prev_a.base_address >> 10) & 0x1FFF
+                        _prev_col = (_prev_a.base_address >> 4) & 0x3F
+                        _prev_end_flat = _prev_row * self.MAX_COLS + _prev_col + _prev_pbw
+                        for _b in range(_prev_ilv):
+                            _abs_b = _prev_bank + _b
+                            _cur = bank_cursors[_abs_b]
+                            _cur_flat = _cur.row * self.MAX_COLS + _cur.col
+                            # Use the max of previous output end and current
+                            # cursor to avoid overlapping with inputs.
+                            _start_flat = max(_prev_end_flat, _cur_flat)
+                            _start_row = _start_flat // self.MAX_COLS
+                            _start_col = _start_flat % self.MAX_COLS
+                            _size_bytes = self._tensor_size_bytes(
+                                tensor_name=output_name,
+                                tensor_dtype=op.output.dtype,
+                                shape=op.output.shape,
+                            )
+                            _base = self._pack_address(
+                                slave=0, bank=_prev_bank, row=_start_row,
+                                col=_start_col, subword=0,
+                            )
+                            _per_slice = {}
+                            for sid in enabled_slice_ids:
+                                _per_slice[sid] = self._pack_address(
+                                    slave=sid, bank=_prev_bank, row=_start_row,
+                                    col=_start_col, subword=0,
+                                )
+                            _assign = AddressAssignment(
+                                tensor_name=output_name,
+                                base_address=_base,
+                                per_slice_addresses=_per_slice,
+                                size_bytes=_size_bytes,
+                                shape=op.output.shape,
+                            )
+                            assignments[output_name] = _assign
+                            output_tensor_by_op[op.op_id] = output_name
+                            io_map[self._io_key(op.op_id, "output", "D")] = output_name
+                            # Advance cursor past this output.
+                            _new_pbw = ceil(_size_bytes / 16) // max(output_ilv, 1)
+                            if _new_pbw == 0:
+                                _new_pbw = 1
+                            _end_flat = _start_flat + _new_pbw
+                            bank_cursors[_abs_b] = _AddressCursor(
+                                bank=0,
+                                row=_end_flat // self.MAX_COLS,
+                                col=_end_flat % self.MAX_COLS,
+                            )
+                            break  # only need to do this once per bank group
+                        continue  # skip normal output allocation
+
             if output_ilv == 1 and any(t > 0 for t in input_bank_totals):
                 # Single-bank output: pick the physical bank with the least
                 # input data so D lands on a bank different from every input.
@@ -267,7 +417,7 @@ class AddressPlanner:
                     tensor_dtype=op.output.dtype,
                     shape=op.output.shape,
                     enabled_slice_ids=enabled_slice_ids,
-                    group_cursors=group_cursors,
+                    bank_cursors=bank_cursors,
                     interleave=interleave,
                     bank_span=bank_span,
                     force_group_idx=output_force,
@@ -284,20 +434,20 @@ class AddressPlanner:
         config_lengths_by_op = config_lengths_by_op or {}
         sfu_config_lengths_by_op = sfu_config_lengths_by_op or {}
 
-        # Align every group cursor to row start.
-        for gi in range(num_groups):
-            group_cursors[gi] = self._align_cursor_to_row_in_group(
-                group_cursors[gi], bank_span
-            )
+        # Align every bank cursor to row start.
+        for b in range(self.MAX_BANKS):
+            bank_cursors[b] = self._align_single_to_row(bank_cursors[b])
 
-        # Pick the least-used group for config placement.
-        config_group = self._choose_bank_group(group_cursors, bank_span)
-        config_cursor = group_cursors[config_group]
+        # Pick the least-used bank group for config placement.
+        config_group = self._choose_bank_group_from_banks(
+            bank_cursors, bank_span
+        )
+        config_bank = self._group_start_bank(config_group, bank_span)
 
         config_base = self._pack_address(
             slave=0,
-            bank=self._group_start_bank(config_group, bank_span),
-            row=config_cursor.row,
+            bank=config_bank,
+            row=bank_cursors[config_bank].row,
             col=0,
             subword=0,
         )
@@ -510,86 +660,55 @@ class AddressPlanner:
         )
 
     # ------------------------------------------------------------------
-    # Interleaved allocation helpers
+    # Interleaved allocation helpers (per-bank cursors)
     # ------------------------------------------------------------------
 
-    def _choose_bank_group(
+    def _choose_bank_group_from_banks(
         self,
-        group_cursors: list[_AddressCursor],
-        interleave: int,
+        bank_cursors: list[_AddressCursor],
+        span: int,
         avoid_group: int | None = None,
     ) -> int:
-        """Return the index of the least-used bank group, optionally avoiding *avoid_group*."""
-        best = None
-        best_flat: int | None = None
-        for gi in range(len(group_cursors)):
-            if avoid_group is not None and len(group_cursors) > 1 and gi == avoid_group:
+        """Return the index of the least-used bank group.
+
+        Uses the maximum cursor position across each group's banks as the
+        load metric, so a group whose banks have advanced least is preferred.
+        """
+        num_groups = self.MAX_BANKS // span
+        best: int | None = None
+        best_key: tuple[int, int, int] | None = None
+        for gi in range(num_groups):
+            if avoid_group is not None and num_groups > 1 and gi == avoid_group:
                 continue
-            flat = self._flatten_in_group(
-                bank=group_cursors[gi].bank,
-                row=group_cursors[gi].row,
-                col=group_cursors[gi].col,
-                interleave=interleave,
+            group_start = self._group_start_bank(gi, span)
+            max_cursor = max(
+                (bank_cursors[b] for b in range(group_start, group_start + span)),
+                key=lambda c: (c.row, c.col),
             )
-            if best_flat is None or flat < best_flat:
-                best_flat = flat
+            key = (max_cursor.row, max_cursor.col, gi)
+            if best_key is None or key < best_key:
+                best_key = key
                 best = gi
         if best is None:
-            # All groups were avoided; pick group 0 as fallback.
             best = 0
         return best
 
-    def _flatten_in_group(
-        self, bank: int, row: int, col: int, interleave: int
-    ) -> int:
-        """Flatten (bank_in_group, row, col) into a linear word index."""
-        _ = interleave  # group capacity is implicit in MAX_ROWS/MAX_COLS
-        return ((bank * self.MAX_ROWS) + row) * self.MAX_COLS + col
-
-    def _unflatten_in_group(
-        self, flat: int, interleave: int
-    ) -> tuple[int, int, int]:
-        """Inverse of ``_flatten_in_group``."""
-        banks_in_group = interleave
-        bank_rows = self.MAX_ROWS * self.MAX_COLS
-        bank = flat // bank_rows
-        rem = flat % bank_rows
-        row = rem // self.MAX_COLS
-        col = rem % self.MAX_COLS
-        if bank >= banks_in_group:
-            raise AddressPlanningError(
-                "Address space overflow in bank group."
-            )
-        return bank, row, col
-
-    def _advance_in_group(
-        self,
-        cursor: _AddressCursor,
-        words: int,
-        interleave: int,
+    def _advance_single(
+        self, cursor: _AddressCursor, words: int
     ) -> _AddressCursor:
-        current = self._flatten_in_group(
-            bank=cursor.bank, row=cursor.row, col=cursor.col,
-            interleave=interleave,
-        )
+        """Advance a per-bank cursor by *words* within a single bank."""
+        current = cursor.row * self.MAX_COLS + cursor.col
         nxt = current + words
-        if nxt > interleave * self.MAX_ROWS * self.MAX_COLS:
-            raise AddressPlanningError(
-                "Address space exhausted in bank group."
-            )
-        bank, row, col = self._unflatten_in_group(nxt, interleave)
-        return _AddressCursor(bank=bank, row=row, col=col)
+        if nxt > self.MAX_ROWS * self.MAX_COLS:
+            raise AddressPlanningError("Address space exhausted on bank.")
+        return _AddressCursor(
+            bank=0, row=nxt // self.MAX_COLS, col=nxt % self.MAX_COLS
+        )
 
-    def _align_cursor_to_row_in_group(
-        self, cursor: _AddressCursor, interleave: int
-    ) -> _AddressCursor:
+    def _align_single_to_row(self, cursor: _AddressCursor) -> _AddressCursor:
         if cursor.col == 0:
             return cursor
-        return self._advance_in_group(
-            cursor,
-            self.MAX_COLS - cursor.col,
-            interleave,
-        )
+        return self._advance_single(cursor, self.MAX_COLS - cursor.col)
 
     def _allocate_tensor_interleaved(
         self,
@@ -597,7 +716,7 @@ class AddressPlanner:
         tensor_dtype: str,
         shape: tuple[int, int, int],
         enabled_slice_ids: list[int],
-        group_cursors: list[_AddressCursor],
+        bank_cursors: list[_AddressCursor],
         interleave: int,
         bank_span: int | None = None,
         force_group_idx: int | None = None,
@@ -611,33 +730,56 @@ class AddressPlanner:
             tensor_dtype=tensor_dtype,
             shape=shape,
         )
-        # Use tensor's own interleave for per-bank size (supports mixed plans),
-        # but keep plan-level interleave for group structure (bank assignment).
         ilv_for_size = tensor_interleave if tensor_interleave is not None else interleave
         per_bank_bytes = size_bytes // ilv_for_size
         words = ceil(per_bank_bytes / self.WORD_BYTES)
 
-        # A tensor whose interleave equals the plan interleave covers every
-        # bank.  With a smaller bank span it therefore spans all groups:
-        # take the base address from the first group and advance every
-        # group cursor by the same per-bank word count.
         spans_all_groups = ilv_for_size >= interleave and span < interleave
+
+        # Determine which physical banks this tensor occupies.
         if force_bank is not None:
+            banks_to_use = [force_bank]
             gi = force_bank // span
-            alloc_cursor = _AddressCursor(bank=force_bank % span, row=0, col=0)
         elif spans_all_groups:
+            banks_to_use = list(range(self.MAX_BANKS))
             gi = 0
-            alloc_cursor = group_cursors[gi]
         elif force_group_idx is not None:
             gi = force_group_idx
-            alloc_cursor = group_cursors[gi]
+            group_start = self._group_start_bank(gi, span)
+            banks_to_use = list(range(group_start, group_start + span))
+        elif ilv_for_size == 1:
+            # Single-bank tensor: choose the least-used bank, respecting
+            # avoid_group.
+            gi = self._choose_bank_group_from_banks(
+                bank_cursors, span, avoid_group
+            )
+            group_start = self._group_start_bank(gi, span)
+            best_b = group_start
+            best_key = (bank_cursors[group_start].row, bank_cursors[group_start].col)
+            for b in range(group_start + 1, group_start + span):
+                key = (bank_cursors[b].row, bank_cursors[b].col)
+                if key < best_key:
+                    best_key = key
+                    best_b = b
+            banks_to_use = [best_b]
         else:
-            gi = self._choose_bank_group(group_cursors, span, avoid_group=avoid_group)
-            alloc_cursor = group_cursors[gi]
+            # Multi-bank tensor: choose the least-used group.
+            gi = self._choose_bank_group_from_banks(
+                bank_cursors, span, avoid_group
+            )
+            group_start = self._group_start_bank(gi, span)
+            banks_to_use = list(range(group_start, group_start + span))
 
-        bank = self._group_start_bank(gi, span) + alloc_cursor.bank
-        row = alloc_cursor.row
-        col = alloc_cursor.col
+        # Starting position = the most-advanced cursor across all banks
+        # this tensor will occupy.  This guarantees no overlap with prior
+        # allocations on any of those banks.
+        start_cursor = max(
+            (bank_cursors[b] for b in banks_to_use),
+            key=lambda c: (c.row, c.col),
+        )
+        row = start_cursor.row
+        col = start_cursor.col
+        bank = banks_to_use[0]
 
         base_address = self._pack_address(
             slave=0, bank=bank, row=row, col=col, subword=0
@@ -649,24 +791,10 @@ class AddressPlanner:
                 slave=slice_id, bank=bank, row=row, col=col, subword=0
             )
 
-        end_cursor = self._advance_in_group(alloc_cursor, words, span)
-        if spans_all_groups:
-            for group_idx in range(len(group_cursors)):
-                group_cursors[group_idx] = self._advance_in_group(
-                    group_cursors[group_idx], words, span
-                )
-        elif force_bank is not None:
-            current_flat = self._flatten_in_group(
-                group_cursors[gi].bank, group_cursors[gi].row,
-                group_cursors[gi].col, span,
-            )
-            end_flat = self._flatten_in_group(
-                end_cursor.bank, end_cursor.row, end_cursor.col, span,
-            )
-            if end_flat > current_flat:
-                group_cursors[gi] = end_cursor
-        else:
-            group_cursors[gi] = end_cursor
+        # Advance every occupied bank's cursor by the same amount.
+        new_cursor = self._advance_single(start_cursor, words)
+        for b in banks_to_use:
+            bank_cursors[b] = new_cursor
 
         return (
             AddressAssignment(
@@ -677,7 +805,7 @@ class AddressPlanner:
                 shape=shape,
             ),
             gi,
-            alloc_cursor.bank,
+            0,
             row,
             col,
         )

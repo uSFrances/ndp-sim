@@ -163,7 +163,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": 4
+                    "constant": 1
             },
             "inport0":{
                     "src_id": "LC_PE.PE6",
@@ -228,8 +228,8 @@
             "COL_LC":{
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
-                "end": 4,
-                "stride": 4,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
 
@@ -246,8 +246,8 @@
             "COL_LC":{
                 "src_id": "GROUP1.ROW_LC",
                 "start": 0,
-                "end": 4,
-                "stride": 4,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         },
@@ -263,8 +263,8 @@
             "COL_LC":{
                 "src_id": "GROUP2.ROW_LC",
                 "start": 0,
-                "end": 4,
-                "stride": 4,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         }
@@ -279,7 +279,7 @@
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE0", "DRAM_LC.LC0", null],
             "idx_size": [3, 0, null],
-            "dim_stride": [4, 32, null],
+            "dim_stride": [4, 128, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -309,7 +309,7 @@
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE1", "DRAM_LC.LC0", null],
             "idx_size": [3, 0, null],
-            "dim_stride": [4, 896, null],
+            "dim_stride": [0, 0, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -338,8 +338,8 @@
             "mem_idx_keep_last_index": [null, null, null],
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE3", null, null],
-            "idx_size": [31, 0, null],
-            "dim_stride": [32, null, null],
+            "idx_size": [3, 0, null],
+            "dim_stride": [4, null, null],
             "tailing_enable": [0, 0, 0],
             "idx_tailing_range": {
                 "low": [null, null, null],
@@ -362,7 +362,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 0, 0, 0, 0, 0, 0, 0],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer1": {
@@ -372,7 +372,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 0, 0, 0, 0, 0, 0, 0],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer2": {
@@ -382,7 +382,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 0, 0, 0, 0, 0, 0, 0],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer5": {
@@ -392,7 +392,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 0, 0, 0, 0, 0, 0, 0],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 0
         }
     },

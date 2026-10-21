@@ -1080,7 +1080,16 @@ def write_input_with_baseaddr(
     output_dir = prefix if prefix.suffix == "" else prefix.parent / prefix.stem
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{input_path.stem}_withbaseaddr.json"
-    output_path.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    raw_text = json.dumps(raw, indent=2, ensure_ascii=False)
+    # Collapse integer-only arrays (e.g. remapping) onto a single line
+    # for readability.
+    def _collapse_array(m: re.Match) -> str:
+        content = m.group(1).strip()
+        if re.fullmatch(r"[0-9,\s]+", content):
+            return "[" + re.sub(r"\s+", " ", content).strip() + "]"
+        return m.group(0)
+    raw_text = re.sub(r"\[([^\]]*)\]", _collapse_array, raw_text)
+    output_path.write_text(raw_text + "\n", encoding="utf-8")
     return output_path
 
 

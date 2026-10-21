@@ -121,7 +121,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": 4
+                    "constant": 1
             },
             "inport0":{
                     "src_id": "LC_PE.PE5",
@@ -398,7 +398,7 @@
     },
     "n2n": {
         "neighbor_stream0": {
-        "mem_loop": 28,
+        "mem_loop": 4,
         "src_slice_sel": 0,
         "dst_slice_sel": 0,
         "ping_pong": 1

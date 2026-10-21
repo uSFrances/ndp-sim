@@ -37,7 +37,7 @@
             "src_id": "DRAM_LC.LC1",
             "outmost_loop": 0,
             "start": 0,
-            "end": 4,
+            "end": 1,
             "stride": 1,
             "last_index": 2
         },
@@ -53,7 +53,7 @@
             "src_id": "DRAM_LC.LC1",
             "outmost_loop": 0,
             "start": 0,
-            "end": 16,
+            "end": 28,
             "stride": 1,
             "last_index": 2
         },
@@ -163,7 +163,7 @@
                     "src_id": null,
                     "mode": "constant",
                     "keep_last_index": null,
-                    "constant": 4
+                    "constant": 1
             },
             "inport0":{
                     "src_id": "LC_PE.PE6",
@@ -228,8 +228,8 @@
             "COL_LC":{
                 "src_id": "GROUP0.ROW_LC",
                 "start": 0,
-                "end": 32,
-                "stride": 16,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
 
@@ -246,8 +246,8 @@
             "COL_LC":{
                 "src_id": "GROUP1.ROW_LC",
                 "start": 0,
-                "end": 32,
-                "stride": 16,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         },
@@ -263,8 +263,8 @@
             "COL_LC":{
                 "src_id": "GROUP2.ROW_LC",
                 "start": 0,
-                "end": 32,
-                "stride": 16,
+                "end": 1,
+                "stride": 1,
                 "last_index": 4
             }
         }
@@ -278,8 +278,8 @@
             "mem_idx_keep_last_index": [null, 1, null],
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE0", "DRAM_LC.LC0", null],
-            "idx_size": [31, 0, null],
-            "dim_stride": [32, 128, null],
+            "idx_size": [3, 0, null],
+            "dim_stride": [4, 128, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
             "idx_padding_range": {
@@ -294,8 +294,8 @@
             "address_remapping": null,
             "buf_idx_mode": ["keep", "buffer"],
             "buf_idx_keep_last_index": [4, null],
-            "buf_spatial_stride": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            "buf_spatial_size": 16,
+            "buf_spatial_stride": [0, 1, 2, 3],
+            "buf_spatial_size": 4,
             "buf_full_last_index": 3,
             "ping_pong": 0,
             "pingpong_last_index": 3
@@ -308,7 +308,7 @@
             "mem_idx_keep_last_index": [null, 1, null],
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE1", "DRAM_LC.LC0", null],
-            "idx_size": [31, 0, null],
+            "idx_size": [3, 0, null],
             "dim_stride": [0, 0, null],
             "padding_enable": [0, 0, 0],
             "padding_reg_value": null,
@@ -324,8 +324,8 @@
             "address_remapping": null,
             "buf_idx_mode": ["keep", "buffer"],
             "buf_idx_keep_last_index": [4, null],
-            "buf_spatial_stride": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            "buf_spatial_size": 16,
+            "buf_spatial_stride": [0, 1, 2, 3],
+            "buf_spatial_size": 4,
             "buf_full_last_index": 3,
             "ping_pong": 0,
             "pingpong_last_index": null
@@ -333,13 +333,13 @@
         "stream2": {
             "target": "D",
             "mode": "write",
-            "base_addr": "0b00000_11_1100000000000_000000_0000",
+            "base_addr": "0b00000_11_0000000000000_000000_0000",
             "mem_idx_mode": ["buffer", null, null],
             "mem_idx_keep_last_index": [null, null, null],
             "mem_idx_constant": [null, null, null],
             "idx": ["LC_PE.PE3", null, null],
-            "idx_size": [31, 0, null],
-            "dim_stride": [32, null, null],
+            "idx_size": [3, 0, null],
+            "dim_stride": [4, null, null],
             "tailing_enable": [0, 0, 0],
             "idx_tailing_range": {
                 "low": [null, null, null],
@@ -348,8 +348,8 @@
             "address_remapping": null,
             "buf_idx_mode": ["keep", "buffer"],
             "buf_idx_keep_last_index": [4, null],
-            "buf_spatial_stride": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            "buf_spatial_size": 16,
+            "buf_spatial_stride": [0, 1, 2, 3],
+            "buf_spatial_size": 4,
             "ping_pong": 0,
             "pingpong_last_index": null
         }
@@ -362,7 +362,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 1, 1, 1, 1, 1, 1, 1],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer1": {
@@ -372,7 +372,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 1, 1, 1, 1, 1, 1, 1],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer2": {
@@ -382,7 +382,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 1, 1, 1, 1, 1, 1, 1],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 3
         },
         "buffer5": {
@@ -392,7 +392,7 @@
             "dst_port": 1,
             "buffer_life_time":1,
             "mode":0,
-            "mask":[1, 1, 1, 1, 1, 1, 1, 1],
+            "mask":[1,0,0,0,0,0,0,0],
             "buf_end_row_addr": 0
         }
     },
@@ -407,7 +407,7 @@
     "general_array":{
         "inport":{
             "inport0":{
-                "mask": [1,1,1,1,1,1,1,1],
+                "mask": [1,0,0,0,0,0,0,0],
                 "src_id": 0,
                 "pingpong_en": 1,
                 "pingpong_last_index": 3,
@@ -419,7 +419,7 @@
                 "uint8toint32": "false"
             },
             "inport1":{
-                "mask": [1,1,1,1,1,1,1,1],
+                "mask": [1,0,0,0,0,0,0,0],
                 "src_id": 0,
                 "pingpong_en": 0,
                 "pingpong_last_index": null,
@@ -444,7 +444,7 @@
             }
         },
         "outport":{
-            "mask": [1,1,1,1,1,1,1,1],
+            "mask": [1,0,0,0,0,0,0,0],
             "src_id": 1,
             "fp32tofp16": "false",
             "fp32tobf16": "false",
@@ -473,166 +473,12 @@
                     "constant": 0
                 }
             },
-            "PE02": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE10": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE12": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE20": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE22": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE30": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE32": {
-                "alu_opcode": "mac",
-                "transout_last_index": null,
-                "inport2": {
-                    "src_id": null,
-                    "mode": "constant",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": 0,
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
             "PE01": {
                 "alu_opcode": "sum",
                 "transout_last_index": 2,
                 "inport2": {
                     "src_id": null,
-                    "mode": null,
+                    "mode": "constant",
                     "keep_last_index": null,
                     "constant": 0
                 },
@@ -644,160 +490,6 @@
                 },
                 "inport0": {
                     "src_id": "GA_PE.PE00",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE03": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE02",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE11": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE10",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE13": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE12",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE21": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE20",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE23": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE22",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE31": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE30",
-                    "mode": "buffer",
-                    "keep_last_index": null,
-                    "constant": 0
-                }
-            },
-            "PE33": {
-                "alu_opcode": "sum",
-                "transout_last_index": 2,
-                "inport2": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport1": {
-                    "src_id": null,
-                    "mode": null,
-                    "keep_last_index": null,
-                    "constant": 0
-                },
-                "inport0": {
-                    "src_id": "GA_PE.PE32",
                     "mode": "buffer",
                     "keep_last_index": null,
                     "constant": 0
