@@ -342,24 +342,6 @@
             ],
             "buf_end_row_addr": 3
         },
-        "buffer4": {
-            "dst_port": 0,
-            "nbr_enable": 0,
-            "buf_full_last_index": 4,
-            "buffer_life_time": 1,
-            "mode": 0,
-            "mask": [
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1
-            ],
-            "buf_end_row_addr": 0
-        },
         "buffer5": {
             "dst_port": 1,
             "nbr_enable": 0,

@@ -960,26 +960,6 @@ def generate_optimized_program_json(
         if oid in _KV_PRODUCER_IDS and oid in output_ilv:
             output_ilv[oid] = 2
 
-    # Step 5c: Restore the original hardware-validated bank convention —
-    #          only GEMV weight ports (B/B') use bank_interleave=2 + remapping;
-    #          every other input port and every output stays single-bank with
-    #          no remapping.  The experimental bank_interleave=2 propagation
-    #          onto activation/output ports broke decode_gemv_local (op29):
-    #          golden and hardware outputs no longer matched.
-    _GEMV_ILV2_TYPES = ("decode_gemv_ring", "decode_gemv_local", "decode_gemv_local_qkt")
-    for op in operators_raw:
-        is_gemv = op["type"] in _GEMV_ILV2_TYPES
-        for port, inp in op.get("inputs", {}).items():
-            if is_gemv and port in ("B", "B'"):
-                inp["bank_interleave"] = 2
-                inp["remapping"] = list(_REMAP_ILV2)
-            else:
-                inp.pop("bank_interleave", None)
-                inp.pop("remapping", None)
-        out = op.get("output", {})
-        out.pop("bank_interleave", None)
-        out.pop("remapping", None)
-
     # Step 6: Renumber operators sequentially (op0, op1, op2, ...) and
     #         remap all source references to the new IDs.
     old_to_new: dict[str, str] = {}

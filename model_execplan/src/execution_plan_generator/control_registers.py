@@ -1281,7 +1281,6 @@ def _compute_decode_gemv_ring_control_register_updates(
         "buffer_manager_cluster1.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "buffer_manager_cluster2.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "buffer_manager_cluster3.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
-        "buffer_manager_cluster4.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "buffer_manager_cluster5.buffer_config.buffer.buffer_nbr_cnt": 3 if (a_k is not None and b_k is not None and a_k != 0 and (b_k // a_k) != 28) else 27,
         "rd_stream1.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,

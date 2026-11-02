@@ -98,13 +98,17 @@
 * 芯片共有28个slices(参数化设置)，通过 parse 每个算子的 `used_slices` 掩码确定哪些 slice 被启用，地址中的 slave 用于区分 slice 的储存空间。  
 * 地址分配策略：采用不释放内存策略，即新输入/输出数据数据自动往后排，占用新的地址。同一算子的统一数据的不同slices上的数据地址应只有slave不同。
 * 当前实现补充规则：
-    * 同一算子内 `B'` 复用 `B` 的地址分配结果（共址）。
+    * 同一算子内 `B'` 复用 `B` 的地址分配结果（共址）；`decode_gemv_local`、`decode_gemv_local_qkt`、`decode_gemv_ring` 等 GEMV 类算子的 `B'` 因数据分 bank 存储，使用独立地址分配。
     * tensor 大小按 `K * M * N * element_bytes(dtype)` 计算：
         * `fp16/int16/uint16` 按 2 字节。
         * `fp32/int32/uint32` 按 4 字节。
         * `int8/uint8` 按 1 字节。
     * 输入来源为外部（`source.type=external`）时，按该输入自己的 `dtype` 分配新地址。
-    * 输入来源为上游算子时，复用上游输出地址，不重复分配；此时以下游输入处声明的 `dtype` 为准不会触发重新分配。
+    * 输入来源为上游算子时，**总是继承上游输出地址**，即使下游输入声明的 shape 更大（如 `prefill_remote_sum_qkt` 的 A 声明 `[1,N,4]` 但实际每 slice 只读 128B，硬件通过 ring 从 4 个 slice 收集数据，本地地址空间只需 per-slice 部分）。
+    * **bank_interleave=2 时**：数据均分到两个 bank，`bank+0` 只能落在 bank 0 或 bank 2，`bank+1` 为 bank 1 或 bank 3。`bank_interleave=1` 时数据只存在于单个 bank。
+    * **per-bank cursor 分配**：地址规划使用 4 个独立的 per-bank cursor（而非 group cursor），每个 bank 的分配互不影响，cursor 只在该 bank 内推进。
+    * **输出 bank 选择**：单 bank 输出（`bi=1`）选择 `input_bank_totals` 最少的物理 bank，使 D 落到与所有输入不同的 bank 上；多 bank 输出避开最重的 bank group。
+    * **QKT sub-op 分组**：连续的 `decode_gemv_local_qkt` sub-op 被检测为分组，其输出强制连续分配（第一个正常分配，后续在前一个输出之后直接计算地址），B/B' 强制分配到 banks 0/1。
     * config 数据也参与统一地址规划，并放在所有 tensor 数据之后。
     * config 分配前会对齐到新的 row 起始位置（`col=0`），并按整行预留。
     * 当算子存在 `config_sfu` 时，SFU 系数文件（`config/SFU_Coeff/<type>.txt`）也会参与地址规划，且独立于算子 config 分配地址。

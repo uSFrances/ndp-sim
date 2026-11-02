@@ -251,44 +251,11 @@ class AddressPlanner:
                 src_assignment = assignments[src_tn]
                 tensor_ilv = tensor.bank_interleave or 1
 
-                # If this input's declared size exceeds the source output's
-                # allocated size (e.g. padded/expanded inputs like
-                # prefill_remote_sum_qkt whose A is 4x the gemv output),
-                # allocate an independent region instead of inheriting the
-                # source address — otherwise the input would overflow into
-                # neighbouring tensors.
-                declared_size = self._tensor_size_bytes(
-                    tensor_name=f"{op.op_id}.input.{input_name}",
-                    tensor_dtype=tensor.dtype,
-                    shape=tensor.shape,
-                )
-                if declared_size > src_assignment.size_bytes:
-                    tensor_name = f"{op.op_id}.input.{input_name}"
-                    assignment, gi, rel_bank, _, _ = (
-                        self._allocate_tensor_interleaved(
-                            tensor_name=tensor_name,
-                            tensor_dtype=tensor.dtype,
-                            shape=tensor.shape,
-                            enabled_slice_ids=enabled_slice_ids,
-                            bank_cursors=bank_cursors,
-                            interleave=interleave,
-                            bank_span=bank_span,
-                            tensor_interleave=tensor_ilv,
-                        )
-                    )
-                    assignments[tensor_name] = assignment
-                    io_map[io_key] = tensor_name
-                    input_group_totals[gi] += assignment.size_bytes
-                    if tensor_ilv > input_group_max_ilv[gi]:
-                        input_group_max_ilv[gi] = tensor_ilv
-                    abs_bank_start = self._group_start_bank(gi, bank_span)
-                    if tensor_ilv == 1:
-                        input_bank_totals[abs_bank_start + rel_bank] += assignment.size_bytes
-                    else:
-                        for b in range(tensor_ilv):
-                            input_bank_totals[abs_bank_start + b] += assignment.size_bytes // tensor_ilv
-                    continue
-
+                # Always inherit the source output address, even when the
+                # declared input shape is larger (e.g. prefill_remote_sum_qkt
+                # whose A declares [1,N,4] but only reads 128B per slice via
+                # the ring).  The hardware collects data from 4 slices so
+                # the local address space only needs the per-slice portion.
                 io_map[io_key] = src_tn
                 src_bank = (src_assignment.base_address >> 23) & 0x03
                 src_group = src_bank // bank_span

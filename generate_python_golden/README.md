@@ -46,6 +46,11 @@
         - [Phase C: 集成与验证](#phase-c-集成与验证)
     - [Decode 阶段实际新增/修改文件](#decode-阶段实际新增修改文件)
     - [Decode 算子命名对照表](#decode-算子命名对照表)
+  - [第四阶段：Decode 优化流水线（optimized variant）](#第四阶段decode-优化流水线optimized-variant)
+    - [与原始 Decode 流的差异](#与原始-decode-流的差异)
+    - [新增/修改文件](#新增修改文件)
+    - [生成命令顺序](#生成命令顺序)
+    - [注意事项](#注意事项)
 
 ---
 
@@ -738,4 +743,76 @@ generate_python_golden/
 | `prefill_mul_fp32MN_fp16MN_fp16MN` | `decode_mul_fp32N_fp16N_fp16N` | silu(gate) × up（SwiGLU） |
 | `prefill_add_V_fp16MN_fp32N_fp16MN` | `decode_add_fp16N_fp32N_fp16N` | fp16 + fp32 → fp16（V 残差） |
 | `prefill_add_fp32MN_fp32MN_fp32MN` | `decode_add_fp32N_fp32N_fp32N` | fp32 + fp32（attention mask add） |
+
+---
+
+## 第四阶段：Decode 优化流水线（optimized variant）
+
+在第三阶段 43-op 解码层的基础上，为提升硬件执行效率开发的优化版本。原始流（`python_golden_decode` / `install_decode`）保持不变，优化流使用独立的 golden 与 install 目录。
+
+| 产物 | 生成脚本 |
+|------|----------|
+| `python_golden_decode_optimized/`（golden + manifest） | `deepseek1.5b_decode_golden_optimized.py`（核心：`decode_ops.build_decode_golden_cases_optimized`） |
+| `single_op_data/install_decode_optimized/`（43 op × 28 slice install） | `run_single_op_decode_optimized.py` |
+| install 的 bank 分割文件 `*_0/*_1` | `split_gemv_banks_optimized.py`（按 program JSON 的 `bank_interleave` 切分） |
+| `layer0_decode_optimized.json`（43-op 程序 JSON） | `generate_decode_program_json.py --optimized` |
+
+### 与原始 Decode 流的差异
+
+1. **RMS Norm 融合**：`decode_summac + decode_remote_sum` → `prefill_remote_summac`（28-slice 版 / KV 4-slice 版，8 个 PE 局部平方和 + 跨 slice 归约融合）+ `decode_sum`（8 部分和求和）。`decode_passthrough.py` 新增 `remote_summac` 切分策略；`decode_sum` 在 `remote_sum` 策略下按全 slice 复制处理。
+
+2. **QK^T**：单个 `decode_gemv_local_qkt`（K 维不拆分）+ `prefill_remote_sum_qkt_4slice`。每个 slice 的 32 维 partial 在 `remote_sum` 策略下 padding 96 个零到 128（`qkt_remote_sum` 分支）。旧"qkt 拆 4 子 op"方案已废弃。
+
+3. **RoPE 退化为透传（位置无关旋转在 QK^T 中抵消）**：本代码库 rope 表不含位置因子，q 与每个 k 位置施加同一旋转 R，`rope(q)·rope(k) = q·k_raw`。因此 Q/K 的 rope 算子（op7–9 / op17–19）改为透传（op7×1、op8×0、op9 相加），K cache 安装 **raw k**（加载持久化的 roped cache 后由 `_rope_inverse_rot` 离线逆旋转）。golden 严格满足"下一算子输入 = 上一算子同 slice 输出"链式规则，无任何跨 slice 切换/重排；`rope_slice_xor2` 路由不存在。
+
+4. **图边界输出**：op19（当前 token 的 K）与 op21（当前 token 的 V）的输出属于 KV cache 写回路径，本层图内无消费者；attention（op22/op29）读取外部预生成的 32 位置 cache。
+
+5. **bank_interleave=2 全端口传播**：优化程序 JSON 给各算子最大张量及其上下游传播 `bank_interleave=2 + 26 项 remapping`（A/B/B'/D 全覆盖），`split_gemv_banks_optimized.py` 按 128-bit word 偶/奇切出 `_0/_1` 文件；run 前必须以该 JSON 重新生成 execplan/bitstream。
+
+6. **其他修改**：`v_add_residual` 硬件 JSON 改用 `decode_add_fp16N_fp16N_fp32N.json`；`relayout_gemv._split_weight_streams` 对不足 128 fp16 的小 payload 不再拆分（整体作为 B 与 B'）；`write_gemv_local_case` 增加 `output_slices==1` 子 op 布局分支（备用）；`decode_passthrough` 的 K/V 判定收紧（`kv_` 前缀 + 尺寸双判据）。
+
+### 新增/修改文件
+
+```
+generate_python_golden/
+├── decode_ops.py                              # [修改] 新增 build_decode_golden_cases_optimized、
+│                                              #        _rope_inverse_rot/_rope_swap_route/_per_head_rope_merge、
+│                                              #        remote_summac/decode_sum/remote_sum_qkt 算子注册
+├── generate_decode_program_json.py            # [修改] 新增 generate_optimized_program_json（--optimized）：
+│                                              #        summac 融合、broadcast 传播、bank_interleave=2、remapping
+├── deepseek1.5b_decode_golden_optimized.py    # [新建] 优化流 golden 入口
+├── run_single_op_decode_optimized.py          # [新建] 优化流 install 调度器
+├── split_gemv_banks_optimized.py              # [新建] 按 bank_interleave 切分 install 文件
+├── single_op_data/decode_passthrough.py       # [修改] remote_summac 策略、qkt_remote_sum/decode_sum 分支
+├── single_op_data/relayout_gemv.py            # [修改] 小 payload 不拆分、子 op 布局分支
+├── python_golden_decode_optimized/            # [生成] 43 instance golden + manifest
+└── single_op_data/install_decode_optimized/   # [生成] 43 op × 28 slice install（含 _0/_1 bank 分割）
+```
+
+KV cache 的完整布局（逻辑形状、每 slice 安装布局、n8k/ping-pong/bank 切分链、逻辑→物理 slice 映射）见仓库根目录 **`DECODE_KVCACHE_LAYOUT.md`**。
+
+### 生成命令顺序
+
+```bash
+# 1. golden（依赖 model_weights_32/ 与 kv_cache/，缺失时自动生成）
+python deepseek1.5b_decode_golden_optimized.py
+
+# 2. install（清空重写 op0~op42）
+python run_single_op_decode_optimized.py
+
+# 3. bank 分割文件（读取 program JSON 的 bank_interleave）
+python split_gemv_banks_optimized.py
+
+# 4. 优化程序 JSON（注意：generate_python_golden/model_execplan/examples/ 与
+#    仓库根 model_execplan/examples/ 下各有一份拷贝，需保持一致）
+python generate_decode_program_json.py --optimized --manifest python_golden_decode_optimized/manifest.json
+
+# 5. 由 model_execplan 基于 layer0_decode_optimized.json 重新生成 execplan/bitstream 后测试
+```
+
+### 注意事项
+
+- **位置无关 rope 是整个透传方案的根基**：若引入真实位置相关 rope（θ×position），旋转抵消失效，需恢复 roped cache 与 slice 切换机制。
+- 软件侧已验证：op7–9/17–19 本地语义与链式规则逐 slice 精确成立；op22 全部 28 slice `K_slice^T·q_slice == install D == golden D`（fp 舍入内）。
+- `model_execplan/output/layer0_decode_optimized_test/` 是已废弃的 46-op qkt 拆分方案产物，勿再使用。
 

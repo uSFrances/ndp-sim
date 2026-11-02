@@ -3,6 +3,7 @@ build/
 data/
 .venv/
 __pycache__/
+doc/
 *.pyc
 .DS_Store
 *.html
