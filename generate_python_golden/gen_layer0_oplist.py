@@ -177,7 +177,7 @@ def rewrite_source_refs(obj, local_id_map, global_ops):
         for item in obj:
             rewrite_source_refs(item, local_id_map, global_ops)
 
-def merge_templates(oplist: list[str]) -> dict:
+def merge_templates(oplist: list[str]) -> tuple[dict, dict]:
     merged_ops = []
     op_idx = 0
     used_slices = 0

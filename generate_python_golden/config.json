@@ -7,7 +7,7 @@
     "num_key_value_heads": 2,
     "head_dim": 128,
     "num_hidden_layers": 1,
-    "sequence_length": 32,
+    "sequence_length": 6,
     "slice_per_head": 4,
     "used_slices": 28,
     "kv_slice_count": 4,
