@@ -324,13 +324,13 @@ def _parse_register_map(
                 out.append((group_name, module_name, config_name, high, low))
 
     if reorder_const_fields:
-        total_special_width = sum(width for _, _, _, width in special_rows)
-        next_high = total_special_width - 1
+        # Constant fields live in their own const0/const1/const2 registers and
+        # must start at bit 0 of that register.  They must NOT be stacked into
+        # one cumulative bit-space (that made e.g. ga_pe inport1.constant
+        # occupy [63:32] while its const1 segment is [31:0], so the write was
+        # silently dropped).
         for group_name, module_name, config_name, width in special_rows:
-            high = next_high
-            low = high - width + 1
-            next_high = low - 1
-            out.append((group_name, module_name, config_name, high, low))
+            out.append((group_name, module_name, config_name, width - 1, 0))
 
     return out
 def _resolve_special_const_segments(

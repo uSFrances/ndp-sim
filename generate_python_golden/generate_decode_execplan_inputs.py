@@ -80,13 +80,14 @@ def build_execplan_operators(config: dict[str, int | str]) -> list[dict[str, Any
 
     # Short-hands for the macro strings that the existing register-update
     # handler knows how to evaluate.
-    HID = "hidden_size//used_slices"           # 896//28 = 32
-    HID_FULL = "hidden_size"                    # 896
+    HID = "hidden_size_padded//used_slices"     # 1792//28 = 64
+    HID_FULL = "hidden_size_padded"             # 1792
+    HID_NORM = "hidden_size"                    # 1536
     SEQ = "sequence_length"                     # Prefill used this; decode reuses it.
     USL = "used_slices"                         # 28
-    HEAD_DIM_SLICE = "head_dim//slice_per_head" # 128//4 = 32
-    ATTN_SLICE = "decode_attention_length//slice_per_head"  # 32//4 = 8
-    S_PER_HEAD = "slice_per_head"              # 4
+    HEAD_DIM_SLICE = "head_dim//slice_per_head" # 128//2 = 64
+    ATTN_SLICE = "decode_attention_length//slice_per_head"  # 32//2 = 16
+    S_PER_HEAD = "slice_per_head"              # 2
 
     # Each entry:  ({port: input_dict}, output_dict)
     io: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
@@ -112,7 +113,7 @@ def build_execplan_operators(config: dict[str, int | str]) -> list[dict[str, Any
         # -- mac_SFU (chained from preceding remote_sum via op-1) -----------
         "decode_mac_SFU_fp32N_fp32N": (
             {"A": _input_tensor(
-                [HID_FULL, 1, 1], "fp32",
+                [HID_NORM, 1, 1], "fp32",
                 source="op-1",
                 remapping=remap,
             )},
@@ -258,6 +259,64 @@ def build_execplan_operators(config: dict[str, int | str]) -> list[dict[str, Any
             {
                 "A": _input_tensor([1, 1, HID], "fp32", remapping=remap),
                 "B": _input_tensor([1, 1, 1], "fp32", remapping=remap),
+            },
+            _output_tensor([1, 1, HID], remapping=None),
+        ),
+        # -- QK^T local GEMV --------------------------------------------------
+        "decode_gemv_local_qkt": (
+            {
+                "A": _input_tensor([1, 1, HEAD_DIM_SLICE], "fp16", remapping=remap),
+                "B": _input_tensor([1, SEQ, SEQ], "fp16", remapping=remap),
+                "B'": _input_tensor([1, SEQ, SEQ], "fp16", remapping=remap),
+            },
+            _output_tensor([1, 1, SEQ], "fp16", bank_interleave=1, remapping=None),
+        ),
+        # -- add (fp32 + fp16 → fp16) -----------------------------------------
+        "decode_add_fp32N_fp16N_fp16N": (
+            {
+                "A": _input_tensor([1, 1, HID], "fp32", remapping=remap),
+                "B": _input_tensor([1, 1, HID], "fp16", remapping=remap),
+            },
+            _output_tensor([1, 1, HID], "fp16", bank_interleave=1, remapping=None),
+        ),
+        # -- mac (scores * scale + mask) --------------------------------------
+        "decode_mac_fp32N_fp32N_fp32N": (
+            {
+                "A": _input_tensor([1, 1, ATTN_SLICE], "fp32", remapping=remap),
+                "C": _input_tensor([1, 1, ATTN_SLICE], "fp32", remapping=remap),
+            },
+            _output_tensor([1, 1, ATTN_SLICE], remapping=None),
+        ),
+        # -- fused summac / decode_sum ----------------------------------------
+        "prefill_remote_summac_fp32MN_fp32MN": (
+            {
+                "A": _input_tensor([1, 8, "hidden_size_padded//used_slices//8"], "fp32", remapping=remap),
+                "B": _input_tensor([1, 1, 1], "fp32", remapping=remap),
+            },
+            _output_tensor([1, 1, 8], remapping=None),
+        ),
+        "prefill_remote_summac_4slice_fp32MN_fp32MN": (
+            {
+                "A": _input_tensor([1, 8, "hidden_size_padded//used_slices//8"], "fp32", remapping=remap),
+                "B": _input_tensor([1, 1, 1], "fp32", remapping=remap),
+            },
+            _output_tensor([1, 1, 8], remapping=None),
+        ),
+        "decode_sum_fp32N_fp32N": (
+            {"A": _input_tensor([1, 1, 8], "fp32", remapping=remap)},
+            _output_tensor([1, 1, 1], remapping=None),
+        ),
+        # -- QK^T partial reduction -------------------------------------------
+        "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN": (
+            {
+                "A": _input_tensor([1, ATTN_SLICE, 4], "fp32", remapping=remap),
+                "B": _input_tensor([1, 1, 1], "fp32", remapping=remap),
+            },
+            _output_tensor([1, 1, ATTN_SLICE], remapping=None),
+        ),
+        "prefill_remote_sum_4slice_fp32MN_fp32MN": (
+            {
+                "A": _input_tensor([1, S_PER_HEAD, 1], "fp32", remapping=remap),
             },
             _output_tensor([1, 1, HID], remapping=None),
         ),

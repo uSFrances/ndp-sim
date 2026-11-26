@@ -15,11 +15,30 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from tensor_io import load_golden_tensor, save_install_tensor
+from decode_ops import decode_padded_dims
 
 try:
-    from .relayout_gemm import BASE_HW_PARAMS, KV_HW_PARAMS, install_target_slices
+    from .relayout_gemm import (
+        BASE_HW_PARAMS,
+        KV_HW_PARAMS,
+        install_target_slices,
+        kv_install_targets_for_config,
+    )
 except ImportError:
-    from relayout_gemm import BASE_HW_PARAMS, KV_HW_PARAMS, install_target_slices  # type: ignore[no-redef]
+    from relayout_gemm import (  # type: ignore[no-redef]
+        BASE_HW_PARAMS,
+        KV_HW_PARAMS,
+        install_target_slices,
+        kv_install_targets_for_config,
+    )
+
+
+def _config_heads(config: dict[str, object]) -> int:
+    return int(config.get("num_attention_heads_padded", config["num_attention_heads"]))
+
+
+def _config_kv_slice_count(config: dict[str, object]) -> int:
+    return int(config.get("kv_slice_count", 4))
 
 
 def split_vector(values: np.ndarray, slice_count: int) -> list[np.ndarray]:
@@ -139,6 +158,136 @@ def replicate_scalar(values: np.ndarray, slice_count: int) -> list[np.ndarray]:
     return [vector.copy() for _ in range(slice_count)]
 
 
+_GROUPED_ATTENTION_IDS = {
+    "attn_qkt_remote_sum",
+    "attn_add_mask",
+    "attn_max",
+    "attn_sub_SFU",
+    "attn_sum_rec",
+    "attn_mul_softmax",
+}
+
+
+def _grouped_attention_chunks(
+    case_entry: dict[str, object],
+    golden_dir: Path,
+    config: dict[str, object],
+) -> tuple[dict[str, list[np.ndarray]], list[np.ndarray]]:
+    """Two-heads-per-4-slice attention chain installation (logical order)."""
+
+    dims = decode_padded_dims(config)
+    used_slices = int(config["used_slices"])
+    attention_length = int(config["decode_attention_length"])
+    heads_per_group = dims["heads_per_group"]
+    two_attn = heads_per_group * attention_length
+    instance_id = str(case_entry.get("instance_id", ""))
+
+    inputs, output = _load_case_tensors(case_entry, golden_dir)
+    output = np.asarray(output)
+
+    input_chunks: dict[str, list[np.ndarray | None]] = {
+        port: [None] * used_slices for port in inputs
+    }
+    output_chunks: list[np.ndarray | None] = [None] * used_slices
+
+    if instance_id == "attn_qkt_remote_sum":
+        a = np.asarray(inputs["A"], dtype=np.float32)
+        if a.shape != (two_attn, used_slices):
+            raise ValueError(f"unexpected op23 A shape {a.shape}")
+        b_value = None
+        if "B" in inputs:
+            b_value = np.asarray(inputs["B"], dtype=np.float32).reshape(-1)
+        for sl in range(used_slices):
+            # Keep the two heads' 64 partials contiguous, then pad the
+            # remaining 3 blocks of 2*attention_length with zeros.
+            real = a[:, sl]
+            padded = np.concatenate(
+                [
+                    real,
+                    np.zeros(3 * two_attn, dtype=np.float32),
+                ]
+            )
+            input_chunks["A"][sl] = padded
+            if b_value is not None:
+                input_chunks["B"][sl] = b_value.copy()
+            output_chunks[sl] = output[:, sl]
+        return input_chunks, output_chunks  # type: ignore[return-value]
+
+    # All other grouped attention ops are per-slice vectors/small per-head rows.
+    for port, tensor in inputs.items():
+        arr = np.asarray(tensor)
+        if arr.ndim == 2 and arr.shape[1] == used_slices:
+            for sl in range(used_slices):
+                input_chunks[port][sl] = arr[:, sl]
+        else:
+            flat = arr.reshape(-1)
+            for sl in range(used_slices):
+                input_chunks[port][sl] = flat.copy()
+
+    if output.ndim == 2 and output.shape[1] == used_slices:
+        for sl in range(used_slices):
+            output_chunks[sl] = output[:, sl]
+    else:
+        flat = output.reshape(-1)
+        for sl in range(used_slices):
+            output_chunks[sl] = flat.copy()
+
+    return input_chunks, output_chunks  # type: ignore[return-value]
+
+
+def _kv_norm_chunks(
+    case_entry: dict[str, object],
+    golden_dir: Path,
+    config: dict[str, object],
+) -> tuple[dict[str, list[np.ndarray]], list[np.ndarray]]:
+    """4-slice + kv_padding handling for ``kv_mul_scale`` / ``kv_mul_cast``."""
+
+    logical_slices = _config_kv_slice_count(config)
+    kv_targets = kv_install_targets_for_config(config)
+    padded_total = int(config["kv_padding_a"]) * logical_slices
+    slice_count = int(config["used_slices"])
+
+    inputs_full, output_full = _load_case_tensors(case_entry, golden_dir)
+
+    def _needs_padding(tensor: np.ndarray) -> bool:
+        return np.asarray(tensor).size > 1
+
+    def _pad(tensor: np.ndarray) -> np.ndarray:
+        flat = np.asarray(tensor, dtype=tensor.dtype).reshape(-1, order="F")
+        if flat.size >= padded_total:
+            return flat[:padded_total]
+        padded = np.zeros(padded_total, dtype=flat.dtype)
+        padded[: flat.size] = flat
+        return padded
+
+    inputs_padded: dict[str, np.ndarray] = {}
+    for port, tensor in inputs_full.items():
+        inputs_padded[port] = _pad(tensor) if _needs_padding(tensor) else np.asarray(tensor)
+    output_padded = (
+        _pad(output_full) if _needs_padding(output_full) else np.asarray(output_full)
+    )
+
+    log_input: dict[str, list[np.ndarray]] = {}
+    for port, tensor in inputs_padded.items():
+        if _needs_padding(tensor):
+            log_input[port] = split_vector(tensor, logical_slices)
+        else:
+            log_input[port] = [np.asarray(tensor).copy() for _ in range(logical_slices)]
+    if _needs_padding(output_padded):
+        log_output = split_vector(output_padded, logical_slices)
+    else:
+        log_output = [np.asarray(output_padded).copy() for _ in range(logical_slices)]
+
+    input_chunks = {port: [None] * slice_count for port in inputs_padded}
+    output_chunks = [None] * slice_count
+    for logical_idx in range(logical_slices):
+        for physical_idx in kv_targets[logical_idx]:
+            for port in inputs_padded:
+                input_chunks[port][physical_idx] = log_input[port][logical_idx]
+            output_chunks[physical_idx] = log_output[logical_idx]
+    return input_chunks, output_chunks
+
+
 def _load_case_tensors(
     case_entry: dict[str, object], golden_dir: Path
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
@@ -159,8 +308,16 @@ def slice_passthrough_case(
 ) -> tuple[dict[str, list[np.ndarray]], list[np.ndarray]]:
     policy = str(case_entry["slice_policy"])
     slice_count = slice_count_override or int(config["used_slices"])
-    heads = int(config["num_attention_heads"])
+    heads = _config_heads(config)
     slices_per_head = int(config["slice_per_head"])
+    kv_slice_count = _config_kv_slice_count(config)
+    kv_targets = kv_install_targets_for_config(config)
+    instance_id = str(case_entry.get("instance_id", ""))
+    if decode_padded_dims(config)["heads_per_group"] > 1 and instance_id in _GROUPED_ATTENTION_IDS:
+        return _grouped_attention_chunks(case_entry, golden_dir, config)
+    if instance_id in ("kv_mul_scale", "kv_mul_cast"):
+        return _kv_norm_chunks(case_entry, golden_dir, config)
+
     inputs, output = _load_case_tensors(case_entry, golden_dir)
 
     if policy == "summac_hidden":
@@ -170,8 +327,8 @@ def slice_passthrough_case(
         is_kv_summac = instance_id.startswith("kv_")
         if is_kv_summac:
             from decode_ops import summac_partials as _summac_partials
-            logical_slices = slices_per_head  # 4 (same as prefill relayout_rmsnorm)
-            kv_pad_a = int(config["kv_padding_a"])  # 256
+            logical_slices = kv_slice_count
+            kv_pad_a = int(config["kv_padding_a"])  # 512 full-size
             padded_total = kv_pad_a * logical_slices  # 1024
 
             a_flat = np.asarray(inputs["A"], dtype=np.float32).reshape(-1, order="F")
@@ -189,7 +346,7 @@ def slice_passthrough_case(
             input_chunks = {"A": [None] * slice_count}
             output_chunks = [None] * slice_count
             for lidx in range(logical_slices):
-                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
+                for pidx in kv_targets[lidx]:
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
         else:
@@ -202,8 +359,8 @@ def slice_passthrough_case(
         if is_kv:
             # K/V remote_summac (4-slice): pad 896→1024, split 4×256,
             # replicate via install_targets (same as original kv summac).
-            logical_slices = slices_per_head  # 4
-            kv_pad_a = int(config["kv_padding_a"])  # 256
+            logical_slices = kv_slice_count
+            kv_pad_a = int(config["kv_padding_a"])  # 512 full-size
             padded_total = kv_pad_a * logical_slices  # 1024
 
             a_flat = np.asarray(inputs["A"], dtype=np.float32).reshape(-1, order="F")
@@ -219,7 +376,7 @@ def slice_passthrough_case(
             input_chunks = {"A": [None] * slice_count}
             output_chunks = [None] * slice_count
             for lidx in range(logical_slices):
-                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
+                for pidx in kv_targets[lidx]:
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
 
@@ -283,7 +440,7 @@ def slice_passthrough_case(
                 for t in (list(inputs.values()) + [output])
             )
             if is_kv_elemwise:
-                logical_slices = slices_per_head  # 4 (same as prefill relayout_rmsnorm)
+                logical_slices = kv_slice_count
                 def _split_kv_4(tensor: np.ndarray) -> list[np.ndarray]:
                     flat = np.asarray(tensor).reshape(-1, order="F")
                     if flat.size == 1:
@@ -298,7 +455,7 @@ def slice_passthrough_case(
                     input_chunks[port] = [None] * slice_count
                 output_chunks = [None] * slice_count
                 for logical_idx in range(logical_slices):
-                    for phys_idx in install_target_slices(KV_HW_PARAMS, logical_idx):
+                    for phys_idx in kv_targets[logical_idx]:
                         for port in inputs:
                             input_chunks[port][phys_idx] = logical_input_chunks[port][logical_idx]
                         output_chunks[phys_idx] = logical_output_chunks[logical_idx]
@@ -356,15 +513,15 @@ def slice_passthrough_case(
             output_chunks = split_head_full_vectors(output, heads, slices_per_head)
         # K/V remote_sum: 4 logical slices (slice_per_head), linear round-robin.
         elif instance_id.startswith("kv_") and "remote_sum" in instance_id and "decode_sum" not in instance_id and "qkt" not in instance_id:
-            logical_slices = slices_per_head  # 4 (same as prefill relayout_rmsnorm)
-            # Golden produces slice_per_head=4 partial values; split one per logical slice.
+            logical_slices = kv_slice_count
+            # Golden produces one partial value per logical KV slice.
             log_input = {"A": split_one_value_per_slice(inputs["A"], logical_slices)}
             log_output = [output.copy() for _ in range(logical_slices)]
 
             input_chunks = {"A": [None] * slice_count}
             output_chunks = [None] * slice_count
             for lidx in range(logical_slices):
-                for pidx in install_target_slices(KV_HW_PARAMS, lidx):
+                for pidx in kv_targets[lidx]:
                     input_chunks["A"][pidx] = log_input["A"][lidx]
                     output_chunks[pidx] = log_output[lidx]
         elif "qkt_remote_sum" in instance_id:
@@ -410,66 +567,6 @@ def write_passthrough_case(
     instance_id = str(case_entry.get("instance_id", ""))
     op_dir = install_dir / entry_id
     slice_count = len(output_chunks)
-
-    # --- KV RMS norm (kv_mul_scale, kv_mul_cast): 4-slice + kv_padding,
-    #     same as K/V GEMV.  Re-read full tensors, pad 896→1024, split 4×256,
-    #     replicate via install_targets to 28 physical slices. ---
-    if instance_id in ("kv_mul_scale", "kv_mul_cast"):
-        heads = int(config["num_attention_heads"])
-        slices_per_head = int(config["slice_per_head"])
-        logical_slices = slices_per_head  # 4 (same as prefill relayout_rmsnorm)
-        padded_total = int(config["kv_padding_a"]) * logical_slices  # 256×4=1024
-
-        # Re-load full golden tensors (before 28-slice split)
-        inputs_full, output_full = _load_case_tensors(case_entry, golden_dir)
-
-        def _needs_padding(t: np.ndarray) -> bool:
-            """Only pad ports that are the full hidden vector (896-dim), not scalars."""
-            return np.asarray(t).size > 1
-
-        def _pad_to_1024(t: np.ndarray) -> np.ndarray:
-            flat = np.asarray(t, dtype=t.dtype).reshape(-1, order="F")
-            if flat.size >= padded_total:
-                return flat[:padded_total]
-            padded = np.zeros(padded_total, dtype=flat.dtype)
-            padded[:flat.size] = flat
-            return padded
-
-        # Pad only the ports that need it; scalars (e.g. RMS scale B port) stay as-is
-        inputs_padded: dict[str, np.ndarray] = {}
-        for port, t in inputs_full.items():
-            if _needs_padding(t):
-                inputs_padded[port] = _pad_to_1024(t)
-            else:
-                inputs_padded[port] = np.asarray(t)
-
-        if _needs_padding(output_full):
-            output_padded = _pad_to_1024(output_full)
-        else:
-            output_padded = np.asarray(output_full)
-
-        # Split padded ports into 4 logical slices; scalar ports are replicated
-        log_input: dict[str, list[np.ndarray]] = {}
-        for port, t in inputs_padded.items():
-            if _needs_padding(t):
-                log_input[port] = split_vector(t, logical_slices)
-            else:
-                log_input[port] = [np.asarray(t).copy() for _ in range(logical_slices)]
-
-        if _needs_padding(output_padded):
-            log_output = split_vector(output_padded, logical_slices)
-        else:
-            log_output = [np.asarray(output_padded).copy() for _ in range(logical_slices)]
-
-        # Replicate to 28 physical slices via KV install_targets
-        input_chunks = {port: [None] * 28 for port in inputs_padded}
-        output_chunks = [None] * 28
-        for lidx in range(logical_slices):
-            for pidx in install_target_slices(KV_HW_PARAMS, lidx):
-                for port in inputs_padded:
-                    input_chunks[port][pidx] = log_input[port][lidx]
-                output_chunks[pidx] = log_output[lidx]
-        slice_count = 28
 
     # Non-KV chunks are in logical order → apply physical_mapping before writing.
     kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])

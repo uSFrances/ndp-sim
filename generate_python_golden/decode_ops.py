@@ -173,7 +173,73 @@ def load_decode_config(path: str | Path) -> dict[str, int | str]:
     with Path(path).open("r", encoding="utf-8") as stream:
         config = json.load(stream)
     validate_decode_config(config)
+    # Materialise optional padding defaults so downstream shape expressions
+    # can use them unconditionally (small-size remains padded == real).
+    config = dict(config)
+    head_dim = int(config["head_dim"])
+    heads = int(config["num_attention_heads"])
+    heads_padded = int(config.get("num_attention_heads_padded", heads))
+    config.setdefault("num_attention_heads_padded", heads_padded)
+    config.setdefault("hidden_size_padded", heads_padded * head_dim)
+    config.setdefault("heads_per_group", 1)
+    config.setdefault("attention_passes", 1)
+    config.setdefault("heads_per_pass", heads_padded)
+    config.setdefault("kv_slice_count", 4)
+    config.setdefault(
+        "kv_padding_a",
+        int(config.get("kv_padding", 256)),
+    )
+    config.setdefault(
+        "kv_padding_b",
+        int(config.get("kv_padding", 256)) * int(config.get("kv_slice_count", 4)),
+    )
     return config
+
+
+def decode_padded_dims(config: Mapping[str, object]) -> dict[str, int]:
+    """Return real and hardware-padded Decode dimensions.
+
+    Real dimensions describe the model (`hidden_size=1536`, `heads=12`).
+    Padded dimensions describe the 28-slice hardware layout
+    (`hidden_size_padded=1792`, `num_attention_heads_padded=14`).  When the
+    optional ``*_padded`` keys are absent the small-size behaviour is
+    preserved (padded == real).
+    """
+
+    hidden = int(config["hidden_size"])
+    heads = int(config["num_attention_heads"])
+    heads_padded = int(config.get("num_attention_heads_padded", heads))
+    head_dim = int(config["head_dim"])
+    slice_per_head = int(config["slice_per_head"])
+    heads_per_group = int(config.get("heads_per_group", 1))
+    hidden_padded = int(config.get("hidden_size_padded", heads_padded * head_dim))
+    attention_passes = int(config.get("attention_passes", 1))
+    heads_per_pass = int(config.get("heads_per_pass", heads_padded))
+    groups = heads_padded // heads_per_group if heads_per_group else 0
+    chunk = head_dim // slice_per_head
+    per_slice = heads_per_group * chunk
+    pass_hidden = heads_per_pass * head_dim
+    pass_used_slices = heads_per_pass * slice_per_head
+    return {
+        "hidden": hidden,
+        "hidden_padded": hidden_padded,
+        "heads": heads,
+        "heads_padded": heads_padded,
+        "head_padding": heads_padded - heads,
+        "hidden_padding": hidden_padded - hidden,
+        "head_dim": head_dim,
+        "slice_per_head": slice_per_head,
+        "heads_per_group": heads_per_group,
+        "groups": groups,
+        "group_slices": slice_per_head,
+        "chunk": chunk,
+        "per_slice": per_slice,
+        "attention_passes": attention_passes,
+        "heads_per_pass": heads_per_pass,
+        "pass_hidden": pass_hidden,
+        "pass_used_slices": pass_used_slices,
+        "pass_per_slice": chunk,
+    }
 
 
 def validate_decode_config(config: Mapping[str, object]) -> None:
@@ -208,18 +274,79 @@ def validate_decode_config(config: Mapping[str, object]) -> None:
     sequence_length = integer_values["sequence_length"]
     kv_cache_initial_length = integer_values["kv_cache_initial_length"]
 
-    if heads * slice_per_head != used_slices:
-        raise ValueError(
-            "num_attention_heads * slice_per_head must equal used_slices "
-            f"({heads} * {slice_per_head} != {used_slices})"
-        )
+    dims = decode_padded_dims(config)
+    hidden_padded = dims["hidden_padded"]
+    heads_padded = dims["heads_padded"]
+    kv_heads = integer_values["num_key_value_heads"]
+    kv_slice_count = int(config.get("kv_slice_count", 4))
+
+    heads_per_group = int(config.get("heads_per_group", 1))
+    attention_passes = int(config.get("attention_passes", 1))
+    heads_per_pass = int(config.get("heads_per_pass", heads_padded))
+    chunk = head_dim // slice_per_head
+    if attention_passes > 1:
+        if heads_per_pass * attention_passes != heads_padded:
+            raise ValueError(
+                "heads_per_pass * attention_passes must equal "
+                "num_attention_heads_padded "
+                f"({heads_per_pass} * {attention_passes} != {heads_padded})"
+            )
+        if heads_per_pass * slice_per_head != used_slices:
+            raise ValueError(
+                "heads_per_pass * slice_per_head must equal used_slices "
+                f"({heads_per_pass} * {slice_per_head} != {used_slices})"
+            )
+        pass_hidden = heads_per_pass * head_dim
+        if attention_passes * pass_hidden != hidden_padded:
+            raise ValueError(
+                "attention_passes * heads_per_pass * head_dim must equal "
+                "hidden_size_padded "
+                f"({attention_passes} * {pass_hidden} != {hidden_padded})"
+            )
+        if pass_hidden % used_slices or pass_hidden // used_slices != chunk:
+            raise ValueError(
+                "heads_per_pass * head_dim must split into used_slices chunks "
+                f"of head_dim/slice_per_head={chunk}"
+            )
+    else:
+        if heads_per_group <= 0 or heads_padded % heads_per_group:
+            raise ValueError(
+                "num_attention_heads_padded must be divisible by heads_per_group "
+                f"({heads_padded} % {heads_per_group})"
+            )
+        groups = heads_padded // heads_per_group
+        if groups * slice_per_head != used_slices:
+            raise ValueError(
+                "attention groups * slice_per_head must equal used_slices "
+                f"({groups} * {slice_per_head} != {used_slices})"
+            )
+        if heads_per_group * chunk != hidden_padded // used_slices:
+            raise ValueError(
+                "heads_per_group * (head_dim // slice_per_head) must equal "
+                "hidden_size_padded // used_slices "
+                f"({heads_per_group} * {chunk} != {hidden_padded // used_slices})"
+            )
     if heads * head_dim != hidden_size:
         raise ValueError(
             "num_attention_heads * head_dim must equal hidden_size "
             f"({heads} * {head_dim} != {hidden_size})"
         )
+    if heads_padded * head_dim != hidden_padded:
+        raise ValueError(
+            "num_attention_heads_padded * head_dim must equal hidden_size_padded "
+            f"({heads_padded} * {head_dim} != {hidden_padded})"
+        )
+    if heads_padded < heads or hidden_padded < hidden_size:
+        raise ValueError("padded Decode dimensions cannot be smaller than real dimensions")
+    if hidden_padded % used_slices:
+        raise ValueError(
+            f"hidden_size_padded={hidden_padded} must be divisible by {used_slices}"
+        )
     if hidden_size % used_slices:
-        raise ValueError(f"hidden_size={hidden_size} must be divisible by {used_slices}")
+        # The real hidden size only affects the RMSNorm reduction length.  It
+        # need not divide the slice count when hardware padding is used.
+        if hidden_padded == hidden_size:
+            raise ValueError(f"hidden_size={hidden_size} must be divisible by {used_slices}")
     if intermediate_size % used_slices:
         raise ValueError(
             f"intermediate_size={intermediate_size} must be divisible by {used_slices}"
@@ -232,6 +359,12 @@ def validate_decode_config(config: Mapping[str, object]) -> None:
     if head_dim % slice_per_head:
         raise ValueError(
             f"head_dim={head_dim} must be divisible by slice_per_head={slice_per_head}"
+        )
+    kv_dim = kv_heads * head_dim
+    if kv_slice_count <= 0 or kv_dim % kv_slice_count:
+        raise ValueError(
+            f"num_key_value_heads*head_dim={kv_dim} must be divisible by "
+            f"kv_slice_count={kv_slice_count}"
         )
     if kv_cache_initial_length != sequence_length:
         raise ValueError(
@@ -251,6 +384,78 @@ def as_vector(values: np.ndarray, dtype: np.dtype | type | None = None) -> np.nd
     if array.ndim == 0:
         array = array.reshape(1)
     return array.reshape(array.shape[0], 1, 1, order="F")
+
+
+def pad_vector(values: np.ndarray, padded_length: int, dtype=None) -> np.ndarray:
+    """Place *values* at the start of a zero-filled vector of padded length."""
+
+    source = np.asarray(values)
+    if dtype is not None:
+        source = source.astype(dtype)
+    flat = source.reshape(-1, order="F")
+    if flat.size == padded_length:
+        return flat.copy()
+    if flat.size > padded_length:
+        raise ValueError(
+            f"cannot pad vector of size {flat.size} down to {padded_length}"
+        )
+    padded = np.zeros(padded_length, dtype=flat.dtype)
+    padded[: flat.size] = flat
+    return padded
+
+
+def pad_matrix_real(
+    values: np.ndarray | None,
+    real_shape: tuple[int, int],
+    padded_shape: tuple[int, int],
+    dtype=np.float16,
+    rng: np.random.Generator | None = None,
+    low: float = -0.25,
+    high: float = 0.25,
+) -> np.ndarray:
+    """Build a padded matrix with real data in the top-left corner.
+
+    ``values`` is cropped/accepted only when it covers ``real_shape``.  The
+    remaining rows/columns (hardware padding, including the two padded Q
+    heads) are filled with zeros so that the padded layer is exactly
+    equivalent to the real 12-head model.
+    """
+
+    out = np.zeros(padded_shape, dtype=dtype)
+    if values is None:
+        if rng is None:
+            raise ValueError("rng is required when values is None")
+        real = rng.uniform(low, high, real_shape).astype(dtype)
+    else:
+        real = np.asarray(values, dtype=dtype)
+        if real.ndim != 2:
+            raise ValueError(f"expected a 2-D weight, got {real.shape}")
+        if real.shape[0] < real_shape[0] or real.shape[1] < real_shape[1]:
+            if rng is None:
+                raise ValueError(f"weight shape {real.shape} does not cover {real_shape}")
+            real = rng.uniform(low, high, real_shape).astype(dtype)
+        else:
+            real = real[: real_shape[0], : real_shape[1]]
+    out[: real_shape[0], : real_shape[1]] = real
+    return out
+
+
+def _real_weight(
+    owner: object | None,
+    attribute: str,
+    real_shape: tuple[int, int],
+    dtype=np.float16,
+) -> np.ndarray | None:
+    """Fetch a weight from *owner* if it is large enough for *real_shape*."""
+
+    if owner is None or not hasattr(owner, attribute):
+        return None
+    value = np.asarray(getattr(owner, attribute), dtype=dtype)
+    if value.ndim != 2:
+        return None
+    if value.shape[0] < real_shape[0] or value.shape[1] < real_shape[1]:
+        return None
+    return value[: real_shape[0], : real_shape[1]]
 
 
 def fp32_fma(acc: np.float32, a: np.generic, b: np.generic) -> np.float32:
@@ -347,23 +552,31 @@ def head_local_sum_reciprocals(
 
 
 def gemv_fp32_accumulate(weight: np.ndarray, vector: np.ndarray) -> np.ndarray:
-    """Compute ``weight.T @ vector`` with an explicit fp32 accumulation order."""
+    """Compute ``weight.T @ vector`` with an explicit fp32 accumulation order.
 
-    matrix = np.asarray(weight)
-    input_vector = np.asarray(vector)
-    if matrix.ndim != 2 or input_vector.ndim != 1:
-        raise ValueError("gemv expects a 2D weight and a 1D vector")
+    The scalar reference does ``acc = fp32(fma(a_k, b_k, acc))`` for every
+    output.  This vectorised form keeps the same per-output sequential K
+    order and the same rounding (double-precision product/sum, rounded to
+    fp32 after every K step), but loops over K once for all outputs.  Full
+    size (1792×8960) has ~16M MACs, for which a pure-Python double loop is
+    impractical.
+    """
+
+    matrix = np.asarray(weight, dtype=np.float32)
+    input_vector = np.asarray(vector, dtype=np.float32).reshape(-1)
+    if matrix.ndim != 2:
+        raise ValueError("gemv expects a 2D weight")
     if matrix.shape[0] != input_vector.size:
         raise ValueError(
             f"gemv K mismatch: weight={matrix.shape}, vector={input_vector.shape}"
         )
-    output = np.zeros(matrix.shape[1], dtype=np.float32)
-    for out_index in range(matrix.shape[1]):
-        acc = np.float32(0.0)
-        for k_index in range(matrix.shape[0]):
-            acc = fp32_fma(acc, matrix[k_index, out_index], input_vector[k_index])
-        output[out_index] = acc
-    return output
+    acc = np.zeros(matrix.shape[1], dtype=np.float32)
+    for k_index in range(matrix.shape[0]):
+        acc = (
+            matrix[k_index].astype(np.float64) * float(input_vector[k_index])
+            + acc.astype(np.float64)
+        ).astype(np.float32)
+    return acc
 
 
 # ---------------------------------------------------------------------------
@@ -886,6 +1099,16 @@ def build_decode_golden_cases_optimized(
     All other operators are identical to the original.
     """
     validate_decode_config(config)
+    dims = decode_padded_dims(config)
+    if dims["heads_padded"] != dims["heads"] or dims["hidden_padded"] != dims["hidden"]:
+        # Full-size hardware layout: pad Q heads (12 -> 14) and hidden
+        # (1536 -> 1792) so that the 28 slices map to 2 slices per head.
+        from decode_ops_full import build_decode_golden_cases_optimized_padded
+
+        return build_decode_golden_cases_optimized_padded(
+            config, weights=weights, kv_cache=kv_cache
+        )
+
     hidden = int(config["hidden_size"])
     intermediate = int(config["intermediate_size"])
     heads = int(config["num_attention_heads"])

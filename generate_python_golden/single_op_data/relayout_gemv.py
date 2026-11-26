@@ -15,18 +15,21 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from tensor_io import load_golden_tensor, save_install_tensor
+from decode_ops import decode_padded_dims
 
 try:
     from .relayout_gemm import (
         BASE_HW_PARAMS,
         KV_HW_PARAMS,
         install_target_slices,
+        kv_install_targets_for_config,
     )
 except ImportError:  # Standalone: python single_op_data/relayout_gemv.py
     from relayout_gemm import (  # type: ignore[no-redef]
         BASE_HW_PARAMS,
         KV_HW_PARAMS,
         install_target_slices,
+        kv_install_targets_for_config,
     )
 
 
@@ -261,7 +264,11 @@ def write_gemv_ring_case(
 
         # A/B/D all use physical_mapping forward: logical_slice → install_target_slices
         # decides the physical slice; data chunk indexed directly by logical_slice.
-        phys_slices = install_target_slices(hw_params, logical_slice)
+        if is_kv_gemv:
+            kv_targets = kv_install_targets_for_config(config)
+            phys_slices = kv_targets[logical_slice]
+        else:
+            phys_slices = install_target_slices(hw_params, logical_slice)
         for physical_slice in phys_slices:
             a_chunk = activation[logical_slice * slice_k : (logical_slice + 1) * slice_k]
             _write_gemv_slice(
@@ -272,6 +279,55 @@ def write_gemv_ring_case(
             )
 
 
+def _write_gemv_local_grouped(
+    case_entry: dict[str, object],
+    golden_dir: Path,
+    install_dir: Path,
+    config: dict[str, object],
+    op_label: str = "",
+) -> None:
+    """Install grouped (two-heads-per-4-slice) local GEMV data."""
+
+    dims = decode_padded_dims(config)
+    used_slices = int(config["used_slices"])
+    hidden_p = dims["hidden_padded"]
+    per_slice = hidden_p // used_slices
+
+    inputs, output_tensor = _load_case_tensors(case_entry, golden_dir)
+    activation = np.asarray(inputs["A"])
+    weight = np.asarray(inputs["B"], dtype=np.float16)
+    output = np.asarray(output_tensor)
+
+    instance_id = str(case_entry.get("instance_id", ""))
+    is_qkt = "qkt" in instance_id
+
+    entry_id = op_label or str(case_entry.get("instance_id", ""))
+    op_dir = install_dir / entry_id
+
+    activation_flat = activation.reshape(-1, order="F")
+
+    for logical_slice in range(used_slices):
+        physical_slice = BASE_HW_PARAMS["physical_mapping"][logical_slice]
+        if is_qkt:
+            act_chunk = activation_flat[
+                logical_slice * per_slice : (logical_slice + 1) * per_slice
+            ]
+        else:
+            act_chunk = np.asarray(activation[:, logical_slice], dtype=np.float16)
+
+        b_slice = np.asarray(weight[:, :, logical_slice], dtype=np.float16)
+        # B is [N, K]; relayout_n8k expects [K, N].
+        weight_linearized = _relayout_n8k(b_slice.T)
+        out_slice = np.asarray(output[:, logical_slice])
+
+        _write_gemv_slice(
+            op_dir / f"slice{physical_slice:02d}",
+            act_chunk,
+            weight_linearized,
+            out_slice,
+        )
+
+
 def write_gemv_local_case(
     case_entry: dict[str, object],
     golden_dir: Path,
@@ -279,11 +335,17 @@ def write_gemv_local_case(
     config: dict[str, object],
     op_label: str = "",
 ) -> None:
+    dims = decode_padded_dims(config)
+    if dims["heads_per_group"] > 1:
+        return _write_gemv_local_grouped(
+            case_entry, golden_dir, install_dir, config, op_label
+        )
+
     inputs, output_tensor = _load_case_tensors(case_entry, golden_dir)
     weight = np.asarray(inputs["B"])
     activation = np.asarray(inputs["A"])
     output = np.asarray(output_tensor)
-    heads = int(config["num_attention_heads"])
+    heads = int(config.get("num_attention_heads_padded", config["num_attention_heads"]))
     slices_per_head = int(config["slice_per_head"])
 
     # Squeeze extra singleton dimension if present (QKT sub-ops produce
@@ -324,13 +386,18 @@ def write_gemv_local_case(
         raise ValueError(
             f"local GEMV K={k_size} must divide slices_per_head={slices_per_head}"
         )
-    if output.shape[:3] not in ((vector_length, slices_per_head, heads), (vector_length, 1, heads)):
+    slice_k = k_size // slices_per_head
+    valid_output_dims = (vector_length, slice_k)
+    if (
+        output.ndim < 3
+        or output.shape[0] not in valid_output_dims
+        or output.shape[1] not in (slices_per_head, 1)
+        or output.shape[2] != heads
+    ):
         raise ValueError(
             "local GEMV output must contain one partial vector per head slice; "
             f"got {output.shape}"
         )
-
-    slice_k = k_size // slices_per_head
     output_slices = output.shape[1]  # slices_per_head for original, 1 for sub-ops
     # Detect whether A is split along the K dimension (head_dim).
     # op22 (Q): A shape (128,7,1) → K-split, each slice gets A_chunk.
@@ -373,20 +440,13 @@ def write_gemv_local_case(
             output_slice = output[:, local_slice, head]        # (attention_length,)
 
             # ---- Physical mapping ----
-            if a_is_k_split:
-                # op22: 28 logical slices → BASE physical mapping
-                logical_slice = head * slices_per_head + local_slice
-                phys_slices = install_target_slices(BASE_HW_PARAMS, logical_slice)
-                for physical_slice in phys_slices:
-                    _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
-                                      act_linearized, weight_linearized, output_slice)
-            else:
-                # op29: 4 logical slices × 7 heads → KV install_targets
-                # phys_slices[head] is the physical slice for (head, local_slice)
-                phys_slices = install_target_slices(KV_HW_PARAMS, local_slice)
-                physical_slice = phys_slices[head]
-                _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
-                                  act_linearized, weight_linearized, output_slice)
+            # Both QK^T (op22) and SV (op29) use the per-head logical slice
+            # layout ``head*slice_per_head + local_slice``.  For the small
+            # model this is identical to the old KV install_targets table.
+            logical_slice = head * slices_per_head + local_slice
+            physical_slice = BASE_HW_PARAMS["physical_mapping"][logical_slice]
+            _write_gemv_slice(op_dir / f"slice{physical_slice:02d}",
+                              act_linearized, weight_linearized, output_slice)
 
 
 def write_gemv_case(

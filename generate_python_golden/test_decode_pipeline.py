@@ -9,15 +9,16 @@ from pathlib import Path
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[1]
+GP_ROOT = Path(__file__).resolve().parent
+ROOT = GP_ROOT.parent
 EXECPLAN_SRC = ROOT / "model_execplan" / "src"
-for path in (ROOT, EXECPLAN_SRC):
+for path in (GP_ROOT, ROOT, EXECPLAN_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 from decode_ops import (  # noqa: E402
     SUPPORTED_DECODE_OPERATORS,
-    build_decode_golden_cases,
+    build_decode_golden_cases_optimized,
     gemv_fp32_accumulate,
     load_decode_config,
     validate_decode_config,
@@ -46,37 +47,62 @@ from execution_plan_generator.register_mapping import (  # noqa: E402
 class DecodeGoldenTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.config = load_decode_config(ROOT / "config.json")
-        cls.cases = build_decode_golden_cases(cls.config)
+        cls.config = load_decode_config(GP_ROOT / "config.json")
+        cls.cases = build_decode_golden_cases_optimized(cls.config)
         cls.by_instance = {c.instance_id: c for c in cls.cases}
 
     def test_all_operator_types_covered(self) -> None:
-        expected = {spec.name for spec in SUPPORTED_DECODE_OPERATORS}
+        registry = {spec.name for spec in SUPPORTED_DECODE_OPERATORS}
         actual = {c.spec.name for c in self.cases}
-        self.assertEqual(expected, actual)
+        self.assertTrue(actual <= registry)
+        for required in (
+            "prefill_remote_summac_fp32MN_fp32MN",
+            "prefill_remote_summac_4slice_fp32MN_fp32MN",
+            "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN",
+            "decode_gemv_local_qkt",
+            "decode_gemv_local",
+        ):
+            self.assertIn(required, actual)
 
     def test_layer_has_multiple_gemv_instances(self) -> None:
         gemv_ring_instances = [c for c in self.cases if c.spec.name == "decode_gemv_ring"]
         self.assertGreater(len(gemv_ring_instances), 3,
                            "decode layer should use GEMV for Q, K, V, O, gate, up, out")
 
-    def test_user_dimensions_and_no_hidden_padding(self) -> None:
-        self.assertEqual(self.config["hidden_size"], 896)
+    def test_full_dimensions_and_head_padding(self) -> None:
+        self.assertEqual(self.config["hidden_size"], 1536)
+        self.assertEqual(self.config["hidden_size_padded"], 1792)
+        self.assertEqual(self.config["num_attention_heads"], 12)
+        self.assertEqual(self.config["num_attention_heads_padded"], 14)
+        self.assertEqual(self.config["slice_per_head"], 4)
+        self.assertEqual(self.config["heads_per_group"], 1)
+        self.assertEqual(self.config["attention_passes"], 2)
+        self.assertEqual(self.config["heads_per_pass"], 7)
+        self.assertEqual(self.config["used_slices"], 28)
         self.assertEqual(self.config["sequence_length"], 32)
-        case = self.by_instance["attn_summac"]
-        self.assertEqual(case.inputs[0].shape, (896, 1, 1, 1))
-        self.assertEqual(case.output.shape, (28, 1, 1, 1))
+        case = self.by_instance["attn_remote_summac"]
+        self.assertEqual(case.inputs[0].shape, (8, 224, 1))
+        self.assertEqual(case.output.shape, (8, 1, 1))
 
     def test_decode_shapes(self) -> None:
         def shapes(inst_id):
             c = self.by_instance[inst_id]
             return ([t.shape for t in c.inputs], c.output.shape)
-        self.assertEqual(shapes("attn_max"), ([(32, 7, 1, 1)], (4, 7, 1, 1)))
-        self.assertEqual(shapes("ffn_mul_cast"), ([(896, 1, 1, 1), (1, 1, 1, 1)], (896, 1, 1, 1)))
-        self.assertEqual(shapes("q_gemv"), ([(896, 896, 1, 1), (896, 1, 1, 1)], (896, 1, 1, 1)))
-        self.assertEqual(shapes("attn_sv"), ([(128, 32, 7, 1), (128, 7, 1, 1)], (32, 4, 7, 1)))
-        self.assertEqual(shapes("ffn_silu"), ([(1792, 1, 1, 1)], (1792, 1, 1, 1)))
-        self.assertEqual(shapes("attn_mul_scale"), ([(896, 1, 1, 1), (1, 1, 1, 1)], (896, 1, 1, 1)))
+        self.assertEqual(shapes("attn_max_A"), ([(32, 7, 1)], (1, 7, 1)))
+        self.assertEqual(shapes("ffn_mul_cast"), ([(1792, 1, 1), (1792, 1, 1)], (1792, 1, 1)))
+        self.assertEqual(shapes("q_gemv_A"), ([(1792, 896, 1), (1792, 1, 1)], (896, 1, 1)))
+        self.assertEqual(shapes("q_gemv_B"), ([(1792, 896, 1), (1792, 1, 1)], (896, 1, 1)))
+        self.assertEqual(shapes("attn_sv_A"), ([(128, 32, 7), (32, 7, 1)], (32, 4, 7)))
+        self.assertEqual(shapes("attn_qkt_A"), ([(128, 32, 7), (128, 7, 1)], (32, 4, 7)))
+        self.assertEqual(shapes("out_gemv_A"), ([(896, 1792, 1), (896, 1, 1)], (1792, 1, 1)))
+        self.assertEqual(shapes("ffn_silu"), ([(8960, 1, 1)], (8960, 1, 1)))
+        self.assertEqual(shapes("attn_mul_scale"), ([(1792, 1, 1), (1, 1, 1)], (1792, 1, 1)))
+
+    def test_padded_heads_and_hidden_tail_are_zero(self) -> None:
+        q_b = self.by_instance["q_gemv_B"].output.reshape(-1)
+        np.testing.assert_array_equal(q_b[640:], np.zeros(256, dtype=q_b.dtype))
+        final = self.by_instance["ffn_add_residual"].output.reshape(-1)
+        np.testing.assert_array_equal(final[1536:], np.zeros(256, dtype=final.dtype))
 
     def test_attention_length_cannot_silently_become_33(self) -> None:
         invalid = dict(self.config)
@@ -107,11 +133,13 @@ class DecodeSlicingTests(unittest.TestCase):
             np.testing.assert_array_equal(reconstructed, values[:, head, 0])
 
     def test_gemv_b_and_bprime_are_equal_halves(self) -> None:
-        linearized = np.arange(64, dtype=np.float16)
+        linearized = np.arange(128, dtype=np.float16)
         b, bp = _split_weight_streams(linearized)
-        self.assertEqual(b.size, 32)
-        self.assertEqual(bp.size, 32)
-        np.testing.assert_array_equal(np.concatenate([b, bp]), linearized)
+        self.assertEqual(b.size, 64)
+        self.assertEqual(bp.size, 64)
+        # Ping-pong split: even 64-value chunks -> B, odd -> B'.
+        np.testing.assert_array_equal(b, np.concatenate([linearized[0:64]]))
+        np.testing.assert_array_equal(bp, np.concatenate([linearized[64:128]]))
 
 
 class TensorIoTests(unittest.TestCase):
@@ -137,7 +165,7 @@ class TensorIoTests(unittest.TestCase):
 class ExecplanTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.config = load_decode_config(ROOT / "config.json")
+        cls.config = load_decode_config(GP_ROOT / "config.json")
 
     def test_graphs_match_operator_registry(self) -> None:
         operators = build_execplan_operators(self.config)
@@ -145,9 +173,15 @@ class ExecplanTests(unittest.TestCase):
             [(op["id"], op["type"]) for op in operators],
             [(spec.op_id, spec.name) for spec in SUPPORTED_DECODE_OPERATORS],
         )
-        ring = operators[8]
-        self.assertEqual(ring["inputs"]["A"]["shape"], [1, 1, 32])
-        self.assertEqual(ring["inputs"]["B"]["shape"], [1, 32, 896])
+        ring = next(op for op in operators if op["type"] == "decode_gemv_ring")
+        self.assertEqual(
+            ring["inputs"]["A"]["shape"],
+            [1, 1, "hidden_size_padded//used_slices"],
+        )
+        self.assertEqual(
+            ring["inputs"]["B"]["shape"],
+            [1, "hidden_size_padded//used_slices", "hidden_size_padded"],
+        )
 
     def test_standalone_constant_register_is_writable(self) -> None:
         db = load_register_mapping(

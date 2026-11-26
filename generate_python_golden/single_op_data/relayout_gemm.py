@@ -606,6 +606,70 @@ def install_target_slices(hw_params, slice_idx):
     return list(install_targets[slice_idx])
 
 
+def q_head_to_kv(head: int, heads_real: int, kv_heads: int) -> int:
+    """GQA mapping used by the full-size golden (real heads only)."""
+
+    repeats = max(1, heads_real // kv_heads)
+    if head >= heads_real:
+        return head % kv_heads
+    return min(head // repeats, kv_heads - 1)
+
+
+def kv_install_targets_for_config(config: dict[str, object]) -> list[list[int]]:
+    """Generalise KV broadcast targets for 14-head / 2-KV-head layouts.
+
+    For every KV logical chunk ``c`` the returned row lists the physical
+    slices (one per Q head that consumes that KV head) where the chunk is
+    installed.  This reproduces ``KV_HW_PARAMS['install_targets']`` for the
+    small-size 7-head / 1-KV-head configuration.
+    """
+
+    base = BASE_HW_PARAMS["physical_mapping"]
+    heads_real = int(config["num_attention_heads"])
+    heads_padded = int(config.get("num_attention_heads_padded", heads_real))
+    kv_heads = int(config["num_key_value_heads"])
+    slice_per_head = int(config["slice_per_head"])
+    kv_slice_count = int(config.get("kv_slice_count", 4))
+    heads_per_group = int(config.get("heads_per_group", 1))
+    attention_passes = int(config.get("attention_passes", 1))
+    if heads_per_group > 1 or attention_passes > 1:
+        # The KV projection/cache path is independent of the Q-head grouping.
+        # Keep the original 4 logical KV chunks distributed over the 28
+        # physical slices; attention's per-Q-slice two-head packing happens
+        # in the op22/op29 install data itself (explicit copy/concatenate,
+        # no hardware broadcast).
+        if kv_slice_count != len(KV_HW_PARAMS["install_targets"]):
+            raise ValueError(
+                "grouped Q layout expects kv_slice_count="
+                f"{len(KV_HW_PARAMS['install_targets'])}, got {kv_slice_count}"
+            )
+        return [list(row) for row in KV_HW_PARAMS["install_targets"]]
+    if kv_slice_count % kv_heads:
+        raise ValueError(
+            f"kv_slice_count={kv_slice_count} not divisible by kv_heads={kv_heads}"
+        )
+    chunks_per_kv = kv_slice_count // kv_heads
+
+    targets: list[list[int]] = []
+    for chunk in range(kv_slice_count):
+        kv_head = chunk // chunks_per_kv
+        local_slice = chunk % chunks_per_kv
+        if local_slice >= slice_per_head:
+            local_slice = slice_per_head - 1
+        row = [
+            base[head * slice_per_head + local_slice]
+            for head in range(heads_padded)
+            if q_head_to_kv(head, heads_real, kv_heads) == kv_head
+        ]
+        if not row:
+            row = [
+                base[head * slice_per_head + local_slice]
+                for head in range(heads_padded)
+            ]
+        targets.append(row)
+    return targets
+
+
 def create_decimal_hex_from_array(bin_path, array, rows, cols, file_order="C"):
     arr = np.asarray(array, dtype=np.float16)
     if arr.ndim != 2:

@@ -10,7 +10,8 @@ import numpy as np
 
 from assemble_decode_package import resolve_manifest_path, sha256_file
 from decode_ops import SUPPORTED_DECODE_OPERATORS, load_decode_config
-from single_op_data.decode_passthrough import slice_passthrough_case
+from single_op_data.decode_passthrough import _load_case_tensors, slice_passthrough_case
+from single_op_data.relayout_gemm import BASE_HW_PARAMS
 from tensor_io import load_golden_tensor
 
 
@@ -55,14 +56,74 @@ def _validate_golden_manifest(manifest: dict[str, object], golden_dir: Path) -> 
     _assert(not missing_types, f"Golden manifest missing operator types: {missing_types}")
 
 
+def _entry_config(entry: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+    if int(config.get("attention_passes", 1)) <= 1:
+        return config
+    instance_id = str(entry.get("instance_id", ""))
+    is_pass_op = (
+        instance_id.startswith("q_")
+        or instance_id.startswith("attn_")
+        or instance_id.startswith("out_gemv_")
+    ) and instance_id.endswith(("_A", "_B"))
+    if not is_pass_op:
+        return config
+
+    from decode_ops import decode_padded_dims
+
+    dims = decode_padded_dims(config)
+    pass_hidden = dims["pass_hidden"]
+    heads_per_pass = dims["heads_per_pass"]
+    pass_config = dict(config)
+    pass_config.update(
+        {
+            "hidden_size": pass_hidden,
+            "hidden_size_padded": pass_hidden,
+            "num_attention_heads": heads_per_pass,
+            "num_attention_heads_padded": heads_per_pass,
+            "heads_per_group": 1,
+            "attention_passes": 1,
+            "heads_per_pass": heads_per_pass,
+        }
+    )
+    return pass_config
+
+
 def _validate_passthrough(
     entry: dict[str, object],
     golden_dir: Path,
     install_dir: Path,
     config: dict[str, object],
 ) -> int:
-    entry_id = str(entry.get("instance_id", entry.get("id", entry.get("name", ""))))
+    config = _entry_config(entry, config)
+    if "layer_idx" in entry:
+        entry_id = f"op{int(entry['layer_idx'])}"
+    else:
+        entry_id = str(entry.get("instance_id", entry.get("id", entry.get("name", ""))))
     expected_inputs, expected_outputs = slice_passthrough_case(entry, golden_dir, config)
+    instance_id = str(entry.get("instance_id", ""))
+    slice_count = int(config["used_slices"])
+    kv_dim = int(config["num_key_value_heads"]) * int(config["head_dim"])
+    is_kv = instance_id.startswith("kv_") or any(
+        ch is not None and np.asarray(ch).size == kv_dim for ch in expected_outputs
+    )
+    if not is_kv:
+        inputs_raw, output_raw = _load_case_tensors(entry, golden_dir)
+        is_kv = any(
+            np.asarray(t).size == kv_dim
+            for t in (*inputs_raw.values(), output_raw)
+        )
+    if not is_kv:
+        phys = BASE_HW_PARAMS["physical_mapping"]
+        remapped_inputs = {port: [None] * slice_count for port in expected_inputs}
+        remapped_outputs = [None] * slice_count
+        for logical_idx in range(slice_count):
+            physical_idx = phys[logical_idx]
+            for port in expected_inputs:
+                remapped_inputs[port][physical_idx] = expected_inputs[port][logical_idx]
+            remapped_outputs[physical_idx] = expected_outputs[logical_idx]
+        expected_inputs = remapped_inputs
+        expected_outputs = remapped_outputs
+
     checked = 0
     for slice_index in range(int(config["used_slices"])):
         slice_dir = install_dir / entry_id / f"slice{slice_index:02d}"
@@ -89,22 +150,74 @@ def _validate_gemv(
     install_dir: Path,
     config: dict[str, object],
 ) -> int:
-    entry_id = str(entry.get("instance_id", entry.get("id", entry.get("name", ""))))
+    if "layer_idx" in entry:
+        entry_id = f"op{int(entry['layer_idx'])}"
+    else:
+        entry_id = str(entry.get("instance_id", entry.get("id", entry.get("name", ""))))
     policy = str(entry["slice_policy"])
+    head_dim = int(config["head_dim"])
+    slice_per_head = int(config["slice_per_head"])
+    attention_length = int(config["decode_attention_length"])
+    used_slices = int(config["used_slices"])
+    kv_slice_count = int(config.get("kv_slice_count", 4))
+    kv_dim = int(config["num_key_value_heads"]) * head_dim
+
     if policy == "gemv_ring":
-        expected_sizes = {"A": 32, "B": 14336, "Bp": 14336, "D": 32}
+        input_by_port = {str(i["port"]): i for i in entry["inputs"]}
+        b_shape = list(input_by_port["B"]["shape"])
+        k_size, n_size = int(b_shape[0]), int(b_shape[1])
+        is_kv = n_size == kv_dim and n_size < k_size
+        logical_slices = kv_slice_count if is_kv else used_slices
+        ring_size = kv_slice_count if is_kv else used_slices
+        pad_k = int(config.get("kv_padding_b", k_size))
+        k_eff = pad_k if is_kv and pad_k > k_size else k_size
+        expected_sizes = {
+            "A": k_eff // ring_size,
+            "B": k_eff * n_size // logical_slices // 2,
+            "Bp": k_eff * n_size // logical_slices // 2,
+            "D": n_size // logical_slices,
+        }
     elif policy == "gemv_local":
-        expected_sizes = {"A": 32, "B": 512, "Bp": 512, "D": 32}
+        slice_k = head_dim // slice_per_head
+        heads_per_group = int(config.get("heads_per_group", 1))
+        op_name = str(entry.get("op_name", entry.get("name", "")))
+        if heads_per_group > 1:
+            two_attn = heads_per_group * attention_length
+            per_slice = int(config.get("hidden_size_padded", slice_k * used_slices)) // used_slices
+            if op_name == "decode_gemv_local_qkt":
+                a_size, d_size = per_slice, two_attn
+            else:
+                a_size, d_size = two_attn, heads_per_group * slice_k
+            b_size = two_attn * (heads_per_group * slice_k) // 2
+            expected_sizes = {
+                "A": a_size,
+                "B": b_size,
+                "Bp": b_size,
+                "D": d_size,
+            }
+        else:
+            if op_name == "decode_gemv_local_qkt":
+                a_size, d_size = slice_k, attention_length
+            else:
+                a_size, d_size = attention_length, slice_k
+            expected_sizes = {
+                "A": a_size,
+                "B": slice_k * attention_length // 2,
+                "Bp": slice_k * attention_length // 2,
+                "D": d_size,
+            }
     else:
         raise AssertionError(f"unknown GEMV policy: {policy}")
 
+    output_dtype = str(entry.get("output", {}).get("dtype", "f32"))
     checked = 0
     for slice_index in range(int(config["used_slices"])):
         slice_dir = install_dir / entry_id / f"slice{slice_index:02d}"
         for port, size in expected_sizes.items():
+            dtype = np.dtype("<f4") if port == "D" and output_dtype == "f32" else np.dtype("<f2")
             actual = _load_install(
                 slice_dir / f"matrix_{port}_linearized_128bit.bin",
-                np.dtype("<f2"),
+                dtype,
             )
             _assert(actual.size == size, f"unexpected {policy} {port} size in {slice_dir}")
             checked += 1
@@ -204,7 +317,9 @@ def validate_decode_outputs(
     }
     print(
         "[decode-validate] "
-        f"operators={result['operators']} slices={result['slices_per_operator']} "
+        f"operator_types={result['operator_types']} "
+        f"layer_instances={result['layer_instances']} "
+        f"used_slices={result['used_slices']} "
         f"install_tensors={result['install_tensors']} "
         f"execplan_lines={result['execplan_128bit_lines']} "
         f"package_files={result['package_files']}"

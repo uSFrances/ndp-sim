@@ -6,12 +6,30 @@ then round-robin splits every .txt and .bin data file (A, B, B', D) across
 the specified number of banks.
 """
 
+import argparse
 import json
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 BANK_JSON = BASE_DIR / "model_execplan" / "examples" / "layer0_decode_optimized.json"
 INSTALL_DIR = BASE_DIR / "single_op_data" / "install_decode_optimized"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Split optimized Decode install data by bank.")
+    parser.add_argument(
+        "--bank-json",
+        type=Path,
+        default=BANK_JSON,
+        help="Program JSON providing bank_interleave for each operator/port.",
+    )
+    parser.add_argument(
+        "--install-dir",
+        type=Path,
+        default=INSTALL_DIR,
+        help="install_decode_optimized[_full] directory to split.",
+    )
+    return parser.parse_args()
 
 PORT_MAP = {"A": "A", "B": "B", "Bp": "B'", "D": "D", "C": "C"}
 
@@ -53,7 +71,10 @@ def _detect_port(fname: str) -> str:
 
 
 def main():
-    data = json.loads(BANK_JSON.read_text(encoding="utf-8"))
+    args = parse_args()
+    bank_json = args.bank_json
+    install_dir = args.install_dir
+    data = json.loads(bank_json.read_text(encoding="utf-8"))
 
     op_banks: dict[str, dict[str, int]] = {}
     for op in data["operators"]:
@@ -68,7 +89,7 @@ def main():
         op_banks[op_id] = port_info
 
     count = 0
-    for f in sorted(INSTALL_DIR.glob("op*/slice*/*")):
+    for f in sorted(install_dir.glob("op*/slice*/*")):
         if not f.is_file():
             continue
 

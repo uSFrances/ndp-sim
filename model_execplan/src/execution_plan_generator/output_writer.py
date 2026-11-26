@@ -310,7 +310,12 @@ def _apply_control_update_to_operator_json(
             lc_node["end"] = value
         return
 
-    if instance.startswith("iga_pe") and config_path == "lc_pe_configs.inport1.constant":
+    # PE constant fields are part of the operator config bitstream.  Apply
+    # them by patching the JSON that feeds the bitstream generator; they must
+    # not be emitted as separate Write_Reg instructions.
+    iga_const = re.fullmatch(r"lc_pe_configs\.inport(\d)\.constant", config_path)
+    if instance.startswith("iga_pe") and iga_const is not None:
+        inport_idx = int(iga_const.group(1))
         pe_idx = _parse_instance_index(instance, prefix="iga_pe")
         if pe_idx is None:
             return
@@ -321,12 +326,16 @@ def _apply_control_update_to_operator_json(
         pe_node = pe_configs.get(pe_key)
         if not isinstance(pe_node, dict):
             return
-        inport1 = pe_node.get("inport1")
-        if isinstance(inport1, dict):
-            inport1["constant"] = value
+        inport = pe_node.get(f"inport{inport_idx}")
+        if isinstance(inport, dict):
+            inport["constant"] = value
         return
 
-    if instance.startswith("ga_pe") and config_path == "general_array.PE_array.PE.inport1.constant":
+    ga_const = re.fullmatch(
+        r"general_array\.PE_array\.PE\.inport(\d)\.constant", config_path
+    )
+    if instance.startswith("ga_pe") and ga_const is not None:
+        inport_idx = int(ga_const.group(1))
         pe_idx = _parse_instance_index(instance, prefix="ga_pe")
         if pe_idx is None:
             return
@@ -342,11 +351,11 @@ def _apply_control_update_to_operator_json(
         pe_node = pe_array.get(pe_key)
         if not isinstance(pe_node, dict):
             return
-        inport1 = pe_node.get("inport1")
-        if isinstance(inport1, dict):
+        inport = pe_node.get(f"inport{inport_idx}")
+        if isinstance(inport, dict):
             # Keep symbolic form in emulator json for readability/debugging.
             # Derive expression from encoded fp32 value instead of assuming a_k.
-            inport1["constant"] = _format_fp32_bits_as_symbolic(value)
+            inport["constant"] = _format_fp32_bits_as_symbolic(value)
         return
 
     if instance.startswith("iga_col_lc") and config_path.startswith("buffer_loop_configs.COL_LC."):

@@ -280,11 +280,11 @@
             "idx": ["LC_PE.PE0", "DRAM_LC.LC0", null],
             "idx_size": [31, 0, null],
             "dim_stride": [128, 32, null],
-            "padding_enable": [0, 0, 0],
-            "padding_reg_value": null,
+            "padding_enable": [1, 0, 0],
+            "padding_reg_value": 0,
             "idx_padding_range": {
-                "low_bound": [null, null, null],
-                "up_bound": [null, null, null]
+                "low_bound": [0, null, null],
+                "up_bound": [31, null, null]
             },
             "tailing_enable": [0, 0, 0],
             "idx_tailing_range": {

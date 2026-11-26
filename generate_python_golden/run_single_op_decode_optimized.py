@@ -12,7 +12,12 @@ import json
 import shutil
 from pathlib import Path
 
-from decode_ops import DECODE_OP_REGISTRY, load_decode_config, resolve_target_names
+from decode_ops import (
+    DECODE_OP_REGISTRY,
+    decode_padded_dims,
+    load_decode_config,
+    resolve_target_names,
+)
 from single_op_data.decode_passthrough import write_passthrough_case
 from single_op_data.relayout_gemv import write_gemv_case
 
@@ -26,12 +31,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=BASE_DIR / "python_golden_decode_optimized" / "manifest.json",
+        default=None,
+        help=(
+            "Defaults to python_golden_decode_optimized[_full]/manifest.json "
+            "depending on the config padding."
+        ),
     )
     parser.add_argument(
         "--install-dir",
         type=Path,
-        default=BASE_DIR / "single_op_data" / "install_decode_optimized",
+        default=None,
+        help=(
+            "Defaults to single_op_data/install_decode_optimized for small-size "
+            "and install_decode_optimized_full for a padded full-size config."
+        ),
     )
     parser.add_argument(
         "--target-op",
@@ -51,11 +64,17 @@ def _check_manifest_config(
 ) -> None:
     keys = (
         "hidden_size",
+        "hidden_size_padded",
         "intermediate_size",
         "num_attention_heads",
+        "num_attention_heads_padded",
+        "num_key_value_heads",
         "head_dim",
         "slice_per_head",
         "used_slices",
+        "kv_slice_count",
+        "kv_padding_a",
+        "kv_padding_b",
         "decode_attention_length",
         "random_seed",
     )
@@ -89,14 +108,58 @@ def _prepare_install_dir(
                 shutil.rmtree(op_dir)
 
 
+def _entry_config(entry: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+    """Return a 7-head pass config for per-head pass entries."""
+
+    if int(config.get("attention_passes", 1)) <= 1:
+        return config
+    instance_id = str(entry.get("instance_id", ""))
+    is_pass_op = (
+        instance_id.startswith("q_")
+        or instance_id.startswith("attn_")
+        or instance_id.startswith("out_gemv_")
+    ) and instance_id.endswith(("_A", "_B"))
+    if not is_pass_op:
+        return config
+
+    dims = decode_padded_dims(config)
+    pass_hidden = dims["pass_hidden"]
+    heads_per_pass = dims["heads_per_pass"]
+    pass_config = dict(config)
+    pass_config.update(
+        {
+            "hidden_size": pass_hidden,
+            "hidden_size_padded": pass_hidden,
+            "num_attention_heads": heads_per_pass,
+            "num_attention_heads_padded": heads_per_pass,
+            "heads_per_group": 1,
+            "attention_passes": 1,
+            "heads_per_pass": heads_per_pass,
+        }
+    )
+    return pass_config
+
+
 def generate_decode_install(
     config_path: Path,
-    manifest_path: Path,
-    install_dir: Path,
+    manifest_path: Path | None,
+    install_dir: Path | None,
     target: str | None = None,
     keep_existing: bool = False,
 ) -> Path:
     config = load_decode_config(config_path)
+    dims = decode_padded_dims(config)
+    padded = (
+        dims["heads_padded"] != dims["heads"]
+        or dims["hidden_padded"] != dims["hidden"]
+    )
+    suffix = "_full" if padded else ""
+    if manifest_path is None:
+        manifest_path = (
+            BASE_DIR / f"python_golden_decode_optimized{suffix}" / "manifest.json"
+        )
+    if install_dir is None:
+        install_dir = BASE_DIR / "single_op_data" / f"install_decode_optimized{suffix}"
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"Decode Golden manifest not found: {manifest_path}. "
@@ -135,10 +198,11 @@ def generate_decode_install(
         policy = str(entry["slice_policy"])
         layer_idx = int(entry.get("layer_idx", 0))
         op_label = f"op{layer_idx}"
+        entry_config = _entry_config(entry, config)
         if policy.startswith("gemv_"):
-            write_gemv_case(entry, manifest_path.parent, install_dir, config, op_label)
+            write_gemv_case(entry, manifest_path.parent, install_dir, entry_config, op_label)
         else:
-            write_passthrough_case(entry, manifest_path.parent, install_dir, config, op_label)
+            write_passthrough_case(entry, manifest_path.parent, install_dir, entry_config, op_label)
         result_entries.append(
             {
                 "id": op_label,

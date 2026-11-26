@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from decode_ops import load_decode_config
+from decode_ops import decode_padded_dims, load_decode_config
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,23 +25,28 @@ BASE_DIR = Path(__file__).resolve().parent
 # (op_index, port) → source operator id or "external".
 # Built from the prefill ``layer0_0610_remapped.json`` dataflow.
 # ---------------------------------------------------------------------------
-_HID = "hidden_size//used_slices"
-_HID_FULL = "hidden_size"
+_HID = "hidden_size_padded//used_slices"
+_HID_FULL = "hidden_size_padded"
+_HID_NORM = "hidden_size"
 _INT = "intermediate_size//used_slices"
 _INT_FULL = "intermediate_size"
 _USL = "used_slices"
 _SEQ = "sequence_length"
 _HD_SLICE = "head_dim//slice_per_head"
 _HD = "head_dim"
-_NH = "num_attention_heads"
+_NH = "num_attention_heads_padded"
 _SPH = "slice_per_head"
 _ATN_SLICE = "decode_attention_length//slice_per_head"
 _ATN = "decode_attention_length"
+_HG = "heads_per_group"
+_TWO_ATTN = "heads_per_group*decode_attention_length"
+_TWO_CHUNK = "2*(head_dim//slice_per_head)"
+_PASS_HID = "heads_per_pass*head_dim"
 
 # KV padding macros (matching prefill: 4-slice K/V with kv_padding)
-_KV_PAD_A = "kv_padding_a"   # 256
-_KV_PAD_B = "kv_padding_b"   # 1024
-_KV_N = "num_key_value_heads*head_dim//slice_per_head"  # 32
+_KV_PAD_A = "kv_padding_a"   # 512 full-size (256 small-size)
+_KV_PAD_B = "kv_padding_b"   # 2048 full-size (1024 small-size)
+_KV_N = "num_key_value_heads*head_dim//kv_slice_count"
 
 # GEMV B/B' port helper — prefill convention: [K, 1, N_slice], bank_interleave=2
 _GEMV_REMAP = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20, 21, 22, 23, 24, 25]
@@ -74,7 +79,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op2  mac_SFU (RMS norm part 3)
     {
         "id": "op2", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op1"}},
+        "inputs": {"A": {"shape": [_HID_NORM, 1, 1], "type": "slice0", "source": "op1"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op3  mul_scale (RMS norm apply — A=external hidden, B=op2 scale)
@@ -159,7 +164,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op12 mac_SFU (KV RMS norm part 3)
     {
         "id": "op12", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op11"}},
+        "inputs": {"A": {"shape": [_HID_NORM, 1, 1], "type": "slice0", "source": "op11"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op13 mul_scale (KV RMS norm apply — A=external kv, B=op12) kv_padding_a
@@ -255,74 +260,70 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
         "id": "op22", "type": "decode_gemv_local_qkt",
         "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16", "source": "op9"},
-            "B": _gemv_local_b([1, _ATN, _HD_SLICE]),
-            "B'": _gemv_local_b([1, _ATN, _HD_SLICE]),
+            "A": {"shape": [1, 1, "num_key_value_heads*head_dim//slice_per_head"], "dtype": "fp16", "source": "op9"},
+            "B": _gemv_local_b([1, _TWO_ATTN, _HD_SLICE]),
+            "B'": _gemv_local_b([1, _TWO_ATTN, _HD_SLICE]),
         },
-        "output": {"shape": [1, 1, _ATN]},
+        "output": {"shape": [1, 1, _TWO_ATTN]},
     },
-    # op23 remote_sum (QK^T aggregation) — one slice per 4-slice group, type=slice4
+    # op23 remote_sum (QK^T aggregation) — four slices per group, two heads
     {
         "id": "op23", "type": "prefill_remote_sum_4slice_fp32MN_fp32MN",
-        "used_slices_mask": "0b0001000100010001000100010001",
-        "inputs": {"A": {"shape": [1, _SPH, _ATN], "source": "op22"}},
-        "output": {"shape": [1, 1, _ATN]},
+        "used_slices_mask": _USL,
+        "inputs": {"A": {"shape": [1, _TWO_ATTN, 4], "source": "op22"}},
+        "output": {"shape": [1, 1, _TWO_ATTN]},
     },
-    # op24 mac (scores * scale + mask) — A←op23 type=slice4, C←external mask.
-    # Decode: only 1 query token → attention scores are (1, attn_len) = 1D,
-    # NOT prefill's (query_len, key_len) = (attn_len, attn_len) 2D matrix.
+    # op24 mac (scores * scale + mask) — two heads concatenated as one vector
     {
         "id": "op24", "type": "decode_mac_fp32N_fp32N_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "type": "slice4",
+            "A": {"shape": [1, 1, _TWO_ATTN], "type": "slice4",
                   "remapping": list(range(26)), "source": "op23"},
-            "C": {"shape": [1, 1, _ATN],
+            "C": {"shape": [1, 1, _TWO_ATTN],
                   "remapping": list(range(26)), "source": "ext"},
         },
-        "output": {"shape": [1, 1, _ATN]},
+        "output": {"shape": [1, 1, _TWO_ATTN]},
     },
-    # op25 max (per-head local maxima — A←op24, reduces attention_length dim)
+    # op25 max: two independent heads, shape [heads_per_group, attention_length]
     {
         "id": "op25", "type": "decode_max_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, 1, _ATN], "source": "op24"}},
-        "output": {"shape": [1, 1, 1]},
+        "inputs": {"A": {"shape": [1, _HG, _ATN], "source": "op24"}},
+        "output": {"shape": [1, _HG, 1]},
     },
-    # op26 sub_SFU (scores - max — A←op24, B←op25 broadcast scalar)
+    # op26 sub_SFU (scores - per-head max)
     {
         "id": "op26", "type": "decode_sub_SFU_fp32N_fp32_fp32N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "source": "op24"},
-            "B": {"shape": [1, 1, 1], "source": "op25"},
+            "A": {"shape": [1, 1, _TWO_ATTN], "source": "op24"},
+            "B": {"shape": [1, _HG, 1], "source": "op25"},
         },
-        "output": {"shape": [1, 1, _ATN]},
+        "output": {"shape": [1, 1, _TWO_ATTN]},
     },
-    # op27 sum_rec (per-head sum reciprocals — A←op26)
+    # op27 sum_rec: two independent heads
     {
         "id": "op27", "type": "decode_sum_rec_fp32N_fp32N",
-        "inputs": {"A": {"shape": [1, 1, _ATN], "source": "op26"}},
-        "output": {"shape": [1, 1, 1]},
+        "inputs": {"A": {"shape": [1, _HG, _ATN], "source": "op26"}},
+        "output": {"shape": [1, _HG, 1]},
     },
-    # op28 mul_softmax (exp(x-max) * 1/sum — A←op26, B←op27 broadcast scalar)
+    # op28 mul_softmax (exp * reciprocal per head)
     {
         "id": "op28", "type": "decode_mul_fp32N_fp32_fp16N",
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "source": "op26"},
-            "B": {"shape": [1, 1, 1], "source": "op27"},
+            "A": {"shape": [1, 1, _TWO_ATTN], "source": "op26"},
+            "B": {"shape": [1, _HG, 1], "source": "op27"},
         },
-        "output": {"shape": [1, 1, _ATN], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _TWO_ATTN], "dtype": "fp16"},
     },
-    # op29 gemv_local (SV — A=softmax from op28, B/B'=V **cache** from external)
-    # Decode: op21 only produces V for the *current* token → stored to cache.
-    # op29 reads the full V cache (external), NOT op21.
+    # op29 gemv_local (SV — two heads concatenated)
     {
         "id": "op29", "type": "decode_gemv_local",
         "used_slices_mask": _USL,
         "inputs": {
-            "A": {"shape": [1, 1, _ATN], "dtype": "fp16", "source": "op28"},
-            "B": _gemv_local_b([1, _HD_SLICE, _ATN]),
-            "B'": _gemv_local_b([1, _HD_SLICE, _ATN]),
+            "A": {"shape": [1, 1, _TWO_ATTN], "dtype": "fp16", "source": "op28"},
+            "B": _gemv_local_b([1, _TWO_ATTN, _HD_SLICE]),
+            "B'": _gemv_local_b([1, _TWO_ATTN, _HD_SLICE]),
         },
-        "output": {"shape": [1, 1, _HD_SLICE], "dtype": "fp16"},
+        "output": {"shape": [1, 1, _TWO_ATTN], "dtype": "fp16"},
     },
     # op30 gemv_ring (output projection) — 28-slice, A per-slice = hidden_size//used_slices
     {
@@ -360,7 +361,7 @@ _DECODE_LAYOUT: list[dict[str, Any]] = [
     # op34 mac_SFU (FFN RMS norm part 3)
     {
         "id": "op34", "type": "decode_mac_SFU_fp32N_fp32N",
-        "inputs": {"A": {"shape": [_HID_FULL, 1, 1], "type": "slice0", "source": "op33"}},
+        "inputs": {"A": {"shape": [_HID_NORM, 1, 1], "type": "slice0", "source": "op33"}},
         "output": {"shape": [1, 1, 1]},
     },
     # op35 mul_scale (FFN RMS apply — A←op31, B←op34)
@@ -458,6 +459,249 @@ def _resolve_source(src: str) -> Any:
     return src
 
 
+def _apply_grouped_block_diagonal_shapes(
+    operators: list[dict[str, Any]], config: dict[str, Any]
+) -> None:
+    """Full-size two-head local GEMV uses a block-diagonal K dimension.
+
+    op22: B = [1, 2*attention_length, 2*chunk]   (K doubled)
+    op29: B = [1, 2*chunk, 2*attention_length]   (K doubled)
+    Small-size (heads_per_group == 1) keeps the original shapes.
+    """
+
+    if int(config.get("heads_per_group", 1)) <= 1:
+        return
+    for op in operators:
+        if op["id"] == "op22":
+            for port in ("B", "B'"):
+                if port in op.get("inputs", {}):
+                    op["inputs"][port]["shape"] = [1, _TWO_ATTN, _TWO_CHUNK]
+        elif op["id"] == "op29":
+            for port in ("B", "B'"):
+                if port in op.get("inputs", {}):
+                    op["inputs"][port]["shape"] = [1, _TWO_CHUNK, _TWO_ATTN]
+
+
+def _build_two_pass_layout(use_rope_xor: bool = False) -> list[dict[str, Any]]:
+    """58-op layout: two 7-head per-head passes + shared RMS/KV/FFN."""
+
+    def _inp(shape, source="ext", dtype=None, typ=None):
+        value: dict[str, Any] = {"shape": shape}
+        if dtype:
+            value["dtype"] = dtype
+        if typ:
+            value["type"] = typ
+        value["source"] = source
+        return value
+
+    def _out(shape, dtype=None, typ=None):
+        value: dict[str, Any] = {"shape": shape}
+        if dtype:
+            value["dtype"] = dtype
+        if typ:
+            value["type"] = typ
+        return value
+
+    def _op(op_id, op_type, inputs, output):
+        return {
+            "id": op_id,
+            "type": op_type,
+            "used_slices_mask": _USL,
+            "inputs": inputs,
+            "output": output,
+        }
+
+    pass_hidden = _PASS_HID
+    remote_sum_a = [1, 8, "hidden_size_padded//used_slices//8"]
+    kv_remote_sum_a = [1, 8, "kv_padding_a//8"]
+
+    layout: list[dict[str, Any]] = [
+        _op("op0", "prefill_remote_summac_fp32MN_fp32MN",
+            {"A": _inp(remote_sum_a), "B": _inp([1, 1, 1])},
+            _out([1, 1, 8])),
+        _op("op1", "decode_sum_fp32N_fp32N",
+            {"A": _inp([1, 1, 8], "op0")}, _out([1, 1, 1])),
+        _op("op2", "decode_mac_SFU_fp32N_fp32N",
+            {"A": _inp([_HID_NORM, 1, 1], "op1", typ="slice0")}, _out([1, 1, 1])),
+        _op("op3", "decode_mul_fp32N_fp32_fp32N",
+            {"A": _inp([1, 1, _HID]), "B": _inp([1, 1, 1], "op2")},
+            _out([1, 1, _HID])),
+        _op("op4", "decode_mul_fp32N_fp32N_fp16N",
+            {"A": _inp([1, 1, _HID]), "B": _inp([1, 1, _HID], "op3")},
+            _out([1, 1, _HID], "fp16")),
+    ]
+
+    def _q_pass(start_id: int, tag: str):
+        return [
+            _op(f"op{start_id}", "decode_gemv_ring",
+                {"A": _inp([_HID, 1, 1], "op4", "fp16"),
+                 "B": _gemv_b([_HID_FULL, 1, _HD_SLICE]),
+                 "B'": _gemv_bp([_HID_FULL, 1, _HD_SLICE])},
+                _out([1, 1, _HD_SLICE], "fp16")),
+            _op(f"op{start_id+1}", "decode_add_fp16N_fp32N_fp32N",
+                {"A": _inp([1, 1, _HD_SLICE], f"op{start_id}", "fp16"),
+                 "B": _inp([1, 1, _HD_SLICE])},
+                _out([1, 1, _HD_SLICE])),
+            _op(f"op{start_id+2}", "decode_mul_fp32N_fp32N_fp32N",
+                {"A": _inp([1, 1, _HD_SLICE], f"op{start_id+1}"),
+                 "B": _inp([1, 1, _HD_SLICE])},
+                _out([1, 1, _HD_SLICE])),
+            _op(f"op{start_id+3}", "decode_mul_fp32N_fp32N_fp32N",
+                {"A": _inp([1, 1, _HD_SLICE], f"op{start_id+1}"),
+                 "B": _inp([1, 1, _HD_SLICE])},
+                _out([1, 1, _HD_SLICE], typ="rope_slice_xor2" if use_rope_xor else None)),
+            _op(f"op{start_id+4}", "decode_add_fp32N_fp32N_fp16N",
+                {"A": _inp([1, 1, _HD_SLICE], f"op{start_id+2}"),
+                 "B": _inp([1, 1, _HD_SLICE], f"op{start_id+3}")},
+                _out([1, 1, _HD_SLICE], "fp16")),
+        ]
+
+    layout.extend(_q_pass(5, "A"))
+    layout.extend(_q_pass(10, "B"))
+
+    layout.extend([
+        _op("op15", "prefill_remote_summac_4slice_fp32MN_fp32MN",
+            {"A": _inp(kv_remote_sum_a), "B": _inp([1, 1, 1])},
+            _out([1, 1, 8])),
+        _op("op16", "decode_sum_fp32N_fp32N",
+            {"A": _inp([1, 1, 8], "op15")}, _out([1, 1, 1])),
+        _op("op17", "decode_mac_SFU_fp32N_fp32N",
+            {"A": _inp([_HID_NORM, 1, 1], "op16", typ="slice0")}, _out([1, 1, 1])),
+        _op("op18", "decode_mul_fp32N_fp32_fp32N",
+            {"A": _inp([1, 1, _KV_PAD_A]), "B": _inp([1, 1, 1], "op17")},
+            _out([1, 1, _KV_PAD_A])),
+        _op("op19", "decode_mul_fp32N_fp32N_fp16N",
+            {"A": _inp([1, 1, _KV_PAD_A]), "B": _inp([1, 1, _KV_PAD_A], "op18")},
+            _out([1, 1, _KV_PAD_A], "fp16")),
+        _op("op20", "decode_gemv_ring",
+            {"A": _inp([_KV_PAD_A, 1, 1], "op19", "fp16"),
+             "B": _gemv_b([_KV_PAD_B, 1, _KV_N]),
+             "B'": _gemv_bp([_KV_PAD_B, 1, _KV_N])},
+            _out([1, 1, _KV_N], "fp16")),
+        _op("op21", "decode_add_fp16N_fp32N_fp32N",
+            {"A": _inp([1, 1, _KV_N], "op20", "fp16"),
+             "B": _inp([1, 1, _KV_N])},
+            _out([1, 1, _KV_N])),
+        _op("op22", "decode_mul_fp32N_fp32N_fp32N",
+            {"A": _inp([1, 1, _KV_N], "op21"),
+             "B": _inp([1, 1, _KV_N])},
+            _out([1, 1, _KV_N])),
+        _op("op23", "decode_mul_fp32N_fp32N_fp32N",
+            {"A": _inp([1, 1, _KV_N], "op21"),
+             "B": _inp([1, 1, _KV_N])},
+            _out([1, 1, _KV_N], typ="rope_slice_xor2" if use_rope_xor else None)),
+        _op("op24", "decode_add_fp32N_fp32N_fp16N",
+            {"A": _inp([1, 1, _KV_N], "op22"),
+             "B": _inp([1, 1, _KV_N], "op23")},
+            _out([1, 1, _KV_N], "fp16")),
+        _op("op25", "decode_gemv_ring",
+            {"A": _inp([_KV_PAD_A, 1, 1], "op19", "fp16"),
+             "B": _gemv_b([_KV_PAD_B, 1, _KV_N]),
+             "B'": _gemv_bp([_KV_PAD_B, 1, _KV_N])},
+            _out([1, 1, _KV_N], "fp16")),
+        _op("op26", "decode_add_fp32N_fp16N_fp16N",
+            {"A": _inp([1, 1, _KV_N]),
+             "B": _inp([1, 1, _KV_N], "op25", "fp16")},
+            _out([1, 1, _KV_N], "fp16")),
+    ])
+
+    def _attention_pass(start_id: int, tag: str, q_source: str):
+        return [
+            _op(f"op{start_id}", "decode_gemv_local_qkt",
+                {"A": _inp([1, 1, _HD_SLICE], q_source, "fp16"),
+                 "B": _gemv_local_b([1, _ATN, _HD_SLICE]),
+                 "B'": _gemv_local_b([1, _ATN, _HD_SLICE])},
+                _out([1, 1, _ATN])),
+            _op(f"op{start_id+1}", "prefill_remote_sum_qkt_4slice_fp32MN_fp32MN",
+                {"A": _inp([1, _ATN, 4], f"op{start_id}"),
+                 "B": _inp([1, 1, 1])},
+                _out([1, 1, _ATN])),
+            _op(f"op{start_id+2}", "decode_mac_fp32N_fp32N_fp32N",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+1}", typ="slice4"),
+                 "C": _inp([1, 1, _ATN])},
+                _out([1, 1, _ATN])),
+            _op(f"op{start_id+3}", "decode_max_fp32N_fp32N",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+2}")},
+                _out([1, 1, 1])),
+            _op(f"op{start_id+4}", "decode_sub_SFU_fp32N_fp32_fp32N",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+2}"),
+                 "B": _inp([1, 1, 1], f"op{start_id+3}")},
+                _out([1, 1, _ATN])),
+            _op(f"op{start_id+5}", "decode_sum_rec_fp32N_fp32N",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+4}")},
+                _out([1, 1, 1])),
+            _op(f"op{start_id+6}", "decode_mul_fp32N_fp32_fp16N",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+4}"),
+                 "B": _inp([1, 1, 1], f"op{start_id+5}")},
+                _out([1, 1, _ATN], "fp16")),
+            _op(f"op{start_id+7}", "decode_gemv_local",
+                {"A": _inp([1, 1, _ATN], f"op{start_id+6}", "fp16"),
+                 "B": _gemv_local_b([1, _HD_SLICE, _ATN]),
+                 "B'": _gemv_local_b([1, _HD_SLICE, _ATN])},
+                _out([1, 1, _HD_SLICE], "fp16")),
+            _op(f"op{start_id+8}", "decode_gemv_ring",
+                {"A": _inp([_HD_SLICE, 1, 1], f"op{start_id+7}", "fp16"),
+                 "B": _gemv_b([_PASS_HID, 1, _HID]),
+                 "B'": _gemv_bp([_PASS_HID, 1, _HID])},
+                _out([1, 1, _HID], "fp16")),
+        ]
+
+    layout.extend(_attention_pass(27, "A", "op9"))
+    layout.extend(_attention_pass(36, "B", "op14"))
+
+    layout.extend([
+        _op("op45", "decode_add_fp32N_fp16N_fp32N",
+            {"A": _inp([1, 1, _HID]), "B": _inp([1, 1, _HID], "op35", "fp16")},
+            _out([1, 1, _HID])),
+        _op("op46", "decode_add_fp32N_fp16N_fp32N",
+            {"A": _inp([1, 1, _HID], "op45"),
+             "B": _inp([1, 1, _HID], "op44", "fp16")},
+            _out([1, 1, _HID])),
+        _op("op47", "prefill_remote_summac_fp32MN_fp32MN",
+            {"A": _inp(remote_sum_a, "op46"), "B": _inp([1, 1, 1])},
+            _out([1, 1, 8])),
+        _op("op48", "decode_sum_fp32N_fp32N",
+            {"A": _inp([1, 1, 8], "op47")}, _out([1, 1, 1])),
+        _op("op49", "decode_mac_SFU_fp32N_fp32N",
+            {"A": _inp([_HID_NORM, 1, 1], "op48", typ="slice0")}, _out([1, 1, 1])),
+        _op("op50", "decode_mul_fp32N_fp32_fp32N",
+            {"A": _inp([1, 1, _HID], "op46"),
+             "B": _inp([1, 1, 1], "op49")},
+            _out([1, 1, _HID])),
+        _op("op51", "decode_mul_fp32N_fp32N_fp16N",
+            {"A": _inp([1, 1, _HID]),
+             "B": _inp([1, 1, _HID], "op50")},
+            _out([1, 1, _HID], "fp16")),
+        _op("op52", "decode_gemv_ring",
+            {"A": _inp([_HID, 1, 1], "op51", "fp16"),
+             "B": _gemv_b([_HID_FULL, 1, _INT]),
+             "B'": _gemv_bp([_HID_FULL, 1, _INT])},
+            _out([1, 1, _INT], "fp16")),
+        _op("op53", "decode_gemv_ring",
+            {"A": _inp([_HID, 1, 1], "op51", "fp16"),
+             "B": _gemv_b([_HID_FULL, 1, _INT]),
+             "B'": _gemv_bp([_HID_FULL, 1, _INT])},
+            _out([1, 1, _INT], "fp16")),
+        _op("op54", "decode_silu_fp16N_fp32N",
+            {"A": _inp([1, 1, _INT], "op52", "fp16")},
+            _out([1, 1, _INT])),
+        _op("op55", "decode_mul_fp32N_fp16N_fp16N",
+            {"A": _inp([1, 1, _INT], "op54"),
+             "B": _inp([1, 1, _INT], "op53", "fp16")},
+            _out([1, 1, _INT], "fp16")),
+        _op("op56", "decode_gemv_ring",
+            {"A": _inp([_INT, 1, 1], "op55", "fp16"),
+             "B": _gemv_b([_INT_FULL, 1, _HID]),
+             "B'": _gemv_bp([_INT_FULL, 1, _HID])},
+            _out([1, 1, _HID], "fp16")),
+        _op("op57", "decode_add_fp32N_fp16N_fp32N",
+            {"A": _inp([1, 1, _HID], "op46"),
+             "B": _inp([1, 1, _HID], "op56", "fp16")},
+            _out([1, 1, _HID])),
+    ])
+    return layout
+
+
 # ---------------------------------------------------------------------------
 # Optimized JSON generation: fuse summac+remote_sum and add bank_interleave=2
 # ---------------------------------------------------------------------------
@@ -535,10 +779,17 @@ def generate_optimized_program_json(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     used_slices = int(config["used_slices"])
     mask_all = "0b" + "1" * used_slices
+    use_two_pass = int(config.get("attention_passes", 1)) > 1
+    use_rope_xor = str(config.get("rope_mode", "passthrough")) == "table"
+    layout_ops = (
+        _build_two_pass_layout(use_rope_xor=use_rope_xor)
+        if use_two_pass
+        else _DECODE_LAYOUT
+    )
 
     # Step 1: Build the base operator list (same as non-optimized, no fusion)
     operators_raw: list[dict[str, Any]] = []
-    for layout_op in _DECODE_LAYOUT:
+    for layout_op in layout_ops:
         us_mask_spec = layout_op.get("used_slices_mask", None)
         if us_mask_spec is None or us_mask_spec == _USL:
             us_mask = mask_all
@@ -579,10 +830,14 @@ def generate_optimized_program_json(
         if out_spec.get("dtype") == "fp16":
             op_entry["output"]["bank_interleave"] = 1
             op_entry["output"]["dtype"] = "fp16"
-        if out_spec.get("type") and out_spec["type"] != "rope_slice_xor2":
+        if out_spec.get("type") and (
+            out_spec["type"] != "rope_slice_xor2" or use_rope_xor
+        ):
             op_entry["output"]["type"] = out_spec["type"]
 
         operators_raw.append(op_entry)
+
+    _apply_grouped_block_diagonal_shapes(operators_raw, config)
 
     # Step 1a: Replace summac+remote_sum with prefill_remote_summac + decode_sum.
     #          prefill_remote_summac: 8 PEs local reduction + cross-slice sum (fused).
@@ -626,8 +881,8 @@ def generate_optimized_program_json(
                 shp = list(inp.get("shape", []))
                 if len(shp) >= 3:
                     orig_n = shp[2]
-            if orig_n == "hidden_size//used_slices":
-                n_per_pe = "hidden_size//used_slices//8"
+            if orig_n in {"hidden_size_padded//used_slices", "hidden_size//used_slices"}:
+                n_per_pe = f"{orig_n}//8"
             elif orig_n == "kv_padding_a":
                 n_per_pe = "kv_padding_a//8"
             else:
@@ -752,10 +1007,10 @@ def generate_optimized_program_json(
         # plus 3 zero-padded decode_attention_length-sized chunks, total
         # size [decode_attention_length, 4].
 
-        # op26: prefill_remote_sum_qkt_4slice_fp32MN_fp32MN
-        # Input A: [1, decode_attention_length, 4]
+        # op23: prefill_remote_sum_qkt_4slice_fp32MN_fp32MN
+        # Input A: [1, heads_per_group*decode_attention_length, 4]
         # Input B: [1, 1, 1], external placeholder
-        # Output: [1, 1, decode_attention_length]
+        # Output: [1, 1, heads_per_group*decode_attention_length]
         new_rsum: dict[str, Any] = {
             "id": rsum_op["id"],
             "type": _RSUM_QKT_NEW_TYPE,
@@ -765,7 +1020,7 @@ def generate_optimized_program_json(
                     "bank_interleave": 2,
                     "shape": [
                         1,
-                        "decode_attention_length",
+                        "heads_per_group*decode_attention_length",
                         4,
                     ],
                     "remapping": list(_REMAP_ILV2),
@@ -779,7 +1034,10 @@ def generate_optimized_program_json(
                 },
             },
             "output": {
-                "shape": rsum_op.get("output", {}).get("shape", [1, 1, "decode_attention_length"]),
+                "shape": rsum_op.get(
+                    "output",
+                    {},
+                ).get("shape", [1, 1, "heads_per_group*decode_attention_length"]),
                 "bank_interleave": 2,
                 "remapping": list(_REMAP_ILV2),
             },
@@ -939,7 +1197,7 @@ def generate_optimized_program_json(
     _KV_PRODUCER_IDS = {"op14", "op15", "op20"}
     _KV_CONSUMER_MAP = {"op15": "A", "op20": "A", "op16": "A", "op21": "B"}
     _KV_SRC_MAP = {"op16": "op15", "op21": "op20"}
-    for op in operators_raw:
+    for op in ([] if use_two_pass else operators_raw):
         oid = op["id"]
         # Force producer outputs (op14.D, op15.D, op20.D)
         if oid in _KV_PRODUCER_IDS:
@@ -976,8 +1234,15 @@ def generate_optimized_program_json(
     payload: dict[str, Any] = {
         "params": {
             **config,
-            "kv_padding_a": int(config.get("kv_padding", 256)),
-            "kv_padding_b": int(config.get("kv_padding", 256)) * int(config.get("slice_per_head", 4)),
+            "kv_slice_count": int(config.get("kv_slice_count", 4)),
+            "kv_padding_a": int(config.get("kv_padding_a", config.get("kv_padding", 256))),
+            "kv_padding_b": int(
+                config.get(
+                    "kv_padding_b",
+                    int(config.get("kv_padding", 256))
+                    * int(config.get("kv_slice_count", 4)),
+                )
+            ),
         },
         "used_slices": used_slices,
         "operators": operators_raw,
@@ -1001,9 +1266,16 @@ def generate_program_json(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     used_slices = int(config["used_slices"])
     mask_all = "0b" + "1" * used_slices
+    use_two_pass = int(config.get("attention_passes", 1)) > 1
+    use_rope_xor = str(config.get("rope_mode", "passthrough")) == "table"
+    layout_ops = (
+        _build_two_pass_layout(use_rope_xor=use_rope_xor)
+        if use_two_pass
+        else _DECODE_LAYOUT
+    )
 
     operators: list[dict[str, Any]] = []
-    for layout_op in _DECODE_LAYOUT:
+    for layout_op in layout_ops:
         # Resolve used_slices mask
         us_mask_spec = layout_op.get("used_slices_mask", None)
         if us_mask_spec is None or us_mask_spec == _USL:
@@ -1052,11 +1324,20 @@ def generate_program_json(
 
         operators.append(op_entry)
 
+    _apply_grouped_block_diagonal_shapes(operators, config)
+
     payload: dict[str, Any] = {
         "params": {
             **config,
-            "kv_padding_a": int(config.get("kv_padding", 256)),
-            "kv_padding_b": int(config.get("kv_padding", 256)) * int(config.get("slice_per_head", 4)),
+            "kv_slice_count": int(config.get("kv_slice_count", 4)),
+            "kv_padding_a": int(config.get("kv_padding_a", config.get("kv_padding", 256))),
+            "kv_padding_b": int(
+                config.get(
+                    "kv_padding_b",
+                    int(config.get("kv_padding", 256))
+                    * int(config.get("kv_slice_count", 4)),
+                )
+            ),
         },
         "used_slices": used_slices,
         "operators": operators,
@@ -1084,7 +1365,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=BASE_DIR / "model_execplan" / "examples" / "layer0_decode.json",
+        default=None,
+        help=(
+            "Defaults to model_execplan/examples/layer0_decode[_full].json "
+            "depending on the config padding."
+        ),
     )
     parser.add_argument(
         "--optimized",
@@ -1094,18 +1379,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--optimized-output",
         type=Path,
-        default=BASE_DIR / "model_execplan" / "examples" / "layer0_decode_optimized.json",
-        help="Output path for the optimized JSON (used with --optimized).",
+        default=None,
+        help=(
+            "Output path for the optimized JSON. Defaults to "
+            "model_execplan/examples/layer0_decode_optimized[_full].json."
+        ),
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    generate_program_json(args.config, args.manifest, args.output)
+    config = load_decode_config(args.config)
+    dims = decode_padded_dims(config)
+    padded = (
+        dims["heads_padded"] != dims["heads"]
+        or dims["hidden_padded"] != dims["hidden"]
+    )
+    suffix = "_full" if padded else ""
+    examples = BASE_DIR / "model_execplan" / "examples"
+    output = args.output or examples / f"layer0_decode{suffix}.json"
+    optimized_output = (
+        args.optimized_output or examples / f"layer0_decode_optimized{suffix}.json"
+    )
+    generate_program_json(args.config, args.manifest, output)
     if args.optimized:
         generate_optimized_program_json(
-            args.config, args.manifest, args.optimized_output
+            args.config, args.manifest, optimized_output
         )
     return 0
 

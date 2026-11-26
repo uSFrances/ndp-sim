@@ -1393,7 +1393,7 @@ def _compute_decode_max_fp32N_fp32N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-
+        "iga_lc0.dram_loop_configs.end": a_m if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
@@ -1418,7 +1418,7 @@ def _compute_decode_summac_fp16N_fp32N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-
+        "iga_lc0.dram_loop_configs.end": a_m if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
@@ -1443,7 +1443,7 @@ def _compute_decode_sum_rec_fp32N_fp32N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-
+        "iga_lc0.dram_loop_configs.end": a_m if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
@@ -1468,7 +1468,7 @@ def _compute_decode_sum_fp32N_fp32N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-
+        "iga_lc0.dram_loop_configs.end": a_m if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,
@@ -1488,16 +1488,14 @@ def _compute_decode_mac_SFU_fp32N_fp32N_control_register_updates(
     d_shape = operator.output.shape
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
+    # decode_mac_SFU's GA PE array only uses PE00 (MAC, inport1 constant) and
+    # PE01 (rec_sqrt).  PE00 maps to ga_pe0.  Writing the prefill-style
+    # ga_pe2/4/.../14 constants targets chunks that are disabled in the decode
+    # template bitstream and would be rejected by target-register validation.
     return {
         "ga_pe0.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe2.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe4.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe6.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe8.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe10.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe12.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
-        "ga_pe14.general_array.PE_array.PE.inport1.constant": _to_fp32_bits(1.0 / a_k) if a_k not in (None, 0) else _to_fp32_bits(0.0),
     }
+
 
 def _compute_decode_remote_sum_fp32N_fp32N_control_register_updates(
     operator: OperatorSpec,
@@ -1535,7 +1533,7 @@ def _compute_decode_summac_fp32N_fp32N_control_register_updates(
     (d_k, d_m, d_n) = d_shape
     (a_k, a_m, a_n) = a_shape if a_shape is not None else (None, None, None)
     return {
-
+        "iga_lc0.dram_loop_configs.end": a_m if a_m is not None else 0,
         "iga_lc1.dram_loop_configs.end": a_n if a_n is not None else 0,
         "rd_stream0.stream_engine.stream.dim_stride": pack_dim_stride(
             port0 = 0,

@@ -410,6 +410,11 @@ class InstructionGenerator:
                     if resolved_reg_name is None:
                         unresolved_control_names.add(reg_name)
                         continue
+                    # Constants are patched into the operator config bitstream
+                    # (see output_writer._apply_control_update_to_operator_json),
+                    # not emitted as Write_Reg instructions.
+                    if self._is_bitstream_constant_field_key(resolved_reg_name):
+                        continue
                     if not isinstance(reg_value, int):
                         unresolved_control_names.add(reg_name)
                         continue
@@ -541,6 +546,24 @@ class InstructionGenerator:
 
     def _is_base_addr_field_key(self, field_key: str) -> bool:
         return field_key.endswith(".stream_engine.stream.base_addr")
+
+    def _is_bitstream_constant_field_key(self, field_key: str) -> bool:
+        """PE constants are applied by patching the config bitstream.
+
+        ``output_writer._patch_emulator_operator_json_payload`` writes these
+        values into the operator JSON before the bitstream is regenerated, so
+        the instruction stream must not also emit a Write_Reg for them.
+        """
+
+        instance, _, config_path = field_key.partition(".")
+        if not (instance.startswith("iga_pe") or instance.startswith("ga_pe")):
+            return False
+        parts = config_path.split(".")
+        return (
+            len(parts) >= 2
+            and parts[-1] == "constant"
+            and parts[-2].startswith("inport")
+        )
 
     def _pack_load_config_ddr_addr(self, full_addr: int) -> int:
         # Load_Config uses DDR config address in row-aligned compressed form.
